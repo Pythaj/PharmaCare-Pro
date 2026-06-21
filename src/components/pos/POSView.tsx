@@ -13,6 +13,8 @@ import {
   X,
   Printer,
   CheckCircle,
+  UserRoundPlus,
+  Zap,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -24,9 +26,11 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Label } from '@/components/ui/label';
 import { useAppStore } from '@/stores/app-store';
 import { toast } from 'sonner';
 import type { Product, Batch, Customer, CartItem } from '@/types';
@@ -67,6 +71,12 @@ export default function POSView() {
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Walk-in customer state
+  const [showWalkInDialog, setShowWalkInDialog] = useState(false);
+  const [walkInName, setWalkInName] = useState('');
+  const [walkInPhone, setWalkInPhone] = useState('');
+  const [addingWalkIn, setAddingWalkIn] = useState(false);
 
   const fetchProducts = useCallback(async (query: string) => {
     try {
@@ -195,6 +205,35 @@ export default function POSView() {
     setDiscount(0);
     setNotes('');
     setPaymentMethod('cash');
+  };
+
+  const handleAddWalkIn = async () => {
+    if (!walkInName.trim()) return;
+    setAddingWalkIn(true);
+    try {
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: walkInName.trim(),
+          phone: walkInPhone.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to add walk-in customer');
+      }
+      const newCustomer = await res.json();
+      setSelectedCustomer(newCustomer.id);
+      setCustomerSearch(newCustomer.name);
+      setCustomers(prev => [newCustomer, ...prev]);
+      setShowWalkInDialog(false);
+      toast.success(`${newCustomer.name} added & selected`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add walk-in');
+    } finally {
+      setAddingWalkIn(false);
+    }
   };
 
   const paymentIcons = {
@@ -358,37 +397,50 @@ export default function POSView() {
 
         {/* Cart Summary & Checkout */}
         <div className="border-t p-4 space-y-3">
-          {/* Customer Search */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Search customer (optional)"
-              className="pl-8 h-8 text-xs"
-              value={customerSearch}
-              onChange={(e) => setCustomerSearch(e.target.value)}
-            />
-            {customerSearch && !selectedCustomerId && (
-              <div className="absolute top-full left-0 right-0 mt-1 bg-background border rounded-lg shadow-lg max-h-40 overflow-y-auto z-50">
-                {customers
-                  .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone?.includes(customerSearch))
-                  .slice(0, 5)
-                  .map(c => (
-                    <button
-                      key={c.id}
-                      className="w-full text-left px-3 py-2 hover:bg-muted text-sm"
-                      onClick={() => { setSelectedCustomer(c.id); setCustomerSearch(c.name); }}
-                    >
-                      {c.name} - {c.phone ?? c.email ?? '-'}
-                    </button>
-                  ))
+          {/* Customer Selection */}
+          <div className="space-y-2">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                placeholder="Search customer (optional)"
+                className="pl-8 h-8 text-xs"
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+              />
+              {customerSearch && !selectedCustomerId && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-background border rounded-lg shadow-lg max-h-40 overflow-y-auto z-50">
+                  {customers
+                    .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone?.includes(customerSearch))
+                    .slice(0, 5)
+                    .map(c => (
+                      <button
+                        key={c.id}
+                        className="w-full text-left px-3 py-2 hover:bg-muted text-sm"
+                        onClick={() => { setSelectedCustomer(c.id); setCustomerSearch(c.name); }}
+                      >
+                        {c.name} - {c.phone ?? c.email ?? '-'}
+                      </button>
+                    ))
                 }
               </div>
-            )}
-            {selectedCustomer && (
-              <div className="flex items-center justify-between mt-1">
-                <span className="text-xs text-emerald-600">{selectedCustomer.name}</span>
-                <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }} className="text-xs text-red-500 hover:underline">Remove</button>
-              </div>
+              )}
+              {selectedCustomer && (
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-xs text-emerald-600 font-medium">{selectedCustomer.name}</span>
+                  <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }} className="text-xs text-red-500 hover:underline">Remove</button>
+                </div>
+              )}
+            </div>
+            {!selectedCustomerId && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full h-8 text-xs border-dashed border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-400 transition-all"
+                onClick={() => { setWalkInName('Walk-In Customer'); setWalkInPhone(''); setShowWalkInDialog(true); }}
+              >
+                <Zap className="h-3 w-3 mr-1" />
+                Quick Walk-In
+              </Button>
             )}
           </div>
 
@@ -468,6 +520,58 @@ export default function POSView() {
           </div>
         </div>
       </div>
+
+      {/* Walk-In Customer Dialog */}
+      <Dialog open={showWalkInDialog} onOpenChange={(open) => { if (!open) setShowWalkInDialog(false); }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+                <UserRoundPlus className="h-4 w-4 text-emerald-600" />
+              </div>
+              Quick Walk-In
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs text-muted-foreground">Customer Name</Label>
+              <Input
+                value={walkInName}
+                onChange={(e) => setWalkInName(e.target.value)}
+                placeholder="e.g. Walk-In Customer"
+                className="mt-1"
+                autoFocus
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Phone <span className="text-muted-foreground/50">(optional)</span></Label>
+              <Input
+                value={walkInPhone}
+                onChange={(e) => setWalkInPhone(e.target.value)}
+                placeholder="e.g. +233 24 123 4567"
+                className="mt-1"
+                onKeyDown={(e) => { if (e.key === 'Enter') handleAddWalkIn(); }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Zap className="h-3 w-3" />
+              Walk-in customers are quick-registered for this sale. Details are optional.
+            </p>
+          </div>
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button variant="outline" size="sm" onClick={() => setShowWalkInDialog(false)}>Cancel</Button>
+            <Button
+              size="sm"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={handleAddWalkIn}
+              disabled={addingWalkIn || !walkInName.trim()}
+            >
+              <UserRoundPlus className="h-4 w-4 mr-1" />
+              {addingWalkIn ? 'Adding...' : 'Add & Select'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>

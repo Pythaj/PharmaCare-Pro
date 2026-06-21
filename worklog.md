@@ -373,3 +373,28 @@ Stage Summary:
 - Quick action buttons allow sales person to jump to POS or Sales History directly from profile
 - Logout available from within the profile dialog
 - Zero lint errors, clean compilation
+
+---
+Task ID: 12
+Agent: Main Orchestrator
+Task: Add Quick Walk-In Customer feature in POS view
+
+Work Log:
+- Read POSView.tsx and CustomersView.tsx to understand current customer flow
+- Added `UserRoundPlus` and `Zap` icons to lucide imports
+- Added `DialogFooter` and `Label` to component imports
+- Added walk-in state: `showWalkInDialog`, `walkInName`, `walkInPhone`, `addingWalkIn`
+- Added `handleAddWalkIn()` async function: POSTs to `/api/customers` with name + optional phone, auto-selects the new customer, adds to local customers list, shows success toast
+- Added "Quick Walk-In" button in POS cart panel (dashed emerald border, Zap icon) — only visible when no customer is selected
+- Added Walk-In Dialog with: pre-filled name ("Walk-In Customer"), optional phone field, emerald-themed "Add & Select" button, informational helper text
+- Dialog placed correctly outside cart panel div, before Receipt Modal
+- Verified end-to-end via Agent Browser: login as sales → POS → click Quick Walk-In → fill name "John Doe Walk-In" + phone → submit → customer selected in cart → add product to cart → Complete Sale → receipt shows "Customer: John Doe Walk-In"
+- Zero lint errors
+
+Stage Summary:
+- Quick Walk-In feature added to POS cart panel for fast counter registration
+- Minimal fields: name (pre-filled) + optional phone — details not required as per user request
+- Auto-selects the walk-in customer immediately after creation
+- Customer properly attached to sale and appears on receipt
+- Emerald-themed dashed button with Zap icon for visual distinction
+- Zero lint errors, verified end-to-end
