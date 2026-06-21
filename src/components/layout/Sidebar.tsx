@@ -139,8 +139,9 @@ export function Sidebar() {
     }
   }
 
-  const visibleSections = navSections.map((section) => ({
+  const visibleSections = navSections.map((section, index) => ({
     ...section,
+    _key: `section-${index}`,
     items: section.items.filter((item) => item.roles.includes(userRole)),
   })).filter((section) => section.items.length > 0);
 
@@ -195,7 +196,7 @@ export function Sidebar() {
         <TooltipProvider delayDuration={0}>
           <nav className="space-y-1">
             {visibleSections.map((section) => (
-              <div key={section.title}>
+              <div key={section._key}>
                 <AnimatePresence>
                   {sidebarOpen && (
                     <motion.p
