@@ -1,0 +1,198 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("sales") // "admin" or "sales"
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales     Sale[]
+  purchases Purchase[]
+  auditLogs AuditLog[]
+
+  @@map("users")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  description String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products  Product[]
+
+  @@map("categories")
+}
+
+model Supplier {
+  id        String   @id @default(cuid())
+  name      String
+  contact   String?
+  email     String?
+  phone     String?
+  address   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  purchases Purchase[]
+
+  @@map("suppliers")
+}
+
+model Product {
+  id          String     @id @default(cuid())
+  name        String
+  genericName String?
+  categoryId  String?
+  description String?
+  unit        String     @default("units") // "tablets", "capsules", "bottles", "sachets", "ml", "units"
+  reorderLevel Int       @default(10)
+  active      Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  category    Category?  @relation(fields: [categoryId], references: [id])
+  batches     Batch[]
+  saleItems   SaleItem[]
+
+  @@map("products")
+}
+
+model Batch {
+  id            String   @id @default(cuid())
+  productId     String
+  batchNumber   String
+  quantity      Int      @default(0)
+  costPrice     Float    @default(0)
+  sellingPrice  Float    @default(0)
+  expiryDate    DateTime
+  purchaseId    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  purchase      Purchase? @relation(fields: [purchaseId], references: [id])
+  saleItems     SaleItem[]
+
+  @@unique([productId, batchNumber])
+  @@map("batches")
+}
+
+model Purchase {
+  id          String   @id @default(cuid())
+  invoiceNo   String
+  supplierId  String?
+  userId      String
+  totalAmount Float    @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+  batches     Batch[]
+
+  @@map("purchases")
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  phone     String?
+  address   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sales     Sale[]
+
+  @@map("customers")
+}
+
+model Sale {
+  id            String   @id @default(cuid())
+  invoiceNo     String   @unique
+  customerId    String?
+  userId        String
+  subtotal      Float    @default(0)
+  tax           Float    @default(0)
+  discount      Float    @default(0)
+  totalAmount   Float    @default(0)
+  profit        Float    @default(0)
+  paymentMethod String   @default("cash") // "cash", "card", "mobile_money"
+  status        String   @default("completed") // "completed", "returned", "partial_return"
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  customer      Customer? @relation(fields: [customerId], references: [id])
+  user          User      @relation(fields: [userId], references: [id])
+  items         SaleItem[]
+  returns       Return[]
+
+  @@map("sales")
+}
+
+model SaleItem {
+  id        String   @id @default(cuid())
+  saleId    String
+  productId String
+  batchId   String?
+  quantity  Int
+  unitPrice Float
+  costPrice Float
+  total     Float
+  expiryDate DateTime?
+  createdAt DateTime @default(now())
+
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
+  batch     Batch?  @relation(fields: [batchId], references: [id])
+
+  @@map("sale_items")
+}
+
+model Return {
+  id            String   @id @default(cuid())
+  saleId        String
+  userId        String
+  reason        String
+  totalRefund   Float
+  status        String   @default("approved") // "pending", "approved", "rejected"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  sale      Sale    @relation(fields: [saleId], references: [id])
+
+  @@map("returns")
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  entity    String
+  entityId  String?
+  details   String?
+  ipAddress String?
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
