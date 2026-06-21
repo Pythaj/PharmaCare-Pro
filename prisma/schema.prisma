@@ -21,6 +21,8 @@ model User {
   sales     Sale[]
   purchases Purchase[]
   auditLogs AuditLog[]
+  openedDailyRecords  DailySalesRecord[] @relation("DailyRecordOpener")
+  closedDailyRecords  DailySalesRecord[] @relation("DailyRecordCloser")
 
   @@map("users")
 }
@@ -195,6 +197,32 @@ model AuditLog {
   user      User?    @relation(fields: [userId], references: [id])
 
   @@map("audit_logs")
+}
+
+model DailySalesRecord {
+  id                String    @id @default(cuid())
+  date              String    @unique // YYYY-MM-DD format
+  status            String    @default("open") // "open" | "closed"
+  openedBy          String?
+  closedBy          String?
+  openedAt          DateTime  @default(now())
+  closedAt          DateTime?
+  totalRevenue      Float     @default(0)
+  totalProfit       Float     @default(0)
+  totalDiscount     Float     @default(0)
+  totalTransactions Int      @default(0)
+  totalItemsSold    Int       @default(0)
+  cashTotal         Float     @default(0)
+  cardTotal         Float     @default(0)
+  mobileMoneyTotal  Float     @default(0)
+  notes             String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  opener            User?     @relation("DailyRecordOpener", fields: [openedBy], references: [id])
+  closer            User?     @relation("DailyRecordCloser", fields: [closedBy], references: [id])
+
+  @@map("daily_sales_records")
 }
 
 model SystemSetting {

@@ -519,3 +519,37 @@ Stage Summary:
 - Modified: `/src/components/auth/LoginPage.tsx` — 6 emerald refs → CSS vars
 - Modified: `/src/components/admin/SettingsView.tsx` — wired swatches to real theme switching
 - All themes verified working: Emerald (#059669), Blue (#2563eb), Violet (#7c3aed), Rose (#e11d48), Amber (#d97706), Teal (#0d9488)
+
+---
+Task ID: 3
+Agent: Main Orchestrator
+Task: Build Daily Sales Recording System with Save, Close, and Day Management
+
+Work Log:
+- Analyzed existing POS, Sales History, Prisma schema, and API routes
+- Designed DailySalesRecord model with date, status (open/closed), summary stats, payment breakdown, and user tracking
+- Added DailySalesRecord to Prisma schema with opener/closer relations to User model
+- Pushed schema to SQLite database successfully
+- Added DailySalesRecord and DailySalesDetail TypeScript types
+- Created 3 new API routes:
+  - `/api/daily-sales/route.ts` — GET (list with pagination) and POST (create day record)
+  - `/api/daily-sales/today/route.ts` — GET (auto-create today's record, refresh live stats, return sales)
+  - `/api/daily-sales/[id]/route.ts` — GET (day detail with sales), PATCH (close/reopen day)
+- Completely rewrote SalesHistoryView.tsx as impressive Daily Sales Register with:
+  - Two tabs: Today and Past Records
+  - Today tab: hero status banner (OPEN/CLOSED with pulse animation), 6 summary stat cards, payment breakdown cards (Cash/Card/Mobile Money), profit margin progress bar, live transaction feed with expandable items, auto-refresh every 15 seconds
+  - Save & Close Day dialog with full day summary and closing notes
+  - Reopen Day functionality (admin only)
+  - Past Records tab: card grid view of past days with revenue, profit, margin bar, payment breakdown mini-badges, expandable to show full sales detail
+  - Transaction actions: Print Receipt, Process Return, Delete Sale (when day is open)
+  - Payment method badges (Cash/Card/MoMo) with colored icons
+  - Fixed pointer-events issue on decorative hero banner circle
+- Verified all functionality via Agent Browser: login, navigate to Sales History, view today's register, close day with notes, reopen day, view past records
+- ESLint passes clean with zero errors
+- Zero browser console errors
+
+Stage Summary:
+- Complete daily sales recording system with open/close day management
+- 3 new API endpoints, 1 new Prisma model, 1 new TypeScript type
+- SalesHistoryView completely rewritten as Daily Sales Register (1247 lines)
+- All CRUD operations verified: create record, auto-refresh stats, close day with notes, reopen day, view history

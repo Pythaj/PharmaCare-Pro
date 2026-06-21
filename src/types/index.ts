@@ -188,6 +188,34 @@ export interface CartItem {
   expiryDate: string;
 }
 
+// ===== Daily Sales Record =====
+export interface DailySalesRecord {
+  id: string;
+  date: string;
+  status: 'open' | 'closed';
+  openedBy?: string;
+  closedBy?: string;
+  openedAt: string;
+  closedAt?: string;
+  totalRevenue: number;
+  totalProfit: number;
+  totalDiscount: number;
+  totalTransactions: number;
+  totalItemsSold: number;
+  cashTotal: number;
+  cardTotal: number;
+  mobileMoneyTotal: number;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+  opener?: User;
+  closer?: User;
+}
+
+export interface DailySalesDetail extends DailySalesRecord {
+  sales: Sale[];
+}
+
 // ===== Chart Data =====
 export interface ChartDataPoint {
   name: string;
