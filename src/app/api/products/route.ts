@@ -5,16 +5,23 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''
+    const categoryId = searchParams.get('categoryId') || ''
 
-    const where = search
-      ? {
-          OR: [
-            { name: { contains: search } },
-            { genericName: { contains: search } },
-            { description: { contains: search } },
-          ],
-        }
-      : {}
+    const conditions = []
+    if (search) {
+      conditions.push({
+        OR: [
+          { name: { contains: search } },
+          { genericName: { contains: search } },
+          { description: { contains: search } },
+        ],
+      })
+    }
+    if (categoryId && categoryId !== 'all') {
+      conditions.push({ categoryId })
+    }
+
+    const where = conditions.length > 0 ? { AND: conditions } : {}
 
     const products = await db.product.findMany({
       where,

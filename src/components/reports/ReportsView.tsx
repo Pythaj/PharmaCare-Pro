@@ -16,7 +16,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart.tsx';
-import { BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid } from 'recharts';
 import type { ChartDataPoint } from '@/types';
 
 function formatGHS(value: number): string {
@@ -116,6 +116,9 @@ export default function ReportsView() {
     downloadFile(content, `pharmacy-report-${period}-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;');
   };
 
+  // NOTE: Intentionally using TSV (tab-separated) format with .xls extension.
+  // This provides Excel compatibility without requiring external libraries like xlsx.
+  // Excel and LibreOffice both open TSV files natively when given an .xls extension.
   const handleExportExcel = () => {
     // Use TSV format which Excel opens natively
     const s = stats ?? { totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0 };
@@ -257,21 +260,6 @@ export default function ReportsView() {
       win.document.write(html);
       win.document.close();
     }
-  };
-
-  const fetchReport = async (p: Period) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/reports?period=${p}`);
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data.stats ?? null);
-        setRevenueData(data.revenueData ?? []);
-        setPaymentData(data.paymentData ?? []);
-        setTopProducts(data.topProducts ?? []);
-      }
-    } catch { /* silent */ }
-    setLoading(false);
   };
 
   useEffect(() => {

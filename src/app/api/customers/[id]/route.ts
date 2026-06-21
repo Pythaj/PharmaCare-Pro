@@ -46,3 +46,65 @@ export async function GET(
     return NextResponse.json({ error: 'Failed to fetch customer' }, { status: 500 })
   }
 }
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const { name, email, phone, address } = body
+
+    const existing = await db.customer.findUnique({ where: { id } })
+    if (!existing) {
+      return NextResponse.json({ error: 'Customer not found' }, { status: 404 })
+    }
+
+    const updated = await db.customer.update({
+      where: { id },
+      data: {
+        ...(name !== undefined && { name }),
+        ...(email !== undefined && { email }),
+        ...(phone !== undefined && { phone }),
+        ...(address !== undefined && { address }),
+      },
+    })
+
+    return NextResponse.json(updated)
+  } catch (error) {
+    console.error('Customer update error:', error)
+    return NextResponse.json({ error: 'Failed to update customer' }, { status: 500 })
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const existing = await db.customer.findUnique({
+      where: { id },
+      include: { _count: { select: { sales: true } } },
+    })
+    if (!existing) {
+      return NextResponse.json({ error: 'Customer not found' }, { status: 404 })
+    }
+
+    if (existing._count.sales > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete customer with existing sales records' },
+        { status: 400 }
+      )
+    }
+
+    await db.customer.delete({ where: { id } })
+
+    return NextResponse.json({ message: 'Customer deleted successfully' })
+  } catch (error) {
+    console.error('Customer delete error:', error)
+    return NextResponse.json({ error: 'Failed to delete customer' }, { status: 500 })
+  }
+}

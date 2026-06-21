@@ -1,12 +1,25 @@
 'use client';
 
-import { lazy, Suspense, useMemo } from 'react';
+import { lazy, Suspense, useMemo, useSyncExternalStore } from 'react';
 import { useAppStore } from '@/stores/app-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import LoginPage from '@/components/auth/LoginPage';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Page } from '@/types';
+
+// Track viewport width reactively without lint errors
+function useIsDesktop() {
+  return useSyncExternalStore(
+    (callback) => {
+      const mq = window.matchMedia('(min-width: 1024px)');
+      mq.addEventListener('change', callback);
+      return () => mq.removeEventListener('change', callback);
+    },
+    () => window.matchMedia('(min-width: 1024px)').matches,
+    () => true // SSR fallback: treat as desktop
+  );
+}
 
 // Lazy loaded page components
 const AdminDashboard = lazy(() => import('@/components/pages/AdminDashboard'));
@@ -59,7 +72,8 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
 };
 
 export default function Home() {
-  const { currentPage, isAuthenticated } = useAppStore();
+  const { currentPage, isAuthenticated, sidebarOpen } = useAppStore();
+  const isDesktop = useIsDesktop();
 
   const ActivePage = useMemo(() => {
     if (currentPage === 'login') return null;
@@ -71,19 +85,23 @@ export default function Home() {
     return <LoginPage />;
   }
 
+  // Sidebar width: only apply margin on desktop where sidebar is fixed
+  const sidebarWidth = isDesktop ? (sidebarOpen ? 260 : 68) : 0;
+
   // App layout
   return (
     <div className="h-screen overflow-hidden bg-slate-50/80">
-      <div className="flex h-full">
-        <Sidebar />
-        <div className="flex flex-1 flex-col min-w-0">
-          <Header />
-          <main className="flex-1 overflow-y-auto scroll-smooth">
-            <Suspense fallback={<PageLoader />}>
-              {ActivePage && <ActivePage key={currentPage} />}
-            </Suspense>
-          </main>
-        </div>
+      <Sidebar />
+      <div
+        className="flex flex-1 flex-col min-w-0 h-full transition-[margin-left] duration-300 ease-in-out"
+        style={{ marginLeft: sidebarWidth }}
+      >
+        <Header />
+        <main className="flex-1 overflow-y-auto scroll-smooth">
+          <Suspense fallback={<PageLoader />}>
+            {ActivePage && <ActivePage key={currentPage} />}
+          </Suspense>
+        </main>
       </div>
     </div>
   );

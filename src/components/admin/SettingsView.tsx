@@ -61,6 +61,7 @@ interface PharmacyInfo {
   phone: string;
   email: string;
   taxRate: number;
+  logoUrl: string;
 }
 
 interface ReceiptSettings {
@@ -145,6 +146,7 @@ const defaults: AllSettings = {
     phone: '+233 30 123 4567',
     email: 'info@greenlifepharmacy.com',
     taxRate: 12.5,
+    logoUrl: '',
   },
   receipt: {
     headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
@@ -386,20 +388,34 @@ export default function SettingsView() {
           'Basic details about your pharmacy',
         )}
         <CardContent className="space-y-4 pt-0">
-          {/* Logo placeholder */}
-          <div className="flex items-center gap-4 p-3 rounded-lg border border-dashed border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800">
-              <ImageIcon className="h-6 w-6 text-emerald-500" />
-            </div>
+          {/* Logo URL */}
+          <div className="flex items-center gap-4 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+            {pharmacy.logoUrl ? (
+              <img
+                src={pharmacy.logoUrl}
+                alt="Pharmacy logo"
+                className="h-12 w-12 shrink-0 rounded-lg object-contain bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800">
+                <ImageIcon className="h-5 w-5 text-emerald-500" />
+              </div>
+            )}
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium">Pharmacy Logo</p>
-              <p className="text-xs text-muted-foreground">
-                Logo upload will be available in a future update
-              </p>
+              <Label htmlFor="pharmacy-logo-url" className="text-sm font-medium">
+                Pharmacy Logo URL
+              </Label>
+              <Input
+                id="pharmacy-logo-url"
+                value={pharmacy.logoUrl}
+                onChange={(e) => setPharmacy({ ...pharmacy, logoUrl: e.target.value })}
+                placeholder="https://example.com/logo.png"
+                className="mt-1 text-sm"
+              />
             </div>
-            <Button variant="outline" size="sm" disabled className="text-xs">
-              Upload
-            </Button>
           </div>
 
           <div>

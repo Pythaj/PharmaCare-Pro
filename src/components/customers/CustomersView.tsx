@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,6 +13,10 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
+import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import type { Customer } from '@/types';
 
@@ -32,6 +36,15 @@ export default function CustomersView() {
   const [addForm, setAddForm] = useState({ name: '', email: '', phone: '', address: '' });
   const [submitting, setSubmitting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Edit state
+  const [editingCustomer, setEditingCustomer] = useState<CustomerWithPurchases | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', email: '', phone: '', address: '' });
+  const [editing, setEditing] = useState(false);
+
+  // Delete state
+  const [deletingCustomer, setDeletingCustomer] = useState<CustomerWithPurchases | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchCustomers = async (query: string) => {
     try {
@@ -92,6 +105,61 @@ export default function CustomersView() {
     }
   };
 
+  const handleEditCustomer = (customer: CustomerWithPurchases) => {
+    setEditingCustomer(customer);
+    setEditForm({ name: customer.name, email: customer.email ?? '', phone: customer.phone ?? '', address: customer.address ?? '' });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editingCustomer) return;
+    if (!editForm.name.trim()) { toast.error('Customer name is required'); return; }
+    setEditing(true);
+    try {
+      const res = await fetch(`/api/customers/${editingCustomer.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editForm),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update customer');
+      }
+      toast.success('Customer updated successfully');
+      setEditingCustomer(null);
+      fetchCustomers(search);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update customer');
+    } finally {
+      setEditing(false);
+    }
+  };
+
+  const handleDeleteCustomer = (customer: CustomerWithPurchases) => {
+    setDeletingCustomer(customer);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingCustomer) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/customers/${deletingCustomer.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete customer');
+      }
+      toast.success('Customer deleted successfully');
+      setDeletingCustomer(null);
+      if (expandedRow === deletingCustomer.id) setExpandedRow(null);
+      fetchCustomers(search);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete customer');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   function formatGHS(value: number): string {
     return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
   }
@@ -121,6 +189,7 @@ export default function CustomersView() {
                   <TableHead>Phone</TableHead>
                   <TableHead>Address</TableHead>
                   <TableHead className="text-right">Total Purchases</TableHead>
+                  <TableHead className="w-24">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -133,66 +202,30 @@ export default function CustomersView() {
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-36" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-16" /></TableCell>
                     </TableRow>
                   ))
                 ) : customers.length > 0 ? (
                   customers.map((customer) => {
                     const isExpanded = expandedRow === customer.id;
                     return (
-                      <>
-                        <TableRow key={customer.id} className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(customer.id)}>
-                          <TableCell>
-                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                          </TableCell>
-                          <TableCell className="font-medium">{customer.name}</TableCell>
-                          <TableCell>{customer.email ?? '-'}</TableCell>
-                          <TableCell>{customer.phone ?? '-'}</TableCell>
-                          <TableCell className="max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
-                          <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
-                        </TableRow>
-                        {isExpanded && (
-                          <TableRow key={`${customer.id}-history`}>
-                            <TableCell colSpan={6} className="bg-muted/30 px-8 py-3">
-                              {loadingHistory ? (
-                                <div className="space-y-2">
-                                  {Array.from({ length: 3 }).map((_, i) => (
-                                    <Skeleton key={i} className="h-8 w-full" />
-                                  ))}
-                                </div>
-                              ) : purchaseHistory.length > 0 ? (
-                                <div>
-                                  <p className="text-sm font-medium mb-2">Purchase History for {customer.name}</p>
-                                  <table className="w-full text-xs">
-                                    <thead>
-                                      <tr className="border-b">
-                                        <th className="text-left py-1.5 font-medium">Invoice#</th>
-                                        <th className="text-right py-1.5 font-medium">Amount</th>
-                                        <th className="text-right py-1.5 font-medium">Date</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {purchaseHistory.map((sale, i) => (
-                                        <tr key={i} className="border-b border-dotted">
-                                          <td className="py-1.5 font-mono">{sale.invoiceNo}</td>
-                                          <td className="text-right">{formatGHS(sale.totalAmount)}</td>
-                                          <td className="text-right">{new Date(sale.createdAt).toLocaleDateString('en-GH')}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              ) : (
-                                <p className="text-sm text-muted-foreground">No purchase history</p>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </>
+                      <CustomerRow
+                        key={customer.id}
+                        customer={customer}
+                        isExpanded={isExpanded}
+                        expandedRow={expandedRow}
+                        purchaseHistory={purchaseHistory}
+                        loadingHistory={loadingHistory}
+                        formatGHS={formatGHS}
+                        onExpand={handleExpandRow}
+                        onEdit={handleEditCustomer}
+                        onDelete={handleDeleteCustomer}
+                      />
                     );
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                       No customers found
                     </TableCell>
                   </TableRow>
@@ -235,6 +268,156 @@ export default function CustomersView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Edit Customer Dialog */}
+      <Dialog open={!!editingCustomer} onOpenChange={(open) => { if (!open) setEditingCustomer(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Customer</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Full Name *</Label>
+              <Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} placeholder="Customer name" />
+            </div>
+            <div>
+              <Label>Email</Label>
+              <Input type="email" value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} placeholder="email@example.com" />
+            </div>
+            <div>
+              <Label>Phone</Label>
+              <Input value={editForm.phone} onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })} placeholder="+233 24 123 4567" />
+            </div>
+            <div>
+              <Label>Address</Label>
+              <Input value={editForm.address} onChange={(e) => setEditForm({ ...editForm, address: e.target.value })} placeholder="Street address" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingCustomer(null)}>Cancel</Button>
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleSaveEdit} disabled={editing}>
+              {editing ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Customer AlertDialog */}
+      <AlertDialog open={!!deletingCustomer} onOpenChange={(open) => { if (!open) setDeletingCustomer(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Customer</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {deletingCustomer?.name}? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleting ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
+  );
+}
+
+// Extracted row component to avoid React fragment key warnings
+function CustomerRow({
+  customer,
+  isExpanded,
+  expandedRow,
+  purchaseHistory,
+  loadingHistory,
+  formatGHS,
+  onExpand,
+  onEdit,
+  onDelete,
+}: {
+  customer: CustomerWithPurchases;
+  isExpanded: boolean;
+  expandedRow: string | null;
+  purchaseHistory: { invoiceNo: string; totalAmount: number; createdAt: string }[];
+  loadingHistory: boolean;
+  formatGHS: (v: number) => string;
+  onExpand: (id: string) => void;
+  onEdit: (c: CustomerWithPurchases) => void;
+  onDelete: (c: CustomerWithPurchases) => void;
+}) {
+  return (
+    <>
+      <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => onExpand(customer.id)}>
+        <TableCell>
+          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </TableCell>
+        <TableCell className="font-medium">{customer.name}</TableCell>
+        <TableCell>{customer.email ?? '-'}</TableCell>
+        <TableCell>{customer.phone ?? '-'}</TableCell>
+        <TableCell className="max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
+        <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
+        <TableCell>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+              onClick={(e) => { e.stopPropagation(); onEdit(customer); }}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+              onClick={(e) => { e.stopPropagation(); onDelete(customer); }}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+      {isExpanded && (
+        <TableRow key={`${customer.id}-history`}>
+          <TableCell colSpan={7} className="bg-muted/30 px-8 py-3">
+            {loadingHistory ? (
+              <div className="space-y-2">
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-8 w-full" />
+                ))}
+              </div>
+            ) : purchaseHistory.length > 0 ? (
+              <div>
+                <p className="text-sm font-medium mb-2">Purchase History for {customer.name}</p>
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1.5 font-medium">Invoice#</th>
+                      <th className="text-right py-1.5 font-medium">Amount</th>
+                      <th className="text-right py-1.5 font-medium">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {purchaseHistory.map((sale, i) => (
+                      <tr key={i} className="border-b border-dotted">
+                        <td className="py-1.5 font-mono">{sale.invoiceNo}</td>
+                        <td className="text-right">{formatGHS(sale.totalAmount)}</td>
+                        <td className="text-right">{new Date(sale.createdAt).toLocaleDateString('en-GH')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No purchase history</p>
+            )}
+          </TableCell>
+        </TableRow>
+      )}
+    </>
   );
 }

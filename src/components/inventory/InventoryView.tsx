@@ -21,7 +21,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import type { Product, Batch, Category } from '@/types';
+import type { Product, Batch } from '@/types';
+import { useAppStore } from '@/stores/app-store';
 
 function formatGHS(value: number): string {
   return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
@@ -41,6 +42,7 @@ export default function InventoryView() {
   const [filter, setFilter] = useState<FilterType>('all');
   const [loading, setLoading] = useState(true);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigate = useAppStore((s) => s.navigate);
 
   const fetchProducts = useCallback(async (query: string) => {
     try {
@@ -144,7 +146,13 @@ export default function InventoryView() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input placeholder="Search inventory..." value={search} onChange={(e) => handleSearch(e.target.value)} className="pl-10" />
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <Button
+            className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            onClick={() => navigate('purchases')}
+          >
+            Add Stock / New Purchase
+          </Button>
           {filterOptions.map((opt) => (
             <Button
               key={opt.value}

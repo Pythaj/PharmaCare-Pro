@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import {
   DollarSign,
   TrendingUp,
@@ -12,8 +11,6 @@ import {
   Pill,
   AlertTriangle,
   Clock,
-  ArrowUpRight,
-  ArrowDownRight,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -94,10 +91,11 @@ export default function AdminDashboard() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const [statsRes, chartsRes, recentRes] = await Promise.allSettled([
+        const [statsRes, chartsRes, recentRes, auditRes] = await Promise.allSettled([
           fetch('/api/dashboard/stats'),
           fetch('/api/dashboard/charts'),
           fetch('/api/dashboard/recent'),
+          fetch('/api/audit-logs'),
         ]);
 
         if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
@@ -127,15 +125,53 @@ export default function AdminDashboard() {
               totalAmount: p.totalAmount,
               createdAt: p.createdAt,
             })),
-            stockAlerts: (data.stockAlerts ?? []).map((a: any) => ({
-              productId: a.productId,
-              productName: a.productName,
-              currentQty: a.message.match(/(\d+)\s*units/)?.[1] ? parseInt(a.message.match(/(\d+)\s*units/)[1]) : 0,
-              reorderLevel: 0,
-              type: a.type === 'low_stock' ? 'low' as const : 'expiring' as const,
-            })),
+            stockAlerts: (data.stockAlerts ?? []).map((a: any) => {
+              let currentQty = 0;
+              let reorderLevel = 0;
+              let expiryDate: string | undefined;
+
+              if (a.type === 'low_stock') {
+                const qtyMatch = a.message.match(/has only (\d+) units/);
+                const reorderMatch = a.message.match(/reorder level: (\d+)/);
+                currentQty = qtyMatch ? parseInt(qtyMatch[1]) : 0;
+                reorderLevel = reorderMatch ? parseInt(reorderMatch[1]) : 0;
+              } else if (a.type === 'expiring') {
+                const qtyMatch = a.message.match(/\((\d+) units\)/);
+                const daysMatch = a.message.match(/expires in (\d+) days/);
+                currentQty = qtyMatch ? parseInt(qtyMatch[1]) : 0;
+                if (daysMatch) {
+                  const days = parseInt(daysMatch[1]);
+                  expiryDate = new Date(Date.now() + days * 86400000).toISOString();
+                }
+              }
+
+              return {
+                productId: a.productId,
+                productName: a.productName,
+                currentQty,
+                reorderLevel,
+                type: (a.type === 'low_stock' ? 'low' : 'expiring') as 'low' | 'expiring',
+                expiryDate,
+              };
+            }),
             auditLogs: [],
           });
+        }
+        if (auditRes.status === 'fulfilled' && auditRes.value.ok) {
+          const auditData = await auditRes.value.json();
+          const logs = (auditData.logs ?? []).slice(0, 10);
+          setRecentData((prev) =>
+            prev
+              ? { ...prev, auditLogs: logs.map((log: any) => ({
+                  id: log.id,
+                  userName: log.user?.name,
+                  action: log.action,
+                  entity: '',
+                  details: log.details,
+                  createdAt: log.createdAt,
+                })) }
+              : prev,
+          );
         }
       } catch {
         // Silent fail for dashboard
@@ -147,15 +183,15 @@ export default function AdminDashboard() {
   }, []);
 
   const overviewCards = [
-    { label: "Today's Sales", value: stats?.todaySales ?? 0, icon: DollarSign, bg: 'bg-emerald-500', change: 12.5 },
-    { label: 'Weekly Sales', value: stats?.weeklySales ?? 0, icon: TrendingUp, bg: 'bg-teal-500', change: 8.3 },
-    { label: 'Monthly Sales', value: stats?.monthlySales ?? 0, icon: Calendar, bg: 'bg-green-500', change: -2.1 },
-    { label: 'Total Revenue', value: stats?.totalRevenue ?? 0, icon: Wallet, bg: 'bg-emerald-500', change: 15.7 },
-    { label: 'Total Profit', value: stats?.totalProfit ?? 0, icon: PiggyBank, bg: 'bg-teal-500', change: 9.2 },
-    { label: 'Inventory Value', value: stats?.totalInventoryValue ?? 0, icon: Package, bg: 'bg-green-500', change: 3.4 },
-    { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', change: 1.2, isCount: true, navTo: 'products' as const },
-    { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', change: -5.0, isCount: true, invertChange: true, navTo: 'inventory' as const },
-    { label: 'Expiry Alerts', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-red-500', change: 10.0, isCount: true, invertChange: true, navTo: 'inventory' as const },
+    { label: "Today's Sales", value: stats?.todaySales ?? 0, icon: DollarSign, bg: 'bg-emerald-500' },
+    { label: 'Weekly Sales', value: stats?.weeklySales ?? 0, icon: TrendingUp, bg: 'bg-teal-500' },
+    { label: 'Monthly Sales', value: stats?.monthlySales ?? 0, icon: Calendar, bg: 'bg-green-500' },
+    { label: 'Total Revenue', value: stats?.totalRevenue ?? 0, icon: Wallet, bg: 'bg-emerald-500' },
+    { label: 'Total Profit', value: stats?.totalProfit ?? 0, icon: PiggyBank, bg: 'bg-teal-500' },
+    { label: 'Inventory Value', value: stats?.totalInventoryValue ?? 0, icon: Package, bg: 'bg-green-500' },
+    { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', isCount: true, navTo: 'products' as const },
+    { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', isCount: true, navTo: 'inventory' as const },
+    { label: 'Expiry Alerts', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-red-500', isCount: true, navTo: 'inventory' as const },
   ];
 
   const dailySalesConfig = { sales: { label: 'Sales', color: '#10b981' } };
@@ -203,7 +239,6 @@ export default function AdminDashboard() {
         {overviewCards.map((card) => {
           const Icon = card.icon;
           const displayValue = card.isCount ? card.value.toLocaleString() : formatGHS(card.value);
-          const isPositive = card.invertChange ? card.change < 0 : card.change > 0;
           return (
             <Card
               key={card.label}
@@ -218,17 +253,6 @@ export default function AdminDashboard() {
                   </div>
                 </div>
                 <p className="mt-3 text-2xl font-bold">{displayValue}</p>
-                <div className="flex items-center mt-1 text-xs">
-                  {isPositive ? (
-                    <ArrowUpRight className="h-3 w-3 text-emerald-500 mr-1" />
-                  ) : (
-                    <ArrowDownRight className="h-3 w-3 text-red-500 mr-1" />
-                  )}
-                  <span className={isPositive ? 'text-emerald-600' : 'text-red-600'}>
-                    {Math.abs(card.change)}%
-                  </span>
-                  <span className="text-muted-foreground ml-1">from last period</span>
-                </div>
               </CardContent>
             </Card>
           );
@@ -432,8 +456,12 @@ export default function AdminDashboard() {
                     <div>
                       <p className="font-medium text-sm">{alert.productName}</p>
                       <p className="text-xs text-muted-foreground">
-                        Qty: {alert.currentQty} / Reorder: {alert.reorderLevel}
-                        {alert.expiryDate && ` / Exp: ${new Date(alert.expiryDate).toLocaleDateString('en-GH')}`}
+                        {alert.type === 'low'
+                          ? `Qty: ${alert.currentQty} / Reorder at: ${alert.reorderLevel}`
+                          : alert.expiryDate
+                            ? `Qty: ${alert.currentQty} / Exp: ${new Date(alert.expiryDate).toLocaleDateString('en-GH')}`
+                            : `Qty: ${alert.currentQty}`
+                        }
                       </p>
                     </div>
                     <Badge variant={alert.type === 'low' ? 'default' : 'destructive'} className={

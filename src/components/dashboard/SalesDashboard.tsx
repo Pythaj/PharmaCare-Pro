@@ -72,8 +72,8 @@ export default function SalesDashboard() {
   const quickActions = [
     { label: 'New Sale', icon: ShoppingCart, page: 'pos' as const, color: 'bg-emerald-500 hover:bg-emerald-600' },
     { label: 'New Purchase Entry', icon: Truck, page: 'purchases' as const, color: 'bg-teal-500 hover:bg-teal-600' },
-    { label: 'Product Search', icon: Search, page: 'products' as const, color: 'bg-green-500 hover:bg-green-600' },
-    { label: 'Customer Search', icon: Users, page: 'customers' as const, color: 'bg-emerald-600 hover:bg-emerald-700' },
+    { label: 'View Products', icon: Search, page: 'products' as const, color: 'bg-green-500 hover:bg-green-600' },
+    { label: 'View Customers', icon: Users, page: 'customers' as const, color: 'bg-emerald-600 hover:bg-emerald-700' },
   ];
 
   const statCards = [

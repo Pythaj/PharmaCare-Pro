@@ -205,12 +205,13 @@ export default function ProductsView() {
                     </TableRow>
                   ))
                 ) : products.length > 0 ? (
-                  products.map((product) => {
+                  products.map((product, index) => {
                     const status = getStockStatus(product.totalStock, product.reorderLevel);
                     const isExpanded = expandedRow === product.id;
+                    const rowKey = product.id || `product-${index}`;
                     return (
-                      <Fragment key={product.id}>
-                        <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(product.id)}>
+                      <Fragment key={rowKey}>
+                        <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(rowKey)}>
                           <TableCell>
                             {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           </TableCell>
@@ -233,12 +234,12 @@ export default function ProductsView() {
                           </TableCell>
                         </TableRow>
                         {isExpanded && (
-                          <TableRow key={`${product.id}-batches`}>
+                          <TableRow key={`${rowKey}-batches`}>
                             <TableCell colSpan={7} className="bg-muted/30 px-8 py-3">
                               {loadingBatches ? (
                                 <div className="space-y-2">
                                   {Array.from({ length: 2 }).map((_, i) => (
-                                    <Skeleton key={i} className="h-10 w-full" />
+                                    <Skeleton key={`batch-skel-${i}`} className="h-10 w-full" />
                                   ))}
                                 </div>
                               ) : batches.length > 0 ? (
@@ -260,7 +261,7 @@ export default function ProductsView() {
                                         const isExpired = new Date(batch.expiryDate) < new Date();
                                         const isExpiringSoon = !isExpired && new Date(batch.expiryDate).getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000;
                                         return (
-                                          <tr key={batch.id} className="border-b border-dotted">
+                                          <tr key={batch.id || `batch-${batch.batchNumber}`} className="border-b border-dotted">
                                             <td className="py-1.5 font-mono">{batch.batchNumber}</td>
                                             <td className="text-right font-mono">{batch.currentQty}</td>
                                             <td className="text-right">{formatGHS(batch.costPrice)}</td>

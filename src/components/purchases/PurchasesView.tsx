@@ -15,6 +15,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog';
 import {
+  AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
+} from '@/components/ui/alert-dialog';
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
@@ -40,6 +44,10 @@ export default function PurchasesView() {
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Delete state
+  const [deletingPurchase, setDeletingPurchase] = useState<Purchase | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [form, setForm] = useState({
     supplierId: '',
@@ -78,6 +86,32 @@ export default function PurchasesView() {
     const updated = [...items];
     (updated[index] as Record<string, string | number>)[field] = value;
     setItems(updated);
+  };
+
+  const handleDeletePurchase = (purchase: Purchase) => {
+    setDeletingPurchase(purchase);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deletingPurchase) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/purchases/${deletingPurchase.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete purchase');
+      }
+      toast.success('Purchase deleted successfully');
+      setDeletingPurchase(null);
+      const purchasesRes = await fetch('/api/purchases');
+      if (purchasesRes.ok) { const d = await purchasesRes.json(); setPurchases(d.purchases ?? []); }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete purchase');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleSave = async () => {
@@ -131,6 +165,7 @@ export default function PurchasesView() {
                   <TableHead className="text-right">Total Amount</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Recorded By</TableHead>
+                  <TableHead className="w-20">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -143,6 +178,7 @@ export default function PurchasesView() {
                       <TableCell><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-8" /></TableCell>
                     </TableRow>
                   ))
                 ) : purchases.length > 0 ? (
@@ -158,11 +194,21 @@ export default function PurchasesView() {
                         {new Date(purchase.createdAt).toLocaleDateString('en-GH')}
                       </TableCell>
                       <TableCell className="text-sm">{purchase.user?.name ?? '-'}</TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => handleDeletePurchase(purchase)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
                       No purchases recorded yet
                     </TableCell>
                   </TableRow>
@@ -172,6 +218,28 @@ export default function PurchasesView() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Delete Purchase AlertDialog */}
+      <AlertDialog open={!!deletingPurchase} onOpenChange={(open) => { if (!open) setDeletingPurchase(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Purchase</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete this purchase record? Associated batch data will also be removed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmDelete}
+              disabled={deleting}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {deleting ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* New Purchase Dialog */}
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>

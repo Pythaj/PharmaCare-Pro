@@ -196,3 +196,95 @@ Stage Summary:
 - On save: API + localStorage cache, with warning toast on API failure
 - New `SystemSetting` Prisma model with upsert for each key-value pair
 - Zero lint errors
+
+---
+Task ID: 8-d
+Agent: Settings & Reports Cleanup Agent
+Task: Fix Settings logo placeholder, clean up ReportsView, add SalesDashboard navigation labels
+
+Work Log:
+- **SettingsView.tsx**: Added `logoUrl: string` field to `PharmacyInfo` interface and `defaults.pharmacy`
+- **SettingsView.tsx**: Replaced disabled "Upload" button and "future update" text with a functional "Pharmacy Logo URL" text input
+- **SettingsView.tsx**: Added 48x48 logo preview (`<img>`) that shows when a URL is provided, with `onError` fallback to hide broken images; falls back to `ImageIcon` placeholder when no URL is set
+- **SettingsView.tsx**: Logo URL is stored as `pharmacy.logoUrl` and persisted via existing flatten/unflatten + API + localStorage flow
+- **ReportsView.tsx**: Removed unused `fetchReport` async function (dead code — fetching was already handled inline in `useEffect`)
+- **ReportsView.tsx**: Added descriptive comment above `handleExportExcel` explaining intentional TSV format with .xls extension for Excel compatibility without external libraries
+- **ReportsView.tsx**: Removed unused `BarChart` and `Bar` imports from recharts (only `AreaChart` and `PieChart` are rendered)
+- **SalesDashboard.tsx**: Renamed quick action labels: "Product Search" → "View Products", "Customer Search" → "View Customers" (navigation was already wired up via `useAppStore`)
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- Settings page now has a working logo URL field with live preview, stored as `pharmacy.logoUrl`
+- ReportsView cleaned up: dead `fetchReport` function removed, TSV format documented, unused recharts imports removed
+- SalesDashboard quick actions have clear "View Products" / "View Customers" labels
+- Zero lint errors
+
+---
+Task ID: 8-c
+Agent: AdminDashboard Hardcoded Data Fix Agent
+Task: Fix AdminDashboard hardcoded/fake data and populate real data from APIs
+
+Work Log:
+- Removed 3 unused imports: `useQuery` from `@tanstack/react-query`, `ArrowUpRight` and `ArrowDownRight` from `lucide-react`
+- Removed hardcoded `change` values (12.5, 8.3, -2.1, 15.7, 9.2, 3.4, 1.2, -5.0, 10.0) from all 9 overview card definitions
+- Removed `invertChange` properties from Low Stock Alerts and Expiry Alerts cards
+- Removed the entire change percentage display (arrow icons + "X% from last period" text) from card rendering
+- Fixed stock alerts fragile regex parsing: replaced single `(\d+)\s*units` pattern with type-specific patterns:
+  - Low stock: `/has only (\d+) units/` for quantity, `/reorder level: (\d+)/` for reorder level
+  - Expiring: `/((\d+) units)/` for quantity, `/expires in (\d+) days/` to compute approximate expiry date
+- Added `/api/audit-logs` to the `Promise.allSettled` fetch in `useEffect`
+- Mapped audit log API response (`{ logs: [...] }` with `user.name` relation) to `AuditLogEntry` interface, taking first 10 entries
+- Updated stock alert display: low stock shows "Qty: X / Reorder at: Y", expiring shows "Qty: X / Exp: date"
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- Overview cards no longer display misleading hardcoded percentage changes
+- Stock alerts now properly extract currentQty, reorderLevel (low stock) and expiryDate (expiring) from API messages
+- User Activity table now shows real audit log data from `/api/audit-logs` instead of always being empty
+- Emerald theme and card layout preserved, all existing navigation intact
+- Zero lint errors
+
+---
+Task ID: 8-b
+Agent: Frontend CRUD Agent
+Task: Add edit/delete CRUD functionality to frontend views
+
+Work Log:
+- **CustomersView.tsx**: Added edit/delete action buttons in new table column. Edit (Pencil icon) opens Dialog with pre-filled form, calls PATCH `/api/customers/[id]`. Delete (Trash2 icon, red) opens AlertDialog confirmation "Are you sure you want to delete this customer? This action cannot be undone.", calls DELETE `/api/customers/[id]`. Errors from API (e.g. existing sales) shown in toast. Extracted `CustomerRow` sub-component to fix React fragment key warnings.
+- **SuppliersView.tsx**: Added edit/delete icon buttons in card header area next to active status dot. Edit opens Dialog with pre-filled form (name, contact, email, phone, address), calls PATCH `/api/suppliers/[id]`. Delete opens AlertDialog, calls DELETE `/api/suppliers/[id]`. Emerald theme for edit, red theme for delete.
+- **PurchasesView.tsx**: Added delete button (Trash2 icon, red) in new actions column. Opens AlertDialog "Delete this purchase record? Associated batch data will also be removed." On confirm, calls DELETE `/api/purchases/[id]`. On success, refreshes purchase list. Updated colSpan for empty state row.
+- **SalesHistoryView.tsx**: Added "Refund" button (RotateCcw icon, amber) and "Print Receipt" button (Printer icon, emerald) in new actions column. Refund navigates to 'returns' page via `useAppStore().navigate('returns')` with toast. Print opens new browser window with receipt HTML layout including pharmacy name, date, items table, totals, payment method. Extracted `SaleRow` sub-component to fix React fragment key warnings.
+- **InventoryView.tsx**: Added "Add Stock / New Purchase" button in filter bar area that navigates to 'purchases' page via `useAppStore().navigate('purchases')`. Removed unused `Category` type import.
+- All dialogs use proper form labels, `toast` from `sonner` for feedback, `fetch` for API calls
+- Emerald theme (bg-emerald-600) for primary actions, red theme (bg-red-600) for delete actions
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- 5 frontend views updated with CRUD functionality: CustomersView (edit+delete), SuppliersView (edit+delete), PurchasesView (delete), SalesHistoryView (refund+print receipt), InventoryView (add stock navigation)
+- All edit operations use PATCH API calls with pre-filled forms
+- All delete operations use AlertDialog confirmation with DELETE API calls
+- Print receipt opens a styled HTML receipt in a new browser window
+- Refund button navigates to returns page with informational toast
+- Extracted sub-components for CustomerRow and SaleRow to fix React fragment key warnings
+- Zero lint errors
+
+---
+Task ID: 8-a
+Agent: CRUD API Routes Agent
+Task: Create missing API CRUD endpoints for customers, suppliers, and purchases
+
+Work Log:
+- Added PATCH to `/src/app/api/customers/[id]/route.ts`: accepts partial updates (name, email, phone, address), returns updated customer
+- Added DELETE to `/src/app/api/customers/[id]/route.ts`: checks if customer has sales via `_count`, returns 400 error "Cannot delete customer with existing sales records" if sales exist, otherwise deletes
+- Created `/src/app/api/suppliers/[id]/route.ts`: GET (single supplier with purchase count), PATCH (partial updates for name/contact/email/phone/address), DELETE (checks purchase count, returns 400 "Cannot delete supplier with existing purchase records" if purchases exist)
+- Created `/src/app/api/purchases/[id]/route.ts`: GET (single purchase with supplier, user, and batch+product details), DELETE (deletes all associated batches first via `deleteMany`, then deletes purchase)
+- All routes use `params: Promise<{ id: string }>` (Next.js 16 pattern), `db` from `@/lib/db`, consistent error handling with console.error logging
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- 3 API route files updated/created with 7 new handler functions
+- Customer PATCH/DELETE enables frontend edit/delete workflows
+- Supplier GET/PATCH/DELETE completes full supplier CRUD
+- Purchase GET/DELETE enables detail view and cascade delete of batches
+- Delete guards prevent orphaned records (customer with sales, supplier with purchases)
+- Zero lint errors
