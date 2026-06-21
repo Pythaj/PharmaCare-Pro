@@ -1,6 +1,6 @@
 'use client';
 
-import { lazy, Suspense, useMemo, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { useAppStore } from '@/stores/app-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
@@ -54,6 +54,9 @@ function PageLoader() {
   );
 }
 
+// Pages that are admin-only
+const adminOnlyPages: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings'];
+
 const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<() => React.JSX.Element>> = {
   'admin-dashboard': AdminDashboard,
   'sales-dashboard': SalesDashboard,
@@ -72,13 +75,32 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
 };
 
 export default function Home() {
-  const { currentPage, isAuthenticated, sidebarOpen } = useAppStore();
+  const { currentPage, isAuthenticated, sidebarOpen, currentUser } = useAppStore();
   const isDesktop = useIsDesktop();
+  const navigate = useAppStore((s) => s.navigate);
+
+  // Role-based page access guard
+  const resolvedPage = (() => {
+    if (currentUser?.role !== 'admin' && adminOnlyPages.includes(currentPage)) {
+      // Redirect sales users to their dashboard if they try to access admin pages
+      return 'sales-dashboard' as Page;
+    }
+    if (currentUser?.role === 'admin' && currentPage === 'sales-dashboard') {
+      return 'admin-dashboard' as Page;
+    }
+    return currentPage;
+  })();
+
+  useEffect(() => {
+    if (resolvedPage !== currentPage) {
+      navigate(resolvedPage);
+    }
+  }, [resolvedPage, currentPage, navigate]);
 
   const ActivePage = useMemo(() => {
-    if (currentPage === 'login') return null;
-    return pageComponents[currentPage] || null;
-  }, [currentPage]);
+    if (resolvedPage === 'login') return null;
+    return pageComponents[resolvedPage] || null;
+  }, [resolvedPage]);
 
   // Login page
   if (!isAuthenticated || currentPage === 'login') {

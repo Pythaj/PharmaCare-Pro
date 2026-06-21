@@ -288,3 +288,28 @@ Stage Summary:
 - Purchase GET/DELETE enables detail view and cascade delete of batches
 - Delete guards prevent orphaned records (customer with sales, supplier with purchases)
 - Zero lint errors
+
+---
+Task ID: 9
+Agent: Main Orchestrator
+Task: Fix role-based access — sales person should NOT see Settings page; add premium profile dialog
+
+Work Log:
+- Fixed Header.tsx profile dropdown: was always navigating to 'settings' regardless of role
+- Added `handleProfileClick()` function that checks `isAdmin` — admin goes to Settings, sales person opens a ProfileDialog
+- Created premium `ProfileDialog` component with: gradient header card, avatar with initials, contact info section (email, phone, account status, join date), and performance stats section (total sales count, today's sales, all-time revenue) fetched from `/api/sales?userId=`
+- Updated menu item label: admin sees "Settings", sales person sees "My Profile"
+- Added route guard in page.tsx: defined `adminOnlyPages` array (admin-dashboard, suppliers, returns, reports, users, audit-logs, settings)
+- Added `resolvedPage` logic that redirects sales users to sales-dashboard if they try to access admin-only pages
+- Added redirect for admin users who somehow land on sales-dashboard (sends to admin-dashboard)
+- Also fixed sidebar bottom section: separated `motion.aside` into `div` (positioning) + `motion.div` (width animation) so framer-motion doesn't override fixed positioning; added `overflow-hidden` to sidebar content; wrapped ScrollArea in `flex-1 min-h-0` container; added `shrink-0` to user info section; reduced nav spacing for compact layout
+- Re-seeded database to include SystemSetting table for Settings API
+- All changes pass lint with zero errors
+
+Stage Summary:
+- Sales person profile click now opens a premium "My Profile" dialog with contact info + performance stats
+- Admin profile click still navigates to Settings as before
+- Route guard prevents sales users from accessing admin-only pages even if URL is manipulated
+- Sidebar bottom section (Reports, Users, Audit Logs, Settings + user avatar) no longer gets cut off
+- Sidebar navigation scrollable with visible scrollbar
+- Zero lint errors
