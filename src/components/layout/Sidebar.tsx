@@ -324,7 +324,7 @@ export function Sidebar() {
       <motion.aside
         animate={{ width: sidebarOpen ? 260 : 68 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="hidden h-screen shrink-0 lg:block"
+        className="hidden h-screen shrink-0 sticky top-0 self-start z-40 lg:block"
       >
         <div className="h-full bg-slate-950 border-r border-slate-800/50">
           {sidebarContent}

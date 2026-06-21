@@ -60,7 +60,7 @@ export default function SalesDashboard() {
         const res = await fetch('/api/dashboard/recent');
         if (res.ok) {
           const data = await res.json();
-          setRecentSales(data.sales ?? []);
+          setRecentSales(data.recentSales ?? []);
         }
       } catch { /* silent */ }
 

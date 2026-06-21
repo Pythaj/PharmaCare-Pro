@@ -1,0 +1,48 @@
+import { NextRequest, NextResponse } from 'next/server'
+import { db } from '@/lib/db'
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const customer = await db.customer.findUnique({
+      where: { id },
+      include: {
+        _count: { select: { sales: true } },
+      },
+    })
+    if (!customer) {
+      return NextResponse.json({ error: 'Customer not found' }, { status: 404 })
+    }
+
+    const sales = await db.sale.findMany({
+      where: { customerId: id },
+      select: {
+        invoiceNo: true,
+        totalAmount: true,
+        profit: true,
+        paymentMethod: true,
+        status: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    })
+
+    const totalPurchases = await db.sale.aggregate({
+      where: { customerId: id },
+      _sum: { totalAmount: true },
+    })
+
+    return NextResponse.json({
+      ...customer,
+      totalPurchases: totalPurchases._sum.totalAmount ?? 0,
+      sales,
+    })
+  } catch (error) {
+    console.error('Customer fetch error:', error)
+    return NextResponse.json({ error: 'Failed to fetch customer' }, { status: 500 })
+  }
+}

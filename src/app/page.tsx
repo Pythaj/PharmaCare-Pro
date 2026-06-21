@@ -1,7 +1,6 @@
 'use client';
 
 import { lazy, Suspense, useMemo } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import { useAppStore } from '@/stores/app-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
@@ -59,12 +58,6 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
   'settings': SettingsView,
 };
 
-const pageVariants = {
-  initial: { opacity: 0, y: 12 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -8 },
-};
-
 export default function Home() {
   const { currentPage, isAuthenticated } = useAppStore();
 
@@ -80,27 +73,15 @@ export default function Home() {
 
   // App layout
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50/80">
-      <div className="flex flex-1 overflow-hidden">
+    <div className="min-h-screen bg-slate-50/80">
+      <div className="flex">
         <Sidebar />
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col min-h-screen">
           <Header />
           <main className="flex-1 overflow-y-auto">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={currentPage}
-                variants={pageVariants}
-                initial="initial"
-                animate="animate"
-                exit="exit"
-                transition={{ duration: 0.2, ease: 'easeInOut' }}
-                className="h-full"
-              >
-                <Suspense fallback={<PageLoader />}>
-                  {ActivePage && <ActivePage />}
-                </Suspense>
-              </motion.div>
-            </AnimatePresence>
+            <Suspense fallback={<PageLoader />}>
+              {ActivePage && <ActivePage key={currentPage} />}
+            </Suspense>
           </main>
         </div>
       </div>

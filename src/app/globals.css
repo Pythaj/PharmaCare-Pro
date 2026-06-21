@@ -120,3 +120,35 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Premium Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Dark scrollbar for sidebar */
+.dark ::-webkit-scrollbar-thumb,
+.bg-slate-950 ::-webkit-scrollbar-thumb,
+[data-slot="sidebar"] ::-webkit-scrollbar-thumb {
+  background: #475569;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover,
+.bg-slate-950 ::-webkit-scrollbar-thumb:hover,
+[data-slot="sidebar"] ::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}

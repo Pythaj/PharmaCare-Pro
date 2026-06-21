@@ -23,6 +23,23 @@ export function Header() {
   const { currentUser, currentPage, sidebarOpen, setSidebarOpen, searchQuery, setSearchQuery, logout, navigate } = useAppStore();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
+  const [alertCount, setAlertCount] = useState(0);
+
+  useEffect(() => {
+    async function fetchAlerts() {
+      try {
+        const res = await fetch('/api/dashboard/stats');
+        if (res.ok) {
+          const data = await res.json();
+          const count = (data.lowStockCount ?? 0) + (data.expiringCount ?? 0);
+          setAlertCount(count);
+        }
+      } catch { /* silent */ }
+    }
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     const updateTime = () => {
@@ -100,9 +117,11 @@ export function Header() {
         onClick={() => navigate('inventory')}
       >
         <Bell className="h-4.5 w-4.5" />
-        <Badge className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[10px] font-bold text-white border-2 border-white">
-          0
-        </Badge>
+        {alertCount > 0 && (
+          <Badge className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white border-2 border-white">
+            {alertCount}
+          </Badge>
+        )}
         <span className="sr-only">Notifications</span>
       </Button>
 
