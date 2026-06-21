@@ -1,7 +1,7 @@
 'use client';
 
 import { useAppStore } from '@/stores/app-store';
-import type { Page, UserRole } from '@/types';
+import type { Page } from '@/types';
 import {
   Pill,
   LayoutDashboard,
@@ -33,7 +33,6 @@ interface NavItem {
   label: string;
   page: Page;
   icon: React.ElementType;
-  roles: UserRole[];
 }
 
 interface NavSection {
@@ -41,65 +40,68 @@ interface NavSection {
   items: NavItem[];
 }
 
-const navSections: NavSection[] = [
-  // Admin navigation — full access to all sections
+// Admin navigation — full access to every section
+const adminNavSections: NavSection[] = [
   {
     title: 'OVERVIEW',
     items: [
-      { label: 'Dashboard', page: 'admin-dashboard', icon: LayoutDashboard, roles: ['admin'] },
+      { label: 'Dashboard', page: 'admin-dashboard', icon: LayoutDashboard },
     ],
   },
   {
     title: 'OPERATIONS',
     items: [
-      { label: 'POS', page: 'pos', icon: ShoppingCart, roles: ['admin', 'sales'] },
-      { label: 'Products', page: 'products', icon: Package, roles: ['admin', 'sales'] },
-      { label: 'Inventory', page: 'inventory', icon: Warehouse, roles: ['admin'] },
-      { label: 'Customers', page: 'customers', icon: Users, roles: ['admin', 'sales'] },
+      { label: 'POS', page: 'pos', icon: ShoppingCart },
+      { label: 'Products', page: 'products', icon: Package },
+      { label: 'Inventory', page: 'inventory', icon: Warehouse },
+      { label: 'Customers', page: 'customers', icon: Users },
     ],
   },
   {
     title: 'PROCUREMENT',
     items: [
-      { label: 'Purchases', page: 'purchases', icon: Truck, roles: ['admin'] },
-      { label: 'Suppliers', page: 'suppliers', icon: Building2, roles: ['admin'] },
+      { label: 'Purchases', page: 'purchases', icon: Truck },
+      { label: 'Suppliers', page: 'suppliers', icon: Building2 },
     ],
   },
   {
     title: 'SALES',
     items: [
-      { label: 'Sales History', page: 'sales-history', icon: Receipt, roles: ['admin', 'sales'] },
-      { label: 'Returns', page: 'returns', icon: RotateCcw, roles: ['admin'] },
+      { label: 'Sales History', page: 'sales-history', icon: Receipt },
+      { label: 'Returns', page: 'returns', icon: RotateCcw },
     ],
   },
   {
     title: 'ANALYTICS',
     items: [
-      { label: 'Reports', page: 'reports', icon: BarChart3, roles: ['admin'] },
+      { label: 'Reports', page: 'reports', icon: BarChart3 },
     ],
   },
   {
     title: 'MANAGEMENT',
     items: [
-      { label: 'Users', page: 'users', icon: UserCog, roles: ['admin'] },
-      { label: 'Audit Logs', page: 'audit-logs', icon: FileText, roles: ['admin'] },
-      { label: 'Settings', page: 'settings', icon: Settings, roles: ['admin'] },
+      { label: 'Users', page: 'users', icon: UserCog },
+      { label: 'Audit Logs', page: 'audit-logs', icon: FileText },
+      { label: 'Settings', page: 'settings', icon: Settings },
     ],
   },
-  // Sales person navigation — clean, minimal, no admin hints
+];
+
+// Sales navigation — clean, minimal, zero admin awareness
+const salesNavSections: NavSection[] = [
   {
-    title: 'MENU',
+    title: 'MAIN',
     items: [
-      { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard, roles: ['sales'] },
+      { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard },
+      { label: 'POS', page: 'pos', icon: ShoppingCart },
     ],
   },
   {
-    title: 'SALES',
+    title: 'RECORDS',
     items: [
-      { label: 'POS', page: 'pos', icon: ShoppingCart, roles: ['sales'] },
-      { label: 'Products', page: 'products', icon: Package, roles: ['sales'] },
-      { label: 'Sales History', page: 'sales-history', icon: Receipt, roles: ['sales'] },
-      { label: 'Customers', page: 'customers', icon: Users, roles: ['sales'] },
+      { label: 'Products', page: 'products', icon: Package },
+      { label: 'Sales History', page: 'sales-history', icon: Receipt },
+      { label: 'Customers', page: 'customers', icon: Users },
     ],
   },
 ];
@@ -139,11 +141,8 @@ export function Sidebar() {
     }
   }
 
-  const visibleSections = navSections.map((section, index) => ({
-    ...section,
-    _key: `section-${index}`,
-    items: section.items.filter((item) => item.roles.includes(userRole)),
-  })).filter((section) => section.items.length > 0);
+  // Select the correct navigation based on role — no overlap possible
+  const visibleSections = isAdmin ? adminNavSections : salesNavSections;
 
   const sidebarContent = (
     <div className="flex h-full flex-col overflow-hidden">
@@ -196,7 +195,7 @@ export function Sidebar() {
         <TooltipProvider delayDuration={0}>
           <nav className="space-y-1">
             {visibleSections.map((section) => (
-              <div key={section._key}>
+              <div key={section.title}>
                 <AnimatePresence>
                   {sidebarOpen && (
                     <motion.p
