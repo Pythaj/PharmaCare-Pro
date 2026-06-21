@@ -43,30 +43,21 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const user = await db.user.findUnique({
-      where: { id },
-      include: {
-        _count: { select: { sales: true, purchases: true } },
-      },
-    })
-
+    const user = await db.user.findUnique({ where: { id } })
     if (!user) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    if (user._count.sales > 0 || user._count.purchases > 0) {
-      return NextResponse.json(
-        { error: 'Cannot delete user with existing sales or purchase records. Deactivate instead.' },
-        { status: 400 }
-      )
-    }
-
+    // Null out FK references so we can safely delete the user
+    await db.sale.updateMany({ where: { userId: id }, data: { userId: null } })
+    await db.purchase.updateMany({ where: { userId: id }, data: { userId: null } })
     await db.auditLog.deleteMany({ where: { userId: id } })
     await db.user.delete({ where: { id } })
 
     return NextResponse.json({ message: 'User deleted successfully' })
   } catch (error) {
     console.error('User delete error:', error)
-    return NextResponse.json({ error: 'Failed to delete user' }, { status: 500 })
+    const message = error instanceof Error ? error.message : 'Failed to delete user'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }

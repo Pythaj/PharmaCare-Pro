@@ -314,7 +314,8 @@ export default function UsersView() {
             <AlertDialogTitle>Delete User — {selectedUser?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
               This action cannot be undone. The user account will be permanently removed.
-              Users with existing sales or purchase records cannot be deleted — deactivate them instead.
+              Their existing sales and purchase records will be preserved but the cashier name
+              will no longer appear on those records.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

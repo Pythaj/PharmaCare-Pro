@@ -96,14 +96,14 @@ model Purchase {
   id          String   @id @default(cuid())
   invoiceNo   String
   supplierId  String?
-  userId      String
+  userId      String?
   totalAmount Float    @default(0)
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   supplier    Supplier? @relation(fields: [supplierId], references: [id])
-  user        User      @relation(fields: [userId], references: [id])
+  user        User?      @relation(fields: [userId], references: [id])
   batches     Batch[]
 
   @@map("purchases")
@@ -128,7 +128,7 @@ model Sale {
   id            String   @id @default(cuid())
   invoiceNo     String   @unique
   customerId    String?
-  userId        String
+  userId        String?
   subtotal      Float    @default(0)
   tax           Float    @default(0)
   discount      Float    @default(0)
@@ -141,7 +141,7 @@ model Sale {
   updatedAt     DateTime @updatedAt
 
   customer      Customer? @relation(fields: [customerId], references: [id])
-  user          User      @relation(fields: [userId], references: [id])
+  user          User?      @relation(fields: [userId], references: [id])
   items         SaleItem[]
   returns       Return[]
 
