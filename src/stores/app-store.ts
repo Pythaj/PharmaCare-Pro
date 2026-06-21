@@ -16,6 +16,7 @@ interface AppState {
   
   // UI State
   searchQuery: string;
+  showProfileDialog: boolean;
   
   // Actions
   login: (user: User) => void;
@@ -33,6 +34,7 @@ interface AppState {
   
   // Search
   setSearchQuery: (query: string) => void;
+  setShowProfileDialog: (open: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -50,6 +52,7 @@ export const useAppStore = create<AppState>((set) => ({
   
   // UI State
   searchQuery: '',
+  showProfileDialog: false,
   
   // Actions
   login: (user) => set({
@@ -67,7 +70,18 @@ export const useAppStore = create<AppState>((set) => ({
     searchQuery: '',
   }),
   
-  navigate: (page) => set({ currentPage: page }),
+  navigate: (page) => set((state) => {
+    // Prevent sales users from navigating to admin-only pages
+    const adminOnly: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings'];
+    if (state.currentUser?.role !== 'admin' && adminOnly.includes(page)) {
+      return {}; // No-op: don't navigate to admin pages
+    }
+    // Redirect admin from sales-dashboard to admin-dashboard
+    if (state.currentUser?.role === 'admin' && page === 'sales-dashboard') {
+      return { currentPage: 'admin-dashboard' };
+    }
+    return { currentPage: page };
+  }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   
@@ -107,4 +121,5 @@ export const useAppStore = create<AppState>((set) => ({
   
   // Search
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setShowProfileDialog: (open) => set({ showProfileDialog: open }),
 }));

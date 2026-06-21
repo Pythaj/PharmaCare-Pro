@@ -111,8 +111,17 @@ export function getPageName(page: Page): string {
 }
 
 export function Sidebar() {
-  const { currentUser, currentPage, sidebarOpen, navigate, toggleSidebar, setSidebarOpen } = useAppStore();
+  const { currentUser, currentPage, sidebarOpen, navigate, toggleSidebar, setSidebarOpen, setShowProfileDialog } = useAppStore();
   const userRole = currentUser?.role || 'sales';
+  const isAdmin = userRole === 'admin';
+
+  function handleUserSectionClick() {
+    if (isAdmin) {
+      navigate('settings');
+    } else {
+      setShowProfileDialog(true);
+    }
+  }
 
   const visibleSections = navSections.map((section) => ({
     ...section,
@@ -253,10 +262,14 @@ export function Sidebar() {
 
       {/* User info - shrink-0 keeps it always visible */}
       <div className="shrink-0 p-3">
-        <div className={cn(
-          'flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5',
-          !sidebarOpen && 'justify-center px-0'
-        )}>
+        <button
+          onClick={handleUserSectionClick}
+          className={cn(
+            'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-200',
+            'bg-slate-800/50 hover:bg-slate-800',
+            !sidebarOpen && 'justify-center px-0'
+          )}
+        >
           <Avatar className="h-8 w-8 border border-emerald-500/30">
             <AvatarFallback className="bg-emerald-500/20 text-xs font-semibold text-emerald-400">
               {currentUser?.name?.split(' ').map(n => n[0]).join('') || 'U'}
@@ -288,7 +301,12 @@ export function Sidebar() {
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+          {sidebarOpen && (
+            <span className="ml-auto text-[10px] text-slate-500">
+              {isAdmin ? 'Settings →' : 'Profile →'}
+            </span>
+          )}
+        </button>
       </div>
     </div>
   );

@@ -3,7 +3,7 @@
 import { useAppStore } from '@/stores/app-store';
 import { getPageName } from './Sidebar';
 import { cn } from '@/lib/utils';
-import { Search, Bell, Menu, LogOut, User as UserIcon, Shield, Clock, Mail, Phone } from 'lucide-react';
+import { Search, Bell, Menu, LogOut, User as UserIcon, Shield, Clock, Mail, Phone, TrendingUp, Calendar, Star, Award } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -26,129 +26,171 @@ import {
 } from '@/components/ui/dialog';
 import { useEffect, useState, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
-import type { User } from '@/types';
 
 function formatGHS(value: number): string {
   return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
 }
 
 // Premium profile dialog for sales person
-function ProfileDialog({ user, open, onOpenChange }: { user: User | null; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const [stats, setStats] = useState<{ totalSales: number; todaySales: number; txCount: number } | null>(null);
+function ProfileDialog() {
+  const { currentUser, showProfileDialog, setShowProfileDialog } = useAppStore();
+  const [stats, setStats] = useState<{ totalSales: number; todaySales: number; txCount: number; weekSales: number } | null>(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!open || !user) return;
+    if (!showProfileDialog || !currentUser) return;
+    setLoading(true);
     async function loadStats() {
       try {
-        const res = await fetch('/api/sales?userId=' + user.id);
+        const res = await fetch('/api/sales?userId=' + currentUser.id);
         if (res.ok) {
           const data = await res.json();
           const sales = data.sales ?? [];
           const totalSales = sales.reduce((sum: number, s: { totalAmount: number }) => sum + s.totalAmount, 0);
           const today = new Date();
           today.setHours(0, 0, 0, 0);
+          const weekAgo = new Date(today);
+          weekAgo.setDate(weekAgo.getDate() - 7);
           const todaySales = sales
             .filter((s: { createdAt: string }) => new Date(s.createdAt) >= today)
             .reduce((sum: number, s: { totalAmount: number }) => sum + s.totalAmount, 0);
-          setStats({ totalSales, todaySales, txCount: sales.length });
+          const weekSales = sales
+            .filter((s: { createdAt: string }) => new Date(s.createdAt) >= weekAgo)
+            .reduce((sum: number, s: { totalAmount: number }) => sum + s.totalAmount, 0);
+          setStats({ totalSales, todaySales, txCount: sales.length, weekSales });
         }
       } catch { /* silent */ }
+      finally { setLoading(false); }
     }
     loadStats();
-  }, [open, user]);
+  }, [showProfileDialog, currentUser]);
 
-  if (!user) return null;
+  if (!currentUser) return null;
 
-  const initials = user.name?.split(' ').map(n => n[0]).join('') || 'U';
+  const initials = currentUser.name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U';
+  const isAdmin = currentUser.role === 'admin';
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>My Profile</DialogTitle>
-        </DialogHeader>
-        <div className="space-y-5">
-          {/* Profile header card */}
-          <div className="flex items-center gap-4 rounded-xl bg-gradient-to-r from-emerald-500/10 to-emerald-500/5 p-4 border border-emerald-500/20">
-            <Avatar className="h-16 w-16 border-2 border-emerald-500/30 shadow-lg">
-              <AvatarFallback className="bg-emerald-500/20 text-xl font-bold text-emerald-600">
+    <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
+      <DialogContent className="sm:max-w-md p-0 overflow-hidden">
+        {/* Gradient header */}
+        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 px-6 pb-6 pt-8">
+          <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PGNpcmNsZSBjeD0iMzAiIGN5PSIzMCIgcj0iMiIvPjwvZz48L2c+PC9zdmc+')] opacity-50" />
+          <DialogHeader>
+            <DialogTitle className="text-white/90 text-sm font-medium">My Profile</DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center gap-4 mt-4">
+            <Avatar className="h-16 w-16 border-2 border-white/30 shadow-xl ring-4 ring-white/10">
+              <AvatarFallback className="bg-white/20 text-xl font-bold text-white backdrop-blur-sm">
                 {initials}
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <h3 className="text-lg font-semibold text-slate-900 truncate">{user.name}</h3>
-              <p className="text-sm text-slate-500">{user.email}</p>
+              <h3 className="text-lg font-bold text-white truncate">{currentUser.name}</h3>
+              <p className="text-sm text-white/70">{currentUser.email}</p>
               <Badge
                 variant="secondary"
                 className={cn(
-                  'mt-1.5 text-[10px] font-medium px-2 py-0.5 h-5',
-                  user.role === 'admin'
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-emerald-100 text-emerald-700'
+                  'mt-2 text-[10px] font-semibold px-2.5 py-0.5 h-5',
+                  isAdmin
+                    ? 'bg-amber-400/20 text-amber-100 border border-amber-400/30'
+                    : 'bg-white/20 text-white border border-white/20'
                 )}
               >
-                {user.role === 'admin' ? 'Administrator' : 'Sales Person'}
+                {isAdmin ? '★ Administrator' : 'Sales Associate'}
               </Badge>
             </div>
           </div>
+        </div>
 
+        {/* Content */}
+        <div className="p-6 space-y-5">
           {/* Contact details */}
-          <Card className="border-slate-200">
+          <Card className="border-slate-100 shadow-sm">
             <CardContent className="p-4 space-y-3">
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Contact Information</h4>
+              <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contact Information</h4>
               <div className="space-y-2.5">
                 <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-                    <Mail className="h-3.5 w-3.5 text-slate-500" />
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
+                    <Mail className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
-                  <span className="text-slate-700">{user.email}</span>
+                  <span className="text-slate-700">{currentUser.email}</span>
                 </div>
-                {user.phone && (
+                {currentUser.phone && (
                   <div className="flex items-center gap-3 text-sm">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-                      <Phone className="h-3.5 w-3.5 text-slate-500" />
+                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
+                      <Phone className="h-3.5 w-3.5 text-emerald-600" />
                     </div>
-                    <span className="text-slate-700">{user.phone}</span>
+                    <span className="text-slate-700">{currentUser.phone}</span>
                   </div>
                 )}
                 <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-                    <Shield className="h-3.5 w-3.5 text-slate-500" />
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
+                    <Shield className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
-                  <span className="text-slate-700">{user.active ? 'Active Account' : 'Inactive Account'}</span>
+                  <span className="text-slate-700">{currentUser.active ? 'Active Account' : 'Inactive Account'}</span>
                 </div>
                 <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100">
-                    <Clock className="h-3.5 w-3.5 text-slate-500" />
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
+                    <Calendar className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
-                  <span className="text-slate-700">Joined {new Date(user.createdAt).toLocaleDateString('en-GH', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
+                  <span className="text-slate-700">Joined {new Date(currentUser.createdAt).toLocaleDateString('en-GH', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Quick stats */}
-          {stats && (
-            <Card className="border-emerald-200 bg-emerald-50/50">
-              <CardContent className="p-4">
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-emerald-600 mb-3">Your Performance</h4>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-emerald-700">{stats.txCount}</p>
-                    <p className="text-[10px] text-emerald-600 font-medium">Total Sales</p>
+          {/* Performance stats - premium card */}
+          <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 shadow-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500">
+                  <TrendingUp className="h-3.5 w-3.5 text-white" />
+                </div>
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Your Performance</h4>
+              </div>
+              {loading ? (
+                <div className="grid grid-cols-2 gap-3">
+                  {[1, 2, 3, 4].map(i => (
+                    <div key={i} className="h-14 rounded-lg bg-white/60 animate-pulse" />
+                  ))}
+                </div>
+              ) : stats ? (
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <Star className="h-3 w-3 text-amber-500" />
+                      <span className="text-[10px] font-medium text-slate-500">Transactions</span>
+                    </div>
+                    <p className="text-lg font-bold text-slate-800">{stats.txCount}</p>
                   </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-emerald-700">{formatGHS(stats.todaySales)}</p>
-                    <p className="text-[10px] text-emerald-600 font-medium">Today</p>
+                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <TrendingUp className="h-3 w-3 text-emerald-500" />
+                      <span className="text-[10px] font-medium text-slate-500">All Time</span>
+                    </div>
+                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.totalSales)}</p>
                   </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-emerald-700">{formatGHS(stats.totalSales)}</p>
-                    <p className="text-[10px] text-emerald-600 font-medium">All Time</p>
+                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <Clock className="h-3 w-3 text-blue-500" />
+                      <span className="text-[10px] font-medium text-slate-500">This Week</span>
+                    </div>
+                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.weekSales)}</p>
+                  </div>
+                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
+                    <div className="flex items-center justify-center gap-1 mb-1">
+                      <Award className="h-3 w-3 text-emerald-500" />
+                      <span className="text-[10px] font-medium text-slate-500">Today</span>
+                    </div>
+                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.todaySales)}</p>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              ) : (
+                <p className="text-sm text-slate-500 text-center py-3">No sales data available yet.</p>
+              )}
+            </CardContent>
+          </Card>
         </div>
       </DialogContent>
     </Dialog>
@@ -156,11 +198,10 @@ function ProfileDialog({ user, open, onOpenChange }: { user: User | null; open: 
 }
 
 export function Header() {
-  const { currentUser, currentPage, sidebarOpen, setSidebarOpen, searchQuery, setSearchQuery, logout, navigate } = useAppStore();
+  const { currentUser, currentPage, sidebarOpen, setSidebarOpen, searchQuery, setSearchQuery, logout, navigate, setShowProfileDialog } = useAppStore();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [alertCount, setAlertCount] = useState(0);
-  const [profileOpen, setProfileOpen] = useState(false);
 
   const isAdmin = currentUser?.role === 'admin';
 
@@ -183,7 +224,7 @@ export function Header() {
     if (isAdmin) {
       navigate('settings');
     } else {
-      setProfileOpen(true);
+      setShowProfileDialog(true);
     }
   }
 
@@ -342,7 +383,7 @@ export function Header() {
       </header>
 
       {/* Profile dialog for non-admin users */}
-      {!isAdmin && <ProfileDialog user={currentUser} open={profileOpen} onOpenChange={setProfileOpen} />}
+      {!isAdmin && <ProfileDialog />}
     </>
   );
 }

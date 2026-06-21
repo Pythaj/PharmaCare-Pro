@@ -312,4 +312,34 @@ Stage Summary:
 - Route guard prevents sales users from accessing admin-only pages even if URL is manipulated
 - Sidebar bottom section (Reports, Users, Audit Logs, Settings + user avatar) no longer gets cut off
 - Sidebar navigation scrollable with visible scrollbar
+- Zero lint errors---
+Task ID: 10
+Agent: Main Orchestrator
+Task: Fix sales profile click — add role-based sidebar click, premium profile dialog, double role guard
+
+Work Log:
+- Added `showProfileDialog: boolean` state and `setShowProfileDialog` action to Zustand store (`app-store.ts`)
+- Enhanced `navigate()` function in store with role guard: sales users calling `navigate('settings')` (or any admin-only page) returns `{}` (no-op); admin calling `navigate('sales-dashboard')` redirects to `admin-dashboard`
+- Updated Sidebar.tsx user section: changed from non-interactive `<div>` to clickable `<button>` with `handleUserSectionClick()`
+- Added role-based logic: admin → `navigate('settings')`, sales → `setShowProfileDialog(true)`
+- Added hover effect (`hover:bg-slate-800`) and visual hint arrow text (`Settings →` / `Profile →`) when sidebar is expanded
+- Updated Header.tsx: removed local `profileOpen` state, now uses store's `showProfileDialog` for shared dialog control
+- Enhanced ProfileDialog component with premium design:
+  - Emerald gradient header with SVG dot pattern overlay
+  - Large avatar (64px) with ring effect and backdrop blur
+  - User info with star-icon badge for admin
+  - Contact info card with emerald-tinted icon backgrounds (Mail, Phone, Shield, Calendar)
+  - Performance stats card with 2x2 grid (Transactions, All Time Revenue, This Week Revenue, Today Revenue)
+  - Each stat has a themed icon (Star, TrendingUp, Clock, Award)
+  - Loading skeleton animation with pulse effect
+  - Reads `currentUser` and `showProfileDialog` directly from store (no props needed)
+- Double role guard: navigate function guard + page.tsx resolvedPage guard ensures sales can NEVER access Settings
+- Mobile sidebar also inherits the clickable user section (same `sidebarContent` used for both)
+- Zero lint errors, server compiles cleanly
+
+Stage Summary:
+- Sales person clicking profile in sidebar or header dropdown opens a premium ProfileDialog (not Settings)
+- Admin clicking profile navigates to Settings as before
+- Role protection enforced at two levels: Zustand navigate function and page.tsx route resolver
+- Premium profile dialog features: gradient header, performance stats grid, loading states, emerald theme
 - Zero lint errors
