@@ -42,6 +42,223 @@ export default function ReportsView() {
   const [topProducts, setTopProducts] = useState<{ name: string; quantity: number; revenue: number }[]>([]);
   const [loading, setLoading] = useState(true);
 
+  const periods: { label: string; value: Period }[] = [
+    { label: 'Today', value: 'today' },
+    { label: 'This Week', value: 'this_week' },
+    { label: 'This Month', value: 'this_month' },
+    { label: 'This Year', value: 'this_year' },
+  ];
+
+  const periodLabel = periods.find((p) => p.value === period)?.label ?? period;
+
+  const downloadFile = (content: string, filename: string, mimeType: string) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const buildReportText = (): string => {
+    const s = stats ?? { totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0 };
+    const lines: string[] = [];
+
+    // Summary section
+    lines.push('Pharmacy Sales Report');
+    lines.push(`Period: ${periodLabel}`);
+    lines.push(`Generated: ${new Date().toLocaleString()}`);
+    lines.push('');
+    lines.push('--- Summary ---');
+    lines.push(`Total Revenue,${s.totalRevenue.toFixed(2)}`);
+    lines.push(`Total Profit,${s.totalProfit.toFixed(2)}`);
+    lines.push(`Total Sales,${s.totalSales}`);
+    lines.push(`Total Items Sold,${s.totalItemsSold}`);
+    lines.push('');
+
+    // Revenue data section
+    if (revenueData.length > 0) {
+      lines.push('--- Revenue by Period ---');
+      lines.push('Period,Revenue');
+      for (const d of revenueData) {
+        lines.push(`${d.name},${d.value.toFixed(2)}`);
+      }
+      lines.push('');
+    }
+
+    // Payment data section
+    if (paymentData.length > 0) {
+      lines.push('--- Sales by Payment Method ---');
+      lines.push('Payment Method,Amount');
+      for (const d of paymentData) {
+        lines.push(`${d.name},${d.value.toFixed(2)}`);
+      }
+      lines.push('');
+    }
+
+    // Top products section
+    if (topProducts.length > 0) {
+      lines.push('--- Top Selling Products ---');
+      lines.push('Rank,Product Name,Quantity Sold,Revenue');
+      topProducts.forEach((p, i) => {
+        lines.push(`${i + 1},"${p.name.replace(/"/g, '""')}",${p.quantity},${p.revenue.toFixed(2)}`);
+      });
+    }
+
+    return lines.join('\n');
+  };
+
+  const handleExportCSV = () => {
+    const content = buildReportText();
+    downloadFile(content, `pharmacy-report-${period}-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;');
+  };
+
+  const handleExportExcel = () => {
+    // Use TSV format which Excel opens natively
+    const s = stats ?? { totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0 };
+    const lines: string[] = [];
+
+    lines.push('Pharmacy Sales Report');
+    lines.push(`Period:\t${periodLabel}`);
+    lines.push(`Generated:\t${new Date().toLocaleString()}`);
+    lines.push('');
+    lines.push('Summary');
+    lines.push('Total Revenue\tTotal Profit\tTotal Sales\tTotal Items Sold');
+    lines.push(`${s.totalRevenue.toFixed(2)}\t${s.totalProfit.toFixed(2)}\t${s.totalSales}\t${s.totalItemsSold}`);
+    lines.push('');
+
+    if (revenueData.length > 0) {
+      lines.push('Revenue by Period');
+      lines.push('Period\tRevenue');
+      for (const d of revenueData) {
+        lines.push(`${d.name}\t${d.value.toFixed(2)}`);
+      }
+      lines.push('');
+    }
+
+    if (paymentData.length > 0) {
+      lines.push('Sales by Payment Method');
+      lines.push('Payment Method\tAmount');
+      for (const d of paymentData) {
+        lines.push(`${d.name}\t${d.value.toFixed(2)}`);
+      }
+      lines.push('');
+    }
+
+    if (topProducts.length > 0) {
+      lines.push('Top Selling Products');
+      lines.push('Rank\tProduct Name\tQuantity Sold\tRevenue');
+      topProducts.forEach((p, i) => {
+        lines.push(`${i + 1}\t${p.name}\t${p.quantity}\t${p.revenue.toFixed(2)}`);
+      });
+    }
+
+    const content = lines.join('\n');
+    downloadFile(content, `pharmacy-report-${period}-${new Date().toISOString().slice(0, 10)}.xls`, 'application/vnd.ms-excel');
+  };
+
+  const handleExportPDF = () => {
+    const s = stats ?? { totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0 };
+
+    const revenueRows = revenueData
+      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+      .join('');
+
+    const paymentRows = paymentData
+      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+      .join('');
+
+    const productRows = topProducts
+      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${formatGHS(p.revenue)}</td></tr>`)
+      .join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pharmacy Report - ${periodLabel}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1f2937; padding: 40px; max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 24px; color: #047857; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #6b7280; margin-bottom: 24px; }
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; margin-bottom: 32px; }
+  .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; text-align: center; }
+  .stat-card .label { font-size: 12px; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card .value { font-size: 20px; font-weight: 700; color: #111827; }
+  .stat-card.profit .value { color: #047857; }
+  h2 { font-size: 16px; color: #111827; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #10b981; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 13px; }
+  th { background: #f0fdf4; color: #047857; text-align: left; padding: 8px 12px; font-weight: 600; border-bottom: 2px solid #d1fae5; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f3f4f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:nth-child(even) td { background: #f9fafb; }
+  .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af; }
+  @media print { body { padding: 20px; } .no-print { display: none; } }
+</style>
+</head>
+<body>
+  <h1>Pharmacy Sales Report</h1>
+  <p class="subtitle">Period: ${periodLabel} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</p>
+
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="label">Total Revenue</div>
+      <div class="value">${formatGHS(s.totalRevenue)}</div>
+    </div>
+    <div class="stat-card profit">
+      <div class="label">Total Profit</div>
+      <div class="value">${formatGHS(s.totalProfit)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Total Sales</div>
+      <div class="value">${s.totalSales.toLocaleString()}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Items Sold</div>
+      <div class="value">${s.totalItemsSold.toLocaleString()}</div>
+    </div>
+  </div>
+
+  ${revenueData.length > 0 ? `
+  <h2>Revenue Trend</h2>
+  <table>
+    <thead><tr><th>Period</th><th class="num">Revenue</th></tr></thead>
+    <tbody>${revenueRows}</tbody>
+  </table>` : ''}
+
+  ${paymentData.length > 0 ? `
+  <h2>Sales by Payment Method</h2>
+  <table>
+    <thead><tr><th>Payment Method</th><th class="num">Amount</th></tr></thead>
+    <tbody>${paymentRows}</tbody>
+  </table>` : ''}
+
+  ${topProducts.length > 0 ? `
+  <h2>Top Selling Products</h2>
+  <table>
+    <thead><tr><th>#</th><th>Product Name</th><th class="num">Qty Sold</th><th class="num">Revenue</th></tr></thead>
+    <tbody>${productRows}</tbody>
+  </table>` : ''}
+
+  <div class="footer">Pharmacy Management System &mdash; Auto-generated report</div>
+
+  <div class="no-print" style="margin-top:20px;text-align:center;">
+    <button onclick="window.print()" style="padding:10px 24px;background:#047857;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+  </div>
+</body>
+</html>`;
+
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write(html);
+      win.document.close();
+    }
+  };
+
   const fetchReport = async (p: Period) => {
     setLoading(true);
     try {
@@ -76,13 +293,6 @@ export default function ReportsView() {
     return () => { cancelled = true; };
   }, [period]);
 
-  const periods: { label: string; value: Period }[] = [
-    { label: 'Today', value: 'today' },
-    { label: 'This Week', value: 'this_week' },
-    { label: 'This Month', value: 'this_month' },
-    { label: 'This Year', value: 'this_year' },
-  ];
-
   const revenueConfig = { revenue: { label: 'Revenue', color: '#10b981' } };
   const pieConfig = { value: { label: 'Amount' } };
 
@@ -104,13 +314,13 @@ export default function ReportsView() {
           ))}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleExportPDF} disabled={loading}>
             <Download className="h-4 w-4 mr-1" /> PDF
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleExportExcel} disabled={loading}>
             <BarChart3 className="h-4 w-4 mr-1" /> Excel
           </Button>
-          <Button variant="outline" size="sm">
+          <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={loading}>
             <Download className="h-4 w-4 mr-1" /> CSV
           </Button>
         </div>

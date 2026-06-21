@@ -95,6 +95,45 @@ interface AllSettings {
   notifications: NotificationSettings;
 }
 
+// ─── Helpers: flatten / unflatten settings for API ─────────────
+
+function flattenSettings(s: AllSettings): Record<string, string> {
+  const result: Record<string, string> = {};
+  const walk = (obj: Record<string, unknown>, prefix: string) => {
+    for (const [k, v] of Object.entries(obj)) {
+      const key = prefix ? `${prefix}.${k}` : k;
+      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+        walk(v as Record<string, unknown>, key);
+      } else {
+        result[key] = String(v);
+      }
+    }
+  };
+  walk(s as unknown as Record<string, unknown>, '');
+  return result;
+}
+
+function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
+  const result: Record<string, unknown> = {};
+  for (const [compoundKey, value] of Object.entries(flat)) {
+    const parts = compoundKey.split('.');
+    let current: Record<string, unknown> = result;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!current[parts[i]] || typeof current[parts[i]] !== 'object') {
+        current[parts[i]] = {};
+      }
+      current = current[parts[i]] as Record<string, unknown>;
+    }
+    // Parse numbers and booleans
+    let parsed: string | number | boolean = value;
+    if (value === 'true') parsed = true;
+    else if (value === 'false') parsed = false;
+    else if (value !== '' && !isNaN(Number(value))) parsed = Number(value);
+    current[parts[parts.length - 1]] = parsed;
+  }
+  return result as unknown as Partial<AllSettings>;
+}
+
 // ─── Defaults ────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'pharmacy_settings';
@@ -142,21 +181,49 @@ export default function SettingsView() {
   const [clearing, setClearing] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  // Load settings from localStorage on mount
+  // Load settings from API first, then fall back to localStorage
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed: AllSettings = JSON.parse(raw);
-        if (parsed.pharmacy) setPharmacy({ ...defaults.pharmacy, ...parsed.pharmacy });
-        if (parsed.receipt) setReceipt({ ...defaults.receipt, ...parsed.receipt });
-        if (parsed.display) setDisplay({ ...defaults.display, ...parsed.display });
-        if (parsed.pos) setPos({ ...defaults.pos, ...parsed.pos });
-        if (parsed.notifications) setNotifications({ ...defaults.notifications, ...parsed.notifications });
+    const applySettings = (s: Partial<AllSettings>) => {
+      if (s.pharmacy) setPharmacy({ ...defaults.pharmacy, ...s.pharmacy });
+      if (s.receipt) setReceipt({ ...defaults.receipt, ...s.receipt });
+      if (s.display) setDisplay({ ...defaults.display, ...s.display });
+      if (s.pos) setPos({ ...defaults.pos, ...s.pos });
+      if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
+    };
+
+    (async () => {
+      try {
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          const { settings } = await res.json();
+          if (settings && Object.keys(settings).length > 0) {
+            const unflat = unflattenSettings(settings);
+            applySettings(unflat);
+            // Cache in localStorage
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+              pharmacy: { ...defaults.pharmacy, ...unflat.pharmacy },
+              receipt: { ...defaults.receipt, ...unflat.receipt },
+              display: { ...defaults.display, ...unflat.display },
+              pos: { ...defaults.pos, ...unflat.pos },
+              notifications: { ...defaults.notifications, ...unflat.notifications },
+            }));
+            return;
+          }
+        }
+      } catch {
+        // API unavailable — fall through to localStorage
       }
-    } catch {
-      // silent — use defaults
-    }
+      // Fallback: load from localStorage
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed: AllSettings = JSON.parse(raw);
+          applySettings(parsed);
+        }
+      } catch {
+        // silent — use defaults
+      }
+    })();
   }, []);
 
   // Gather all settings into one object
@@ -164,16 +231,35 @@ export default function SettingsView() {
     return { pharmacy, receipt, display, pos, notifications };
   }, [pharmacy, receipt, display, pos, notifications]);
 
-  // Save all settings at once
+  // Save all settings at once (API first, localStorage as backup)
   const handleSave = async () => {
     setSaving(true);
+    const current = gatherSettings();
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(gatherSettings()));
-      setSaved(true);
-      toast.success('Settings saved successfully');
-      setTimeout(() => setSaved(false), 2000);
+      // Try to persist via API
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: flattenSettings(current) }),
+      });
+      if (res.ok) {
+        // API success — also cache to localStorage
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        setSaved(true);
+        toast.success('Settings saved successfully');
+        setTimeout(() => setSaved(false), 2000);
+        return;
+      }
+      // API returned non-OK
+      throw new Error(`API returned ${res.status}`);
     } catch {
-      toast.error('Failed to save settings');
+      // API failed — fall back to localStorage only
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        toast.warning('Settings saved locally (backend unavailable)');
+      } catch {
+        toast.error('Failed to save settings');
+      }
     } finally {
       setSaving(false);
     }

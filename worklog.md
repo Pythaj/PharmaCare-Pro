@@ -98,3 +98,101 @@ Stage Summary:
 - 4 new API route files created, all with proper error handling and logging
 - 1 data mapping bug fixed in SalesDashboard component
 - Zero lint errors after all changes
+
+---
+Task ID: 3
+Agent: Reports Export Agent
+Task: Make Reports export buttons functional
+
+Work Log:
+- Read current ReportsView.tsx — three placeholder buttons (PDF, Excel, CSV) with no onClick handlers
+- Confirmed `xlsx` and `jspdf` are NOT in package.json — no external dependencies needed
+- Added helper `downloadFile()` function using Blob + URL.createObjectURL for file downloads
+- Added helper `buildReportText()` to generate CSV content from stats, revenueData, paymentData, and topProducts
+- Implemented `handleExportCSV`: generates proper CSV with header sections (Summary, Revenue by Period, Payment Methods, Top Products), product names properly escaped for CSV, triggers browser download with `.csv` extension
+- Implemented `handleExportExcel`: generates TSV (tab-separated) format saved as `.xls`, which Excel opens natively — includes summary grid, revenue trend, payment breakdown, and top products table
+- Implemented `handleExportPDF`: opens a new browser window with a professionally styled HTML report featuring emerald/pharmacy-themed CSS, stat cards grid, data tables with alternating row colors, and a "Print / Save as PDF" button that hides on print via `@media print`
+- Moved `periods` array above `periodLabel` to fix temporal dead zone reference issue
+- Added `disabled={loading}` to all three export buttons to prevent exporting empty data
+- Wired up onClick={handleExportPDF}, onClick={handleExportExcel}, onClick={handleExportCSV} to respective buttons
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- All three export buttons (PDF, Excel, CSV) are now fully functional
+- CSV: proper RFC-compliant CSV with quoted fields, downloadable with period + date in filename
+- Excel: TSV format with .xls extension, opens correctly in Excel/LibreOffice
+- PDF: clean print-friendly HTML in new window with emerald theme, auto-print button
+- No new dependencies required
+- Zero lint errors
+
+---
+Task ID: 4
+Agent: Dashboard Navigation Agent
+Task: Add cross-view navigation to Admin Dashboard
+
+Work Log:
+- Read AdminDashboard.tsx and app-store.ts to understand current structure and Page type
+- Added imports: `Button` from ui/button, `toast` from sonner, `useAppStore` from stores/app-store
+- Added `const navigate = useAppStore((s) => s.navigate)` hook in AdminDashboard component
+- Made 3 overview cards clickable: "Products In Stock" → products, "Low Stock Alerts" → inventory, "Expiry Alerts" → inventory; added `navTo` property to card definitions with conditional `cursor-pointer` class and `onClick` handler
+- Made Recent Sales table rows clickable: added `cursor-pointer hover:bg-muted/50` className, `onClick` navigates to `'sales-history'` with toast "Viewing sale details for {invoiceNo}", used `e.stopPropagation()`
+- Made Recent Purchases table rows clickable: added `cursor-pointer hover:bg-muted/50` className, `onClick` navigates to `'purchases'` with toast "Viewing purchase details for {invoiceNo}", used `e.stopPropagation()`
+- Made Stock Alert items clickable: added `cursor-pointer hover:bg-muted/50` to div className, `onClick` navigates to `'inventory'` with toast "Viewing inventory for {productName}"
+- Added "View All" button to User Activity card header that navigates to `'audit-logs'` page
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- All 5 navigation requirements implemented: stock alerts, recent sales, recent purchases, overview cards, and audit logs "View All"
+- Clicking items navigates to their respective views with descriptive toast feedback
+- Subtle hover effects (`cursor-pointer hover:bg-muted/50`) on clickable rows and items
+- No data fetching logic or chart rendering was modified
+- Zero lint errors
+
+---
+Task ID: 5-and-6
+Agent: Header Agent
+Task: Make Header search and Profile menu functional
+
+Work Log:
+- Added `toast` import from `sonner` and `type KeyboardEvent` import from `react`
+- Created `handleSearchAction()` helper: if search query is non-empty, navigates to `'pos'` and shows "Searching products..." toast; if empty, navigates to `'products'`
+- Created `handleSearchKeyDown(e)` handler that calls `handleSearchAction()` on Enter key
+- Added `onKeyDown={handleSearchKeyDown}` to the search Input element
+- Made the search icon (`Search` lucide icon) clickable with `onClick={handleSearchAction}` and added `cursor-pointer` class
+- Added `onClick={() => navigate('settings')}` to the Profile DropdownMenuItem
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- Header search bar now navigates to POS page (with query) or Products page (empty) on Enter key press or search icon click
+- Profile dropdown menu item now navigates to the Settings page
+- All existing functionality (notifications, clock, logout, mobile menu toggle) preserved unchanged
+- Zero lint errors
+
+---
+Task ID: 7
+Agent: Settings Backend Agent
+Task: Add Settings API route and backend persistence
+
+Work Log:
+- Added `SystemSetting` model to `prisma/schema.prisma` with `id`, `key` (unique), `value`, `createdAt`, `updatedAt` fields; mapped to `system_settings` table
+- Ran `bun run db:push` — schema synced to SQLite, Prisma Client regenerated
+- Created `/src/app/api/settings/route.ts` with GET and PUT handlers:
+  - GET: fetches all rows from `system_settings` table, returns as `{ settings: Record<string, string> }`
+  - PUT: accepts `{ settings: Record<string, string> }`, upserts each key-value pair using `db.systemSetting.upsert()`
+  - Both handlers have proper error handling and console logging
+- Updated `/src/components/admin/SettingsView.tsx`:
+  - Added `flattenSettings()` helper: converts nested `AllSettings` object to flat dot-notation key-value pairs (e.g., `pharmacy.name`, `pos.autoPrintReceipt`)
+  - Added `unflattenSettings()` helper: converts flat key-value pairs back to nested object with proper type parsing (string/number/boolean)
+  - Updated `useEffect` on mount: fetches from `/api/settings` first; if API returns settings, applies them and caches to localStorage; if API fails or returns empty, falls back to localStorage; if neither has data, defaults are used
+  - Updated `handleSave`: tries PUT to `/api/settings` first; if API succeeds, also caches to localStorage and shows success toast; if API fails, falls back to localStorage only and shows warning toast via `toast.warning()`
+  - `handleExportData` and `handleClearSales` left unchanged as specified
+  - Removed unused `Prisma` import from API route
+- Ran `bun run lint` — zero errors
+
+Stage Summary:
+- Settings now persist to SQLite database via `/api/settings` API endpoint
+- localStorage serves as cache/backup when API is unavailable
+- On load: API → localStorage → defaults (graceful degradation)
+- On save: API + localStorage cache, with warning toast on API failure
+- New `SystemSetting` Prisma model with upsert for each key-value pair
+- Zero lint errors

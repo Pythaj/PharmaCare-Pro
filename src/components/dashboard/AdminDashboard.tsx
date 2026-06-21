@@ -28,6 +28,9 @@ import {
 } from '@/components/ui/table';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart.tsx';
 import { BarChart, Bar, AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
+import { Button } from '@/components/ui/button';
+import { toast } from 'sonner';
+import { useAppStore } from '@/stores/app-store';
 import type { DashboardStats, ChartDataPoint } from '@/types';
 
 function formatGHS(value: number): string {
@@ -71,6 +74,7 @@ interface AuditLogEntry {
 }
 
 export default function AdminDashboard() {
+  const navigate = useAppStore((s) => s.navigate);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<{
     dailySales: ChartDataPoint[];
@@ -149,9 +153,9 @@ export default function AdminDashboard() {
     { label: 'Total Revenue', value: stats?.totalRevenue ?? 0, icon: Wallet, bg: 'bg-emerald-500', change: 15.7 },
     { label: 'Total Profit', value: stats?.totalProfit ?? 0, icon: PiggyBank, bg: 'bg-teal-500', change: 9.2 },
     { label: 'Inventory Value', value: stats?.totalInventoryValue ?? 0, icon: Package, bg: 'bg-green-500', change: 3.4 },
-    { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', change: 1.2, isCount: true },
-    { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', change: -5.0, isCount: true, invertChange: true },
-    { label: 'Expiry Alerts', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-red-500', change: 10.0, isCount: true, invertChange: true },
+    { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', change: 1.2, isCount: true, navTo: 'products' as const },
+    { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', change: -5.0, isCount: true, invertChange: true, navTo: 'inventory' as const },
+    { label: 'Expiry Alerts', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-red-500', change: 10.0, isCount: true, invertChange: true, navTo: 'inventory' as const },
   ];
 
   const dailySalesConfig = { sales: { label: 'Sales', color: '#10b981' } };
@@ -201,7 +205,11 @@ export default function AdminDashboard() {
           const displayValue = card.isCount ? card.value.toLocaleString() : formatGHS(card.value);
           const isPositive = card.invertChange ? card.change < 0 : card.change > 0;
           return (
-            <Card key={card.label} className="hover:shadow-md transition-shadow">
+            <Card
+              key={card.label}
+              className={`hover:shadow-md transition-shadow ${card.navTo ? 'cursor-pointer' : ''}`}
+              {...(card.navTo ? { onClick: () => { navigate(card.navTo!); toast.success(`Navigating to ${card.label}`); } } : {})}
+            >
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-muted-foreground">{card.label}</p>
@@ -332,7 +340,11 @@ export default function AdminDashboard() {
                 <TableBody>
                   {recentData?.recentSales && recentData.recentSales.length > 0 ? (
                     recentData.recentSales.map((sale) => (
-                      <TableRow key={sale.id}>
+                      <TableRow
+                        key={sale.id}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={(e) => { e.stopPropagation(); navigate('sales-history'); toast.success(`Viewing sale details for ${sale.invoiceNo}`); }}
+                      >
                         <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
                         <TableCell>{sale.customerName ?? 'Walk-in'}</TableCell>
                         <TableCell className="text-right">{formatGHS(sale.totalAmount)}</TableCell>
@@ -377,7 +389,11 @@ export default function AdminDashboard() {
                 <TableBody>
                   {recentData?.recentPurchases && recentData.recentPurchases.length > 0 ? (
                     recentData.recentPurchases.map((purchase) => (
-                      <TableRow key={purchase.id}>
+                      <TableRow
+                        key={purchase.id}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={(e) => { e.stopPropagation(); navigate('purchases'); toast.success(`Viewing purchase details for ${purchase.invoiceNo}`); }}
+                      >
                         <TableCell className="font-mono text-xs">{purchase.invoiceNo}</TableCell>
                         <TableCell>{purchase.supplierName ?? '-'}</TableCell>
                         <TableCell className="text-right">{formatGHS(purchase.totalAmount)}</TableCell>
@@ -408,7 +424,11 @@ export default function AdminDashboard() {
             <div className="max-h-[500px] overflow-y-auto space-y-2">
               {recentData?.stockAlerts && recentData.stockAlerts.length > 0 ? (
                 recentData.stockAlerts.map((alert) => (
-                  <div key={alert.productId} className="flex items-center justify-between p-3 rounded-lg border">
+                  <div
+                    key={alert.productId}
+                    className="flex items-center justify-between p-3 rounded-lg border cursor-pointer hover:bg-muted/50"
+                    onClick={() => { navigate('inventory'); toast.success(`Viewing inventory for ${alert.productName}`); }}
+                  >
                     <div>
                       <p className="font-medium text-sm">{alert.productName}</p>
                       <p className="text-xs text-muted-foreground">
@@ -432,8 +452,11 @@ export default function AdminDashboard() {
 
         {/* User Activity */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-base">User Activity</CardTitle>
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => navigate('audit-logs')}>
+              View All
+            </Button>
           </CardHeader>
           <CardContent>
             <div className="max-h-[500px] overflow-y-auto">

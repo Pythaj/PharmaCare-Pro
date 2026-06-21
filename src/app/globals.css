@@ -152,3 +152,48 @@
 [data-slot="sidebar"] ::-webkit-scrollbar-thumb:hover {
   background: #64748b;
 }
+
+/* Premium smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Smooth scroll for all scroll containers */
+.overflow-y-auto,
+.overflow-x-auto,
+.overflow-auto {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Fade-in animation for page transitions */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Subtle hover lift for cards */
+.card-hover-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.card-hover-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}
+
+/* Active nav item pulse */
+@keyframes subtle-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}

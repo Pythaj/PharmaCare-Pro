@@ -73,12 +73,12 @@ export default function Home() {
 
   // App layout
   return (
-    <div className="min-h-screen bg-slate-50/80">
-      <div className="flex">
+    <div className="h-screen overflow-hidden bg-slate-50/80">
+      <div className="flex h-full">
         <Sidebar />
-        <div className="flex flex-1 flex-col min-h-screen">
+        <div className="flex flex-1 flex-col min-w-0">
           <Header />
-          <main className="flex-1 overflow-y-auto">
+          <main className="flex-1 overflow-y-auto scroll-smooth">
             <Suspense fallback={<PageLoader />}>
               {ActivePage && <ActivePage key={currentPage} />}
             </Suspense>

@@ -17,10 +17,26 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Separator } from '@/components/ui/separator';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
+import { toast } from 'sonner';
 
 export function Header() {
   const { currentUser, currentPage, sidebarOpen, setSidebarOpen, searchQuery, setSearchQuery, logout, navigate } = useAppStore();
+
+  function handleSearchAction() {
+    if (searchQuery.trim()) {
+      navigate('pos');
+      toast('Searching products...');
+    } else {
+      navigate('products');
+    }
+  }
+
+  function handleSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') {
+      handleSearchAction();
+    }
+  }
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [alertCount, setAlertCount] = useState(0);
@@ -92,11 +108,12 @@ export function Header() {
       {/* Search */}
       <div className="hidden w-full max-w-sm items-center gap-2 md:flex">
         <div className="relative w-full">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 cursor-pointer" onClick={handleSearchAction} />
           <Input
             placeholder="Search products..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
             className="h-9 w-full pl-9 border-slate-200 bg-slate-50/50 text-sm placeholder:text-slate-400 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
           />
         </div>
@@ -158,7 +175,10 @@ export function Header() {
             </div>
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
-          <DropdownMenuItem className="text-slate-600 focus:text-slate-900 focus:bg-slate-50 cursor-pointer">
+          <DropdownMenuItem
+            onClick={() => navigate('settings')}
+            className="text-slate-600 focus:text-slate-900 focus:bg-slate-50 cursor-pointer"
+          >
             <UserIcon className="mr-2 h-4 w-4" />
             Profile
           </DropdownMenuItem>
