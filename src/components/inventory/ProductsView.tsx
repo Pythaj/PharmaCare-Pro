@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { Plus, Search, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -209,8 +209,8 @@ export default function ProductsView() {
                     const status = getStockStatus(product.totalStock, product.reorderLevel);
                     const isExpanded = expandedRow === product.id;
                     return (
-                      <>
-                        <TableRow key={product.id} className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(product.id)}>
+                      <Fragment key={product.id}>
+                        <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(product.id)}>
                           <TableCell>
                             {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           </TableCell>
@@ -287,7 +287,7 @@ export default function ProductsView() {
                             </TableCell>
                           </TableRow>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })
                 ) : (

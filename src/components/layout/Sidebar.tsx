@@ -320,11 +320,11 @@ export function Sidebar() {
         )}
       </AnimatePresence>
 
-      {/* Desktop sidebar */}
+      {/* Desktop sidebar - fixed position */}
       <motion.aside
         animate={{ width: sidebarOpen ? 260 : 68 }}
         transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="hidden h-full shrink-0 z-40 lg:block"
+        className="hidden lg:block fixed inset-y-0 left-0 z-40"
       >
         <div className="h-full bg-slate-950 border-r border-slate-800/50">
           {sidebarContent}

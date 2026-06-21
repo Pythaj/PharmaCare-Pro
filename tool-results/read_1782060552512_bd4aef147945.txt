@@ -1,0 +1,924 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import { useState, useEffect, useCallback } from 'react';
+     4→     4→import {
+     5→     5→  Save,
+     6→     6→  Building2,
+     7→     7→  Phone,
+     8→     8→  Mail,
+     9→     9→  MapPin,
+    10→    10→  Percent,
+    11→    11→  Receipt,
+    12→    12→  Monitor,
+    13→    13→  ShoppingCart,
+    14→    14→  Bell,
+    15→    15→  Database,
+    16→    16→  Info,
+    17→    17→  Download,
+    18→    18→  Trash2,
+    19→    19→  ImageIcon,
+    20→    20→  Loader2,
+    21→    21→  CheckCircle2,
+    22→    22→  ShieldCheck,
+    23→    23→  Calendar,
+    24→    24→  Clock,
+    25→    25→  DollarSign,
+    26→    26→  FileText,
+    27→    27→  ToggleLeft,
+    28→    28→} from 'lucide-react';
+    29→    29→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+    30→    30→import { Button } from '@/components/ui/button';
+    31→    31→import { Input } from '@/components/ui/input';
+    32→    32→import { Label } from '@/components/ui/label';
+    33→    33→import { Textarea } from '@/components/ui/textarea';
+    34→    34→import { Separator } from '@/components/ui/separator';
+    35→    35→import { Switch } from '@/components/ui/switch';
+    36→    36→import {
+    37→    37→  Select,
+    38→    38→  SelectContent,
+    39→    39→  SelectItem,
+    40→    40→  SelectTrigger,
+    41→    41→  SelectValue,
+    42→    42→} from '@/components/ui/select';
+    43→    43→import {
+    44→    44→  AlertDialog,
+    45→    45→  AlertDialogAction,
+    46→    46→  AlertDialogCancel,
+    47→    47→  AlertDialogContent,
+    48→    48→  AlertDialogDescription,
+    49→    49→  AlertDialogFooter,
+    50→    50→  AlertDialogHeader,
+    51→    51→  AlertDialogTitle,
+    52→    52→  AlertDialogTrigger,
+    53→    53→} from '@/components/ui/alert-dialog';
+    54→    54→import { toast } from 'sonner';
+    55→    55→
+    56→    56→// ─── Types ───────────────────────────────────────────────────────
+    57→    57→
+    58→    58→interface PharmacyInfo {
+    59→    59→  name: string;
+    60→    60→  address: string;
+    61→    61→  phone: string;
+    62→    62→  email: string;
+    63→    63→  taxRate: number;
+    64→    64→}
+    65→    65→
+    66→    66→interface ReceiptSettings {
+    67→    67→  headerText: string;
+    68→    68→  footerText: string;
+    69→    69→  width: string;
+    70→    70→}
+    71→    71→
+    72→    72→interface DisplaySettings {
+    73→    73→  currency: string;
+    74→    74→  dateFormat: string;
+    75→    75→  timeFormat: string;
+    76→    76→}
+    77→    77→
+    78→    78→interface POSSettings {
+    79→    79→  defaultPaymentMethod: string;
+    80→    80→  autoPrintReceipt: boolean;
+    81→    81→  defaultDiscount: number;
+    82→    82→}
+    83→    83→
+    84→    84→interface NotificationSettings {
+    85→    85→  lowStockThreshold: number;
+    86→    86→  expiryAlertDays: number;
+    87→    87→  enableNotifications: boolean;
+    88→    88→}
+    89→    89→
+    90→    90→interface AllSettings {
+    91→    91→  pharmacy: PharmacyInfo;
+    92→    92→  receipt: ReceiptSettings;
+    93→    93→  display: DisplaySettings;
+    94→    94→  pos: POSSettings;
+    95→    95→  notifications: NotificationSettings;
+    96→    96→}
+    97→    97→
+    98→    98→// ─── Helpers: flatten / unflatten settings for API ─────────────
+    99→    99→
+   100→   100→function flattenSettings(s: AllSettings): Record<string, string> {
+   101→   101→  const result: Record<string, string> = {};
+   102→   102→  const walk = (obj: Record<string, unknown>, prefix: string) => {
+   103→   103→    for (const [k, v] of Object.entries(obj)) {
+   104→   104→      const key = prefix ? `${prefix}.${k}` : k;
+   105→   105→      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+   106→   106→        walk(v as Record<string, unknown>, key);
+   107→   107→      } else {
+   108→   108→        result[key] = String(v);
+   109→   109→      }
+   110→   110→    }
+   111→   111→  };
+   112→   112→  walk(s as unknown as Record<string, unknown>, '');
+   113→   113→  return result;
+   114→   114→}
+   115→   115→
+   116→   116→function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
+   117→   117→  const result: Record<string, unknown> = {};
+   118→   118→  for (const [compoundKey, value] of Object.entries(flat)) {
+   119→   119→    const parts = compoundKey.split('.');
+   120→   120→    let current: Record<string, unknown> = result;
+   121→   121→    for (let i = 0; i < parts.length - 1; i++) {
+   122→   122→      if (!current[parts[i]] || typeof current[parts[i]] !== 'object') {
+   123→   123→        current[parts[i]] = {};
+   124→   124→      }
+   125→   125→      current = current[parts[i]] as Record<string, unknown>;
+   126→   126→    }
+   127→   127→    // Parse numbers and booleans
+   128→   128→    let parsed: string | number | boolean = value;
+   129→   129→    if (value === 'true') parsed = true;
+   130→   130→    else if (value === 'false') parsed = false;
+   131→   131→    else if (value !== '' && !isNaN(Number(value))) parsed = Number(value);
+   132→   132→    current[parts[parts.length - 1]] = parsed;
+   133→   133→  }
+   134→   134→  return result as unknown as Partial<AllSettings>;
+   135→   135→}
+   136→   136→
+   137→   137→// ─── Defaults ────────────────────────────────────────────────────
+   138→   138→
+   139→   139→const STORAGE_KEY = 'pharmacy_settings';
+   140→   140→
+   141→   141→const defaults: AllSettings = {
+   142→   142→  pharmacy: {
+   143→   143→    name: 'GreenLife Pharmacy',
+   144→   144→    address: '123 Health Street, Accra, Ghana',
+   145→   145→    phone: '+233 30 123 4567',
+   146→   146→    email: 'info@greenlifepharmacy.com',
+   147→   147→    taxRate: 12.5,
+   148→   148→  },
+   149→   149→  receipt: {
+   150→   150→    headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
+   151→   151→    footerText: 'Thank you for your purchase!',
+   152→   152→    width: '80mm',
+   153→   153→  },
+   154→   154→  display: {
+   155→   155→    currency: 'GHS',
+   156→   156→    dateFormat: 'dd/MM/yyyy',
+   157→   157→    timeFormat: 'HH:mm',
+   158→   158→  },
+   159→   159→  pos: {
+   160→   160→    defaultPaymentMethod: 'cash',
+   161→   161→    autoPrintReceipt: true,
+   162→   162→    defaultDiscount: 0,
+   163→   163→  },
+   164→   164→  notifications: {
+   165→   165→    lowStockThreshold: 10,
+   166→   166→    expiryAlertDays: 30,
+   167→   167→    enableNotifications: true,
+   168→   168→  },
+   169→   169→};
+   170→   170→
+   171→   171→// ─── Component ───────────────────────────────────────────────────
+   172→   172→
+   173→   173→export default function SettingsView() {
+   174→   174→  const [pharmacy, setPharmacy] = useState<PharmacyInfo>(defaults.pharmacy);
+   175→   175→  const [receipt, setReceipt] = useState<ReceiptSettings>(defaults.receipt);
+   176→   176→  const [display, setDisplay] = useState<DisplaySettings>(defaults.display);
+   177→   177→  const [pos, setPos] = useState<POSSettings>(defaults.pos);
+   178→   178→  const [notifications, setNotifications] = useState<NotificationSettings>(defaults.notifications);
+   179→   179→  const [saving, setSaving] = useState(false);
+   180→   180→  const [exporting, setExporting] = useState(false);
+   181→   181→  const [clearing, setClearing] = useState(false);
+   182→   182→  const [saved, setSaved] = useState(false);
+   183→   183→
+   184→   184→  // Load settings from API first, then fall back to localStorage
+   185→   185→  useEffect(() => {
+   186→   186→    const applySettings = (s: Partial<AllSettings>) => {
+   187→   187→      if (s.pharmacy) setPharmacy({ ...defaults.pharmacy, ...s.pharmacy });
+   188→   188→      if (s.receipt) setReceipt({ ...defaults.receipt, ...s.receipt });
+   189→   189→      if (s.display) setDisplay({ ...defaults.display, ...s.display });
+   190→   190→      if (s.pos) setPos({ ...defaults.pos, ...s.pos });
+   191→   191→      if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
+   192→   192→    };
+   193→   193→
+   194→   194→    (async () => {
+   195→   195→      try {
+   196→   196→        const res = await fetch('/api/settings');
+   197→   197→        if (res.ok) {
+   198→   198→          const { settings } = await res.json();
+   199→   199→          if (settings && Object.keys(settings).length > 0) {
+   200→   200→            const unflat = unflattenSettings(settings);
+   201→   201→            applySettings(unflat);
+   202→   202→            // Cache in localStorage
+   203→   203→            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+   204→   204→              pharmacy: { ...defaults.pharmacy, ...unflat.pharmacy },
+   205→   205→              receipt: { ...defaults.receipt, ...unflat.receipt },
+   206→   206→              display: { ...defaults.display, ...unflat.display },
+   207→   207→              pos: { ...defaults.pos, ...unflat.pos },
+   208→   208→              notifications: { ...defaults.notifications, ...unflat.notifications },
+   209→   209→            }));
+   210→   210→            return;
+   211→   211→          }
+   212→   212→        }
+   213→   213→      } catch {
+   214→   214→        // API unavailable — fall through to localStorage
+   215→   215→      }
+   216→   216→      // Fallback: load from localStorage
+   217→   217→      try {
+   218→   218→        const raw = localStorage.getItem(STORAGE_KEY);
+   219→   219→        if (raw) {
+   220→   220→          const parsed: AllSettings = JSON.parse(raw);
+   221→   221→          applySettings(parsed);
+   222→   222→        }
+   223→   223→      } catch {
+   224→   224→        // silent — use defaults
+   225→   225→      }
+   226→   226→    })();
+   227→   227→  }, []);
+   228→   228→
+   229→   229→  // Gather all settings into one object
+   230→   230→  const gatherSettings = useCallback((): AllSettings => {
+   231→   231→    return { pharmacy, receipt, display, pos, notifications };
+   232→   232→  }, [pharmacy, receipt, display, pos, notifications]);
+   233→   233→
+   234→   234→  // Save all settings at once (API first, localStorage as backup)
+   235→   235→  const handleSave = async () => {
+   236→   236→    setSaving(true);
+   237→   237→    const current = gatherSettings();
+   238→   238→    try {
+   239→   239→      // Try to persist via API
+   240→   240→      const res = await fetch('/api/settings', {
+   241→   241→        method: 'PUT',
+   242→   242→        headers: { 'Content-Type': 'application/json' },
+   243→   243→        body: JSON.stringify({ settings: flattenSettings(current) }),
+   244→   244→      });
+   245→   245→      if (res.ok) {
+   246→   246→        // API success — also cache to localStorage
+   247→   247→        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+   248→   248→        setSaved(true);
+   249→   249→        toast.success('Settings saved successfully');
+   250→   250→        setTimeout(() => setSaved(false), 2000);
+   251→   251→        return;
+   252→   252→      }
+   253→   253→      // API returned non-OK
+   254→   254→      throw new Error(`API returned ${res.status}`);
+   255→   255→    } catch {
+   256→   256→      // API failed — fall back to localStorage only
+   257→   257→      try {
+   258→   258→        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+   259→   259→        toast.warning('Settings saved locally (backend unavailable)');
+   260→   260→      } catch {
+   261→   261→        toast.error('Failed to save settings');
+   262→   262→      }
+   263→   263→    } finally {
+   264→   264→      setSaving(false);
+   265→   265→    }
+   266→   266→  };
+   267→   267→
+   268→   268→  // Export all data as JSON
+   269→   269→  const handleExportData = async () => {
+   270→   270→    setExporting(true);
+   271→   271→    try {
+   272→   272→      const endpoints = [
+   273→   273→        '/api/dashboard/stats',
+   274→   274→        '/api/products',
+   275→   275→        '/api/sales',
+   276→   276→        '/api/customers',
+   277→   277→        '/api/suppliers',
+   278→   278→        '/api/purchases',
+   279→   279→        '/api/categories',
+   280→   280→        '/api/batches',
+   281→   281→        '/api/returns',
+   282→   282→        '/api/users',
+   283→   283→        '/api/audit-logs',
+   284→   284→      ];
+   285→   285→
+   286→   286→      const data: Record<string, unknown> = { _exportedAt: new Date().toISOString() };
+   287→   287→
+   288→   288→      await Promise.all(
+   289→   289→        endpoints.map(async (url) => {
+   290→   290→          try {
+   291→   291→            const res = await fetch(url);
+   292→   292→            if (res.ok) {
+   293→   293→              const json = await res.json();
+   294→   294→              data[url.replace('/api/', '')] = json;
+   295→   295→            }
+   296→   296→          } catch {
+   297→   297→            data[url.replace('/api/', '')] = 'Failed to fetch';
+   298→   298→          }
+   299→   299→        }),
+   300→   300→      );
+   301→   301→
+   302→   302→      // Also include settings
+   303→   303→      data._settings = gatherSettings();
+   304→   304→
+   305→   305→      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+   306→   306→      const url = URL.createObjectURL(blob);
+   307→   307→      const a = document.createElement('a');
+   308→   308→      a.href = url;
+   309→   309→      a.download = `pharmacy-export-${new Date().toISOString().slice(0, 10)}.json`;
+   310→   310→      document.body.appendChild(a);
+   311→   311→      a.click();
+   312→   312→      document.body.removeChild(a);
+   313→   313→      URL.revokeObjectURL(url);
+   314→   314→
+   315→   315→      toast.success('Data exported successfully');
+   316→   316→    } catch {
+   317→   317→      toast.error('Failed to export data');
+   318→   318→    } finally {
+   319→   319→      setExporting(false);
+   320→   320→    }
+   321→   321→  };
+   322→   322→
+   323→   323→  // Clear all sales data
+   324→   324→  const handleClearSales = async () => {
+   325→   325→    setClearing(true);
+   326→   326→    try {
+   327→   327→      await fetch('/api/sales', { method: 'DELETE' });
+   328→   328→      toast.success('All sales data cleared');
+   329→   329→    } catch {
+   330→   330→      toast.error('Failed to clear sales data');
+   331→   331→    } finally {
+   332→   332→      setClearing(false);
+   333→   333→    }
+   334→   334→  };
+   335→   335→
+   336→   336→  // ─── Section card helper ────────────────────────────────────────
+   337→   337→  const sectionHeader = (icon: React.ReactNode, title: string, description?: string) => (
+   338→   338→    <CardHeader className="pb-4">
+   339→   339→      <CardTitle className="text-base font-semibold flex items-center gap-2.5">
+   340→   340→        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
+   341→   341→          {icon}
+   342→   342→        </span>
+   343→   343→        {title}
+   344→   344→      </CardTitle>
+   345→   345→      {description && (
+   346→   346→        <CardDescription className="text-sm text-muted-foreground ml-[42px]">
+   347→   347→          {description}
+   348→   348→        </CardDescription>
+   349→   349→      )}
+   350→   350→    </CardHeader>
+   351→   351→  );
+   352→   352→
+   353→   353→  return (
+   354→   354→    <div className="space-y-6 p-6 max-w-3xl">
+   355→   355→      {/* Page Header */}
+   356→   356→      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+   357→   357→        <div>
+   358→   358→          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+   359→   359→          <p className="text-muted-foreground text-sm mt-1">
+   360→   360→            Manage your pharmacy system preferences and configuration
+   361→   361→          </p>
+   362→   362→        </div>
+   363→   363→        <Button
+   364→   364→          className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200 dark:shadow-emerald-950/50 transition-all"
+   365→   365→          onClick={handleSave}
+   366→   366→          disabled={saving}
+   367→   367→        >
+   368→   368→          {saving ? (
+   369→   369→            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+   370→   370→          ) : saved ? (
+   371→   371→            <CheckCircle2 className="h-4 w-4 mr-2" />
+   372→   372→          ) : (
+   373→   373→            <Save className="h-4 w-4 mr-2" />
+   374→   374→          )}
+   375→   375→          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save All Settings'}
+   376→   376→        </Button>
+   377→   377→      </div>
+   378→   378→
+   379→   379→      <Separator />
+   380→   380→
+   381→   381→      {/* 1. Pharmacy Information */}
+   382→   382→      <Card className="overflow-hidden border-emerald-100 dark:border-emerald-950/50">
+   383→   383→        {sectionHeader(
+   384→   384→          <Building2 className="h-4 w-4" />,
+   385→   385→          'Pharmacy Information',
+   386→   386→          'Basic details about your pharmacy',
+   387→   387→        )}
+   388→   388→        <CardContent className="space-y-4 pt-0">
+   389→   389→          {/* Logo placeholder */}
+   390→   390→          <div className="flex items-center gap-4 p-3 rounded-lg border border-dashed border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+   391→   391→            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800">
+   392→   392→              <ImageIcon className="h-6 w-6 text-emerald-500" />
+   393→   393→            </div>
+   394→   394→            <div className="flex-1 min-w-0">
+   395→   395→              <p className="text-sm font-medium">Pharmacy Logo</p>
+   396→   396→              <p className="text-xs text-muted-foreground">
+   397→   397→                Logo upload will be available in a future update
+   398→   398→              </p>
+   399→   399→            </div>
+   400→   400→            <Button variant="outline" size="sm" disabled className="text-xs">
+   401→   401→              Upload
+   402→   402→            </Button>
+   403→   403→          </div>
+   404→   404→
+   405→   405→          <div>
+   406→   406→            <Label htmlFor="pharmacy-name" className="text-sm font-medium">
+   407→   407→              Pharmacy Name
+   408→   408→            </Label>
+   409→   409→            <div className="relative mt-1.5">
+   410→   410→              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   411→   411→              <Input
+   412→   412→                id="pharmacy-name"
+   413→   413→                value={pharmacy.name}
+   414→   414→                onChange={(e) => setPharmacy({ ...pharmacy, name: e.target.value })}
+   415→   415→                className="pl-10"
+   416→   416→                placeholder="Enter pharmacy name"
+   417→   417→              />
+   418→   418→            </div>
+   419→   419→          </div>
+   420→   420→
+   421→   421→          <div>
+   422→   422→            <Label htmlFor="pharmacy-address" className="text-sm font-medium">
+   423→   423→              Address
+   424→   424→            </Label>
+   425→   425→            <div className="relative mt-1.5">
+   426→   426→              <MapPin className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+   427→   427→              <Textarea
+   428→   428→                id="pharmacy-address"
+   429→   429→                value={pharmacy.address}
+   430→   430→                onChange={(e) => setPharmacy({ ...pharmacy, address: e.target.value })}
+   431→   431→                className="pl-10 min-h-[60px] resize-none"
+   432→   432→                placeholder="Enter pharmacy address"
+   433→   433→              />
+   434→   434→            </div>
+   435→   435→          </div>
+   436→   436→
+   437→   437→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   438→   438→            <div>
+   439→   439→              <Label htmlFor="pharmacy-phone" className="text-sm font-medium">
+   440→   440→                Phone Number
+   441→   441→              </Label>
+   442→   442→              <div className="relative mt-1.5">
+   443→   443→                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   444→   444→                <Input
+   445→   445→                  id="pharmacy-phone"
+   446→   446→                  value={pharmacy.phone}
+   447→   447→                  onChange={(e) => setPharmacy({ ...pharmacy, phone: e.target.value })}
+   448→   448→                  className="pl-10"
+   449→   449→                  placeholder="+233 ..."
+   450→   450→                />
+   451→   451→              </div>
+   452→   452→            </div>
+   453→   453→            <div>
+   454→   454→              <Label htmlFor="pharmacy-email" className="text-sm font-medium">
+   455→   455→                Email Address
+   456→   456→              </Label>
+   457→   457→              <div className="relative mt-1.5">
+   458→   458→                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   459→   459→                <Input
+   460→   460→                  id="pharmacy-email"
+   461→   461→                  type="email"
+   462→   462→                  value={pharmacy.email}
+   463→   463→                  onChange={(e) => setPharmacy({ ...pharmacy, email: e.target.value })}
+   464→   464→                  className="pl-10"
+   465→   465→                  placeholder="pharmacy@example.com"
+   466→   466→                />
+   467→   467→              </div>
+   468→   468→            </div>
+   469→   469→          </div>
+   470→   470→
+   471→   471→          <div className="w-full sm:w-1/2">
+   472→   472→            <Label htmlFor="tax-rate" className="text-sm font-medium">
+   473→   473→              Tax Rate
+   474→   474→            </Label>
+   475→   475→            <div className="relative mt-1.5">
+   476→   476→              <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   477→   477→              <Input
+   478→   478→                id="tax-rate"
+   479→   479→                type="number"
+   480→   480→                step="0.1"
+   481→   481→                min="0"
+   482→   482→                max="100"
+   483→   483→                value={pharmacy.taxRate}
+   484→   484→                onChange={(e) => setPharmacy({ ...pharmacy, taxRate: Number(e.target.value) || 0 })}
+   485→   485→                className="pl-10"
+   486→   486→                placeholder="0"
+   487→   487→              />
+   488→   488→            </div>
+   489→   489→          </div>
+   490→   490→        </CardContent>
+   491→   491→      </Card>
+   492→   492→
+   493→   493→      {/* 2. Receipt Settings */}
+   494→   494→      <Card className="overflow-hidden">
+   495→   495→        {sectionHeader(
+   496→   496→          <Receipt className="h-4 w-4" />,
+   497→   497→          'Receipt Settings',
+   498→   498→          'Customize receipt appearance and content',
+   499→   499→        )}
+   500→   500→        <CardContent className="space-y-4 pt-0">
+   501→   501→          <div>
+   502→   502→            <Label htmlFor="receipt-header" className="text-sm font-medium">
+   503→   503→              Receipt Header Text
+   504→   504→            </Label>
+   505→   505→            <Textarea
+   506→   506→              id="receipt-header"
+   507→   507→              value={receipt.headerText}
+   508→   508→              onChange={(e) => setReceipt({ ...receipt, headerText: e.target.value })}
+   509→   509→              className="mt-1.5 min-h-[60px] resize-none"
+   510→   510→              placeholder="Header text for receipts"
+   511→   511→            />
+   512→   512→          </div>
+   513→   513→          <div>
+   514→   514→            <Label htmlFor="receipt-footer" className="text-sm font-medium">
+   515→   515→              Receipt Footer Text
+   516→   516→            </Label>
+   517→   517→            <Textarea
+   518→   518→              id="receipt-footer"
+   519→   519→              value={receipt.footerText}
+   520→   520→              onChange={(e) => setReceipt({ ...receipt, footerText: e.target.value })}
+   521→   521→              className="mt-1.5 min-h-[60px] resize-none"
+   522→   522→              placeholder="Footer text for receipts"
+   523→   523→            />
+   524→   524→          </div>
+   525→   525→          <div className="w-full sm:w-1/2">
+   526→   526→            <Label htmlFor="receipt-width" className="text-sm font-medium">
+   527→   527→              Receipt Width
+   528→   528→            </Label>
+   529→   529→            <Select
+   530→   530→              value={receipt.width}
+   531→   531→              onValueChange={(v) => setReceipt({ ...receipt, width: v })}
+   532→   532→            >
+   533→   533→              <SelectTrigger id="receipt-width" className="mt-1.5">
+   534→   534→                <SelectValue />
+   535→   535→              </SelectTrigger>
+   536→   536→              <SelectContent>
+   537→   537→                <SelectItem value="58mm">58mm — Small Thermal</SelectItem>
+   538→   538→                <SelectItem value="80mm">80mm — Standard Thermal</SelectItem>
+   539→   539→                <SelectItem value="A4">A4 — Full Page</SelectItem>
+   540→   540→              </SelectContent>
+   541→   541→            </Select>
+   542→   542→          </div>
+   543→   543→        </CardContent>
+   544→   544→      </Card>
+   545→   545→
+   546→   546→      {/* 3. Display Settings */}
+   547→   547→      <Card className="overflow-hidden">
+   548→   548→        {sectionHeader(
+   549→   549→          <Monitor className="h-4 w-4" />,
+   550→   550→          'Display Settings',
+   551→   551→          'Currency, date, and time formatting preferences',
+   552→   552→        )}
+   553→   553→        <CardContent className="space-y-4 pt-0">
+   554→   554→          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   555→   555→            <div>
+   556→   556→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   557→   557→                <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
+   558→   558→                Currency
+   559→   559→              </Label>
+   560→   560→              <Select
+   561→   561→                value={display.currency}
+   562→   562→                onValueChange={(v) => setDisplay({ ...display, currency: v })}
+   563→   563→              >
+   564→   564→                <SelectTrigger className="mt-1.5">
+   565→   565→                  <SelectValue />
+   566→   566→                </SelectTrigger>
+   567→   567→                <SelectContent>
+   568→   568→                  <SelectItem value="GHS">GHS — Ghana Cedi</SelectItem>
+   569→   569→                  <SelectItem value="USD">USD — US Dollar</SelectItem>
+   570→   570→                  <SelectItem value="EUR">EUR — Euro</SelectItem>
+   571→   571→                  <SelectItem value="GBP">GBP — British Pound</SelectItem>
+   572→   572→                </SelectContent>
+   573→   573→              </Select>
+   574→   574→            </div>
+   575→   575→            <div>
+   576→   576→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   577→   577→                <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+   578→   578→                Date Format
+   579→   579→              </Label>
+   580→   580→              <Select
+   581→   581→                value={display.dateFormat}
+   582→   582→                onValueChange={(v) => setDisplay({ ...display, dateFormat: v })}
+   583→   583→              >
+   584→   584→                <SelectTrigger className="mt-1.5">
+   585→   585→                  <SelectValue />
+   586→   586→                </SelectTrigger>
+   587→   587→                <SelectContent>
+   588→   588→                  <SelectItem value="dd/MM/yyyy">DD/MM/YYYY</SelectItem>
+   589→   589→                  <SelectItem value="MM/dd/yyyy">MM/DD/YYYY</SelectItem>
+   590→   590→                  <SelectItem value="yyyy-MM-dd">YYYY-MM-DD</SelectItem>
+   591→   591→                  <SelectItem value="dd-MMM-yyyy">DD-MMM-YYYY</SelectItem>
+   592→   592→                </SelectContent>
+   593→   593→              </Select>
+   594→   594→            </div>
+   595→   595→            <div>
+   596→   596→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   597→   597→                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+   598→   598→                Time Format
+   599→   599→              </Label>
+   600→   600→              <Select
+   601→   601→                value={display.timeFormat}
+   602→   602→                onValueChange={(v) => setDisplay({ ...display, timeFormat: v })}
+   603→   603→              >
+   604→   604→                <SelectTrigger className="mt-1.5">
+   605→   605→                  <SelectValue />
+   606→   606→                </SelectTrigger>
+   607→   607→                <SelectContent>
+   608→   608→                  <SelectItem value="HH:mm">24-Hour (14:30)</SelectItem>
+   609→   609→                  <SelectItem value="hh:mm a">12-Hour (2:30 PM)</SelectItem>
+   610→   610→                </SelectContent>
+   611→   611→              </Select>
+   612→   612→            </div>
+   613→   613→          </div>
+   614→   614→        </CardContent>
+   615→   615→      </Card>
+   616→   616→
+   617→   617→      {/* 4. POS Settings */}
+   618→   618→      <Card className="overflow-hidden">
+   619→   619→        {sectionHeader(
+   620→   620→          <ShoppingCart className="h-4 w-4" />,
+   621→   621→          'POS Settings',
+   622→   622→          'Point-of-sale behavior and defaults',
+   623→   623→        )}
+   624→   624→        <CardContent className="space-y-5 pt-0">
+   625→   625→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   626→   626→            <div>
+   627→   627→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   628→   628→                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+   629→   629→                Default Payment Method
+   630→   630→              </Label>
+   631→   631→              <Select
+   632→   632→                value={pos.defaultPaymentMethod}
+   633→   633→                onValueChange={(v) => setPos({ ...pos, defaultPaymentMethod: v })}
+   634→   634→              >
+   635→   635→                <SelectTrigger className="mt-1.5">
+   636→   636→                  <SelectValue />
+   637→   637→                </SelectTrigger>
+   638→   638→                <SelectContent>
+   639→   639→                  <SelectItem value="cash">Cash</SelectItem>
+   640→   640→                  <SelectItem value="card">Card</SelectItem>
+   641→   641→                  <SelectItem value="mobile_money">Mobile Money</SelectItem>
+   642→   642→                  <SelectItem value="insurance">Insurance</SelectItem>
+   643→   643→                </SelectContent>
+   644→   644→              </Select>
+   645→   645→            </div>
+   646→   646→            <div>
+   647→   647→              <Label htmlFor="default-discount" className="text-sm font-medium flex items-center gap-1.5">
+   648→   648→                <Percent className="h-3.5 w-3.5 text-muted-foreground" />
+   649→   649→                Default Discount (%)
+   650→   650→              </Label>
+   651→   651→              <div className="relative mt-1.5">
+   652→   652→                <Input
+   653→   653→                  id="default-discount"
+   654→   654→                  type="number"
+   655→   655→                  min="0"
+   656→   656→                  max="100"
+   657→   657→                  step="0.5"
+   658→   658→                  value={pos.defaultDiscount}
+   659→   659→                  onChange={(e) => setPos({ ...pos, defaultDiscount: Number(e.target.value) || 0 })}
+   660→   660→                  placeholder="0"
+   661→   661→                />
+   662→   662→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+   663→   663→                  %
+   664→   664→                </span>
+   665→   665→              </div>
+   666→   666→            </div>
+   667→   667→          </div>
+   668→   668→
+   669→   669→          <div className="flex items-center justify-between rounded-lg border p-3">
+   670→   670→            <div className="space-y-0.5">
+   671→   671→              <Label htmlFor="auto-print" className="text-sm font-medium flex items-center gap-1.5">
+   672→   672→                <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />
+   673→   673→                Auto-Print Receipt
+   674→   674→              </Label>
+   675→   675→              <p className="text-xs text-muted-foreground">
+   676→   676→                Automatically print receipt after completing a sale
+   677→   677→              </p>
+   678→   678→            </div>
+   679→   679→            <Switch
+   680→   680→              id="auto-print"
+   681→   681→              checked={pos.autoPrintReceipt}
+   682→   682→              onCheckedChange={(checked) => setPos({ ...pos, autoPrintReceipt: checked })}
+   683→   683→              className="data-[state=checked]:bg-emerald-600"
+   684→   684→            />
+   685→   685→          </div>
+   686→   686→        </CardContent>
+   687→   687→      </Card>
+   688→   688→
+   689→   689→      {/* 5. Notifications */}
+   690→   690→      <Card className="overflow-hidden">
+   691→   691→        {sectionHeader(
+   692→   692→          <Bell className="h-4 w-4" />,
+   693→   693→          'Notifications',
+   694→   694→          'Alert thresholds and notification preferences',
+   695→   695→        )}
+   696→   696→        <CardContent className="space-y-5 pt-0">
+   697→   697→          <div className="flex items-center justify-between rounded-lg border p-3">
+   698→   698→            <div className="space-y-0.5">
+   699→   699→              <Label htmlFor="enable-notifications" className="text-sm font-medium flex items-center gap-1.5">
+   700→   700→                <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+   701→   701→                Enable Notifications
+   702→   702→              </Label>
+   703→   703→              <p className="text-xs text-muted-foreground">
+   704→   704→                Show alerts for low stock and expiring products
+   705→   705→              </p>
+   706→   706→            </div>
+   707→   707→            <Switch
+   708→   708→              id="enable-notifications"
+   709→   709→              checked={notifications.enableNotifications}
+   710→   710→              onCheckedChange={(checked) => setNotifications({ ...notifications, enableNotifications: checked })}
+   711→   711→              className="data-[state=checked]:bg-emerald-600"
+   712→   712→            />
+   713→   713→          </div>
+   714→   714→
+   715→   715→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   716→   716→            <div>
+   717→   717→              <Label htmlFor="low-stock-threshold" className="text-sm font-medium">
+   718→   718→                Low Stock Alert Threshold
+   719→   719→              </Label>
+   720→   720→              <p className="text-xs text-muted-foreground mb-1.5">
+   721→   721→                Alert when stock falls below this quantity
+   722→   722→              </p>
+   723→   723→              <Input
+   724→   724→                id="low-stock-threshold"
+   725→   725→                type="number"
+   726→   726→                min="1"
+   727→   727→                value={notifications.lowStockThreshold}
+   728→   728→                onChange={(e) =>
+   729→   729→                  setNotifications({
+   730→   730→                    ...notifications,
+   731→   731→                    lowStockThreshold: Math.max(1, Number(e.target.value) || 1),
+   732→   732→                  })
+   733→   733→                }
+   734→   734→                placeholder="10"
+   735→   735→              />
+   736→   736→            </div>
+   737→   737→            <div>
+   738→   738→              <Label htmlFor="expiry-alert-days" className="text-sm font-medium">
+   739→   739→                Expiry Alert (Days)
+   740→   740→              </Label>
+   741→   741→              <p className="text-xs text-muted-foreground mb-1.5">
+   742→   742→                Alert when products expire within this many days
+   743→   743→              </p>
+   744→   744→              <div className="relative">
+   745→   745→                <Input
+   746→   746→                  id="expiry-alert-days"
+   747→   747→                  type="number"
+   748→   748→                  min="1"
+   749→   749→                  value={notifications.expiryAlertDays}
+   750→   750→                  onChange={(e) =>
+   751→   751→                    setNotifications({
+   752→   752→                      ...notifications,
+   753→   753→                      expiryAlertDays: Math.max(1, Number(e.target.value) || 1),
+   754→   754→                    })
+   755→   755→                  }
+   756→   756→                  placeholder="30"
+   757→   757→                />
+   758→   758→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+   759→   759→                  days
+   760→   760→                </span>
+   761→   761→              </div>
+   762→   762→            </div>
+   763→   763→          </div>
+   764→   764→        </CardContent>
+   765→   765→      </Card>
+   766→   766→
+   767→   767→      {/* 6. Data Management */}
+   768→   768→      <Card className="overflow-hidden">
+   769→   769→        {sectionHeader(
+   770→   770→          <Database className="h-4 w-4" />,
+   771→   771→          'Data Management',
+   772→   772→          'Export data and manage system records',
+   773→   773→        )}
+   774→   774→        <CardContent className="space-y-4 pt-0">
+   775→   775→          <div className="flex flex-col sm:flex-row gap-3">
+   776→   776→            <Button
+   777→   777→              variant="outline"
+   778→   778→              className="flex-1 h-11"
+   779→   779→              onClick={handleExportData}
+   780→   780→              disabled={exporting}
+   781→   781→            >
+   782→   782→              {exporting ? (
+   783→   783→                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+   784→   784→              ) : (
+   785→   785→                <Download className="h-4 w-4 mr-2" />
+   786→   786→              )}
+   787→   787→              {exporting ? 'Exporting...' : 'Export All Data'}
+   788→   788→            </Button>
+   789→   789→            <AlertDialog>
+   790→   790→              <AlertDialogTrigger asChild>
+   791→   791→                <Button
+   792→   792→                  variant="destructive"
+   793→   793→                  className="flex-1 h-11"
+   794→   794→                  disabled={clearing}
+   795→   795→                >
+   796→   796→                  {clearing ? (
+   797→   797→                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+   798→   798→                  ) : (
+   799→   799→                    <Trash2 className="h-4 w-4 mr-2" />
+   800→   800→                  )}
+   801→   801→                  {clearing ? 'Clearing...' : 'Clear Sales Data'}
+   802→   802→                </Button>
+   803→   803→              </AlertDialogTrigger>
+   804→   804→              <AlertDialogContent>
+   805→   805→                <AlertDialogHeader>
+   806→   806→                  <AlertDialogTitle className="flex items-center gap-2">
+   807→   807→                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+   808→   808→                      <Trash2 className="h-4 w-4" />
+   809→   809→                    </span>
+   810→   810→                    Clear All Sales Data?
+   811→   811→                  </AlertDialogTitle>
+   812→   812→                  <AlertDialogDescription className="text-sm leading-relaxed">
+   813→   813→                    This action <strong className="text-foreground">cannot be undone</strong>. This will
+   814→   814→                    permanently delete all sales records, sale items, and related return records from the
+   815→   815→                    system. Product inventory and customer data will be preserved.
+   816→   816→                  </AlertDialogDescription>
+   817→   817→                </AlertDialogHeader>
+   818→   818→                <AlertDialogFooter>
+   819→   819→                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+   820→   820→                  <AlertDialogAction
+   821→   821→                    onClick={handleClearSales}
+   822→   822→                    className="bg-destructive hover:bg-destructive/90 text-white"
+   823→   823→                  >
+   824→   824→                    Yes, Clear All Sales
+   825→   825→                  </AlertDialogAction>
+   826→   826→                </AlertDialogFooter>
+   827→   827→              </AlertDialogContent>
+   828→   828→            </AlertDialog>
+   829→   829→          </div>
+   830→   830→          <p className="text-xs text-muted-foreground">
+   831→   831→            Export creates a JSON backup of all system data. Sales data clear affects transactions only.
+   832→   832→          </p>
+   833→   833→        </CardContent>
+   834→   834→      </Card>
+   835→   835→
+   836→   836→      {/* 7. About System */}
+   837→   837→      <Card className="overflow-hidden">
+   838→   838→        {sectionHeader(
+   839→   839→          <Info className="h-4 w-4" />,
+   840→   840→          'About System',
+   841→   841→          'System version and technology information',
+   842→   842→        )}
+   843→   843→        <CardContent className="pt-0">
+   844→   844→          <div className="rounded-lg border bg-muted/30">
+   845→   845→            <div className="divide-y">
+   846→   846→              <div className="flex items-center justify-between px-4 py-3">
+   847→   847→                <span className="text-sm text-muted-foreground">Version</span>
+   848→   848→                <span className="text-sm font-medium">1.0.0</span>
+   849→   849→              </div>
+   850→   850→              <div className="flex items-center justify-between px-4 py-3">
+   851→   851→                <span className="text-sm text-muted-foreground">Build Date</span>
+   852→   852→                <span className="text-sm font-medium">
+   853→   853→                  {new Date().toLocaleDateString('en-GB', {
+   854→   854→                    day: '2-digit',
+   855→   855→                    month: 'short',
+   856→   856→                    year: 'numeric',
+   857→   857→                  })}
+   858→   858→                </span>
+   859→   859→              </div>
+   860→   860→              <div className="flex items-center justify-between px-4 py-3">
+   861→   861→                <span className="text-sm text-muted-foreground">Framework</span>
+   862→   862→                <span className="text-sm font-medium">Next.js 16 (App Router)</span>
+   863→   863→              </div>
+   864→   864→              <div className="flex items-center justify-between px-4 py-3">
+   865→   865→                <span className="text-sm text-muted-foreground">Language</span>
+   866→   866→                <span className="text-sm font-medium">TypeScript 5</span>
+   867→   867→              </div>
+   868→   868→              <div className="flex items-center justify-between px-4 py-3">
+   869→   869→                <span className="text-sm text-muted-foreground">UI Library</span>
+   870→   870→                <span className="text-sm font-medium">shadcn/ui + Tailwind CSS 4</span>
+   871→   871→              </div>
+   872→   872→              <div className="flex items-center justify-between px-4 py-3">
+   873→   873→                <span className="text-sm text-muted-foreground">Database</span>
+   874→   874→                <span className="text-sm font-medium">SQLite (Prisma ORM)</span>
+   875→   875→              </div>
+   876→   876→              <div className="flex items-center justify-between px-4 py-3">
+   877→   877→                <span className="text-sm text-muted-foreground">State Management</span>
+   878→   878→                <span className="text-sm font-medium">Zustand + TanStack Query</span>
+   879→   879→              </div>
+   880→   880→              <div className="flex items-center justify-between px-4 py-3">
+   881→   881→                <span className="text-sm text-muted-foreground">Security</span>
+   882→   882→                <div className="flex items-center gap-1.5">
+   883→   883→                  <ShieldCheck className="h-4 w-4 text-emerald-500" />
+   884→   884→                  <span className="text-sm font-medium">NextAuth.js v4</span>
+   885→   885→                </div>
+   886→   886→              </div>
+   887→   887→            </div>
+   888→   888→          </div>
+   889→   889→        </CardContent>
+   890→   890→      </Card>
+   891→   891→
+   892→   892→      {/* Bottom Save Bar */}
+   893→   893→      <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-xl border bg-background/80 backdrop-blur-sm p-4 shadow-sm">
+   894→   894→        <Button
+   895→   895→          variant="outline"
+   896→   896→          onClick={() => {
+   897→   897→            setPharmacy(defaults.pharmacy);
+   898→   898→            setReceipt(defaults.receipt);
+   899→   899→            setDisplay(defaults.display);
+   900→   900→            setPos(defaults.pos);
+   901→   901→            setNotifications(defaults.notifications);
+   902→   902→            toast.info('Settings reset to defaults');
+   903→   903→          }}
+   904→   904→        >
+   905→   905→          Reset to Defaults
+   906→   906→        </Button>
+   907→   907→        <Button
+   908→   908→          className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200 dark:shadow-emerald-950/50 transition-all min-w-[180px]"
+   909→   909→          onClick={handleSave}
+   910→   910→          disabled={saving}
+   911→   911→        >
+   912→   912→          {saving ? (
+   913→   913→            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+   914→   914→          ) : saved ? (
+   915→   915→            <CheckCircle2 className="h-4 w-4 mr-2" />
+   916→   916→          ) : (
+   917→   917→            <Save className="h-4 w-4 mr-2" />
+   918→   918→          )}
+   919→   919→          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save All Settings'}
+   920→   920→        </Button>
+   921→   921→      </div>
+   922→   922→    </div>
+   923→   923→  );
+   924→   924→}
