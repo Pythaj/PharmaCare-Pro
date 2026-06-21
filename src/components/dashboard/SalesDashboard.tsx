@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import {
   ShoppingCart,
-  Truck,
   Search,
   Users,
   DollarSign,
@@ -71,7 +70,6 @@ export default function SalesDashboard() {
 
   const quickActions = [
     { label: 'New Sale', icon: ShoppingCart, page: 'pos' as const, color: 'bg-emerald-500 hover:bg-emerald-600' },
-    { label: 'New Purchase Entry', icon: Truck, page: 'purchases' as const, color: 'bg-teal-500 hover:bg-teal-600' },
     { label: 'View Products', icon: Search, page: 'products' as const, color: 'bg-green-500 hover:bg-green-600' },
     { label: 'View Customers', icon: Users, page: 'customers' as const, color: 'bg-emerald-600 hover:bg-emerald-700' },
   ];
@@ -129,7 +127,7 @@ export default function SalesDashboard() {
       {/* Quick Actions */}
       <div>
         <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
           {quickActions.map((action) => {
             const Icon = action.icon;
             return (

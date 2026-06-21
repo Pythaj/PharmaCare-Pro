@@ -156,14 +156,11 @@ function ProfileDialog() {
               <div className="flex items-center gap-2 mt-2">
                 <Badge
                   variant="secondary"
-                  className={cn(
-                    'text-[10px] font-semibold px-2.5 py-0.5 h-5',
-                    isAdmin
-                      ? 'bg-amber-400/20 text-amber-100 border border-amber-400/30'
-                      : 'bg-white/20 text-white border border-white/20'
-                  )}
+                  className={
+                    'text-[10px] font-semibold px-2.5 py-0.5 h-5 bg-white/20 text-white border border-white/20'
+                  }
                 >
-                  {isAdmin ? '★ Administrator' : '◆ Sales Associate'}
+                  {isAdmin ? '★ Administrator' : '◆ Staff Member'}
                 </Badge>
               </div>
             </div>
@@ -458,7 +455,7 @@ export function Header() {
           variant="ghost"
           size="icon"
           className="relative h-9 w-9 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-          onClick={() => navigate('inventory')}
+          onClick={() => navigate(isAdmin ? 'inventory' : 'sales-dashboard')}
         >
           <Bell className="h-4.5 w-4.5" />
           {alertCount > 0 && (
@@ -488,17 +485,14 @@ export function Header() {
               <div className="flex flex-col gap-1">
                 <p className="text-sm font-semibold text-slate-900">{currentUser?.name}</p>
                 <p className="text-xs text-slate-500">{currentUser?.email}</p>
+                {isAdmin && (
                 <Badge
                   variant="secondary"
-                  className={cn(
-                    'mt-1 w-fit text-[10px] font-medium px-1.5 py-0 h-4',
-                    currentUser?.role === 'admin'
-                      ? 'bg-amber-100 text-amber-700'
-                      : 'bg-emerald-100 text-emerald-700'
-                  )}
+                  className="mt-1 w-fit text-[10px] font-medium px-1.5 py-0 h-4 bg-amber-100 text-amber-700"
                 >
-                  {currentUser?.role === 'admin' ? 'Administrator' : 'Sales Person'}
+                  Administrator
                 </Badge>
+                )}
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />

@@ -77,7 +77,7 @@ export const useAppStore = create<AppState>((set) => ({
   
   navigate: (page) => set((state) => {
     // Prevent sales users from navigating to admin-only pages
-    const adminOnly: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings'];
+    const adminOnly: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings', 'inventory', 'purchases'];
     if (state.currentUser?.role !== 'admin' && adminOnly.includes(page)) {
       return {}; // No-op: don't navigate to admin pages
     }

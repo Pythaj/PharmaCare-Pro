@@ -1,0 +1,1096 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useRef } from 'react';
+     4→import {
+     5→  DollarSign,
+     6→  TrendingUp,
+     7→  ShoppingCart,
+     8→  BarChart3,
+     9→  Download,
+    10→  Package,
+    11→  ArrowUpRight,
+    12→  ArrowDownRight,
+    13→  CalendarDays,
+    14→  Trophy,
+    15→  Users,
+    16→  FileSpreadsheet,
+    17→  Receipt,
+    18→} from 'lucide-react';
+    19→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+    20→import { Button } from '@/components/ui/button';
+    21→import { Badge } from '@/components/ui/badge';
+    22→import { Skeleton } from '@/components/ui/skeleton';
+    23→import { Input } from '@/components/ui/input';
+    24→import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+    25→import {
+    26→  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+    27→} from '@/components/ui/table';
+    28→import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart.tsx';
+    29→import {
+    30→  PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid,
+    31→  BarChart, Bar,
+    32→} from 'recharts';
+    33→import type { ChartDataPoint } from '@/types';
+    34→import { toast } from 'sonner';
+    35→
+    36→// ─── Helpers ────────────────────────────────────────────────────────
+    37→
+    38→function formatGHS(value: number): string {
+    39→  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
+    40→}
+    41→
+    42→function getInitials(name: string): string {
+    43→  return name
+    44→    .split(' ')
+    45→    .map((w) => w[0])
+    46→    .join('')
+    47→    .toUpperCase()
+    48→    .slice(0, 2);
+    49→}
+    50→
+    51→function todayStr(): string {
+    52→  const d = new Date();
+    53→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    54→}
+    55→
+    56→function monthStartStr(): string {
+    57→  const d = new Date();
+    58→  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
+    59→}
+    60→
+    61→// ─── Types ──────────────────────────────────────────────────────────
+    62→
+    63→type Period = 'today' | 'this_week' | 'this_month' | 'this_year' | 'custom';
+    64→
+    65→const COLORS = ['#10b981', '#14b8a6', '#f59e0b', '#6b7280', '#8b5cf6', '#ec4899'];
+    66→
+    67→interface ReportStats {
+    68→  totalRevenue: number;
+    69→  totalProfit: number;
+    70→  totalSales: number;
+    71→  totalItemsSold: number;
+    72→  avgSaleValue: number;
+    73→  bestProduct: { name: string; quantity: number; revenue: number } | null;
+    74→}
+    75→
+    76→interface DailyRow {
+    77→  date: string;
+    78→  sales: number;
+    79→  revenue: number;
+    80→  profit: number;
+    81→  items: number;
+    82→}
+    83→
+    84→interface CashierRow {
+    85→  userId: string;
+    86→  name: string;
+    87→  sales: number;
+    88→  revenue: number;
+    89→  profit: number;
+    90→}
+    91→
+    92→interface MonthlyRow {
+    93→  month: string;
+    94→  monthIndex: number;
+    95→  year: number;
+    96→  revenue: number;
+    97→  profit: number;
+    98→  sales: number;
+    99→  items: number;
+   100→}
+   101→
+   102→// ─── Component ──────────────────────────────────────────────────────
+   103→
+   104→export default function ReportsView() {
+   105→  const [period, setPeriod] = useState<Period>('this_month');
+   106→  const [fromDate, setFromDate] = useState(monthStartStr());
+   107→  const [toDate, setToDate] = useState(todayStr());
+   108→
+   109→  const [stats, setStats] = useState<ReportStats | null>(null);
+   110→  const [revenueData, setRevenueData] = useState<ChartDataPoint[]>([]);
+   111→  const [paymentData, setPaymentData] = useState<ChartDataPoint[]>([]);
+   112→  const [topProducts, setTopProducts] = useState<{ name: string; quantity: number; revenue: number }[]>([]);
+   113→  const [dailyBreakdown, setDailyBreakdown] = useState<DailyRow[]>([]);
+   114→  const [cashierPerformance, setCashierPerformance] = useState<CashierRow[]>([]);
+   115→  const [monthlySummary, setMonthlySummary] = useState<MonthlyRow[]>([]);
+   116→  const [loading, setLoading] = useState(true);
+   117→
+   118→  const periods: { label: string; value: Period }[] = [
+   119→    { label: 'Today', value: 'today' },
+   120→    { label: 'This Week', value: 'this_week' },
+   121→    { label: 'This Month', value: 'this_month' },
+   122→    { label: 'This Year', value: 'this_year' },
+   123→    { label: 'Custom', value: 'custom' },
+   124→  ];
+   125→
+   126→  const periodLabel =
+   127→    period === 'custom'
+   128→      ? `${fromDate} → ${toDate}`
+   129→      : periods.find((p) => p.value === period)?.label ?? period;
+   130→
+   131→  const showMonthly = monthlySummary.length > 0;
+   132→
+   133→  // ─── Fetch ─────────────────────────────────────────────────────
+   134→  const initializedRef = useRef(false);
+   135→  const prevParamsRef = useRef(`${period}|${fromDate}|${toDate}`);
+   136→
+   137→  useEffect(() => {
+   138→    const params = `${period}|${fromDate}|${toDate}`;
+   139→    let shouldRun = false;
+   140→
+   141→    if (!initializedRef.current) {
+   142→      initializedRef.current = true;
+   143→      prevParamsRef.current = params;
+   144→      shouldRun = true;
+   145→    } else if (params !== prevParamsRef.current) {
+   146→      prevParamsRef.current = params;
+   147→      shouldRun = true;
+   148→    }
+   149→
+   150→    if (!shouldRun) return;
+   151→
+   152→    let cancelled = false;
+   153→    const controller = new AbortController();
+   154→
+   155→    const run = async () => {
+   156→      let url = '/api/reports?';
+   157→      if (period === 'custom') {
+   158→        if (!fromDate || !toDate) {
+   159→          toast.error('Please select both from and to dates.');
+   160→          return;
+   161→        }
+   162→        url += `from=${fromDate}&to=${toDate}`;
+   163→      } else {
+   164→        url += `period=${period}`;
+   165→      }
+   166→
+   167→      await new Promise<void>((resolve) => resolve());
+   168→      if (cancelled) return;
+   169→
+   170→      setLoading(true);
+   171→      try {
+   172→        const res = await fetch(url, { signal: controller.signal });
+   173→        if (res.ok && !cancelled) {
+   174→          const data = await res.json();
+   175→          setStats(data.stats ?? null);
+   176→          setRevenueData(data.revenueData ?? []);
+   177→          setPaymentData(data.paymentData ?? []);
+   178→          setTopProducts(data.topProducts ?? []);
+   179→          setDailyBreakdown(data.dailyBreakdown ?? []);
+   180→          setCashierPerformance(data.cashierPerformance ?? []);
+   181→          setMonthlySummary(data.monthlySummary ?? []);
+   182→        }
+   183→      } catch {
+   184→        if (!cancelled) toast.error('Failed to load report data.');
+   185→      }
+   186→      if (!cancelled) setLoading(false);
+   187→    };
+   188→
+   189→    run();
+   190→    return () => {
+   191→      cancelled = true;
+   192→      controller.abort();
+   193→    };
+   194→  }, [period, fromDate, toDate]);
+   195→
+   196→  const handleApplyCustom = () => {
+   197→    if (!fromDate || !toDate) {
+   198→      toast.error('Please select both from and to dates.');
+   199→      return;
+   200→    }
+   201→    prevParamsRef.current = `${period}|${fromDate}|${toDate}`;
+   202→    // Directly invoke the async load (not from an effect)
+   203→    (async () => {
+   204→      setLoading(true);
+   205→      try {
+   206→        const res = await fetch(`/api/reports?from=${fromDate}&to=${toDate}`);
+   207→        if (res.ok) {
+   208→          const data = await res.json();
+   209→          setStats(data.stats ?? null);
+   210→          setRevenueData(data.revenueData ?? []);
+   211→          setPaymentData(data.paymentData ?? []);
+   212→          setTopProducts(data.topProducts ?? []);
+   213→          setDailyBreakdown(data.dailyBreakdown ?? []);
+   214→          setCashierPerformance(data.cashierPerformance ?? []);
+   215→          setMonthlySummary(data.monthlySummary ?? []);
+   216→        }
+   217→      } catch {
+   218→        toast.error('Failed to load report data.');
+   219→      }
+   220→      setLoading(false);
+   221→    })();
+   222→  };
+   223→
+   224→  // ─── Computed ───────────────────────────────────────────────────
+   225→  const highestRevenueDay = dailyBreakdown.length > 0
+   226→    ? dailyBreakdown.reduce((max, d) => (d.revenue > max.revenue ? d : max), dailyBreakdown[0])
+   227→    : null;
+   228→
+   229→  const topCashier = cashierPerformance.length > 0 ? cashierPerformance[0] : null;
+   230→
+   231→  const bestMonth = monthlySummary.length > 0
+   232→    ? monthlySummary.reduce((max, m) => (m.revenue > max.revenue ? m : max), monthlySummary[0])
+   233→    : null;
+   234→
+   235→  const maxMonthRevenue = monthlySummary.length > 0
+   236→    ? Math.max(...monthlySummary.map((m) => m.revenue))
+   237→    : 1;
+   238→
+   239→  const dailyTotals = dailyBreakdown.reduce(
+   240→    (acc, d) => ({
+   241→      sales: acc.sales + d.sales,
+   242→      revenue: acc.revenue + d.revenue,
+   243→      profit: acc.profit + d.profit,
+   244→      items: acc.items + d.items,
+   245→    }),
+   246→    { sales: 0, revenue: 0, profit: 0, items: 0 },
+   247→  );
+   248→
+   249→  const profitMargin =
+   250→    stats && stats.totalRevenue > 0
+   251→      ? ((stats.totalProfit / stats.totalRevenue) * 100).toFixed(1)
+   252→      : '0.0';
+   253→
+   254→  // ─── Export Helpers ─────────────────────────────────────────────
+   255→  const downloadFile = (content: string, filename: string, mimeType: string) => {
+   256→    const blob = new Blob([content], { type: mimeType });
+   257→    const url = URL.createObjectURL(blob);
+   258→    const a = document.createElement('a');
+   259→    a.href = url;
+   260→    a.download = filename;
+   261→    document.body.appendChild(a);
+   262→    a.click();
+   263→    document.body.removeChild(a);
+   264→    URL.revokeObjectURL(url);
+   265→  };
+   266→
+   267→  const buildCSVContent = (): string => {
+   268→    const s = stats ?? {
+   269→      totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+   270→    };
+   271→    const lines: string[] = [];
+   272→    lines.push('PharmaCare Pro - Sales Analytics Report');
+   273→    lines.push(`Period,${periodLabel}`);
+   274→    lines.push(`Generated,${new Date().toLocaleString()}`);
+   275→    lines.push('');
+   276→    lines.push('--- Summary ---');
+   277→    lines.push(`Total Revenue,${s.totalRevenue.toFixed(2)}`);
+   278→    lines.push(`Total Profit,${s.totalProfit.toFixed(2)}`);
+   279→    lines.push(`Profit Margin %,${profitMargin}`);
+   280→    lines.push(`Total Transactions,${s.totalSales}`);
+   281→    lines.push(`Total Items Sold,${s.totalItemsSold}`);
+   282→    lines.push(`Avg Transaction Value,${s.avgSaleValue.toFixed(2)}`);
+   283→    lines.push(`Best Selling Product,"${s.bestProduct?.name ?? 'N/A'} (${s.bestProduct?.quantity ?? 0} units)"`);
+   284→    lines.push('');
+   285→
+   286→    if (dailyBreakdown.length > 0) {
+   287→      lines.push('--- Daily Sales Breakdown ---');
+   288→      lines.push('Date,Transactions,Revenue (GHS),Profit (GHS),Items Sold,Avg Transaction Value');
+   289→      for (const d of dailyBreakdown) {
+   290→        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
+   291→        lines.push(`${d.date},${d.sales},${d.revenue.toFixed(2)},${d.profit.toFixed(2)},${d.items},${avg}`);
+   292→      }
+   293→      lines.push('');
+   294→    }
+   295→
+   296→    if (cashierPerformance.length > 0) {
+   297→      lines.push('--- Staff Performance ---');
+   298→      lines.push('Staff Name,Transactions,Revenue (GHS),Profit (GHS),Avg Sale Value');
+   299→      for (const c of cashierPerformance) {
+   300→        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
+   301→        lines.push(`"${c.name}",${c.sales},${c.revenue.toFixed(2)},${c.profit.toFixed(2)},${avg}`);
+   302→      }
+   303→      lines.push('');
+   304→    }
+   305→
+   306→    if (revenueData.length > 0) {
+   307→      lines.push('--- Revenue by Period ---');
+   308→      lines.push('Period,Revenue');
+   309→      for (const d of revenueData) {
+   310→        lines.push(`${d.name},${d.value.toFixed(2)}`);
+   311→      }
+   312→      lines.push('');
+   313→    }
+   314→
+   315→    if (paymentData.length > 0) {
+   316→      lines.push('--- Sales by Payment Method ---');
+   317→      lines.push('Payment Method,Amount');
+   318→      for (const d of paymentData) {
+   319→        lines.push(`${d.name},${d.value.toFixed(2)}`);
+   320→      }
+   321→      lines.push('');
+   322→    }
+   323→
+   324→    if (topProducts.length > 0) {
+   325→      lines.push('--- Top Selling Products ---');
+   326→      lines.push('Rank,Product Name,Quantity Sold,Revenue');
+   327→      topProducts.forEach((p, i) => {
+   328→        lines.push(`${i + 1},"${p.name.replace(/"/g, '""')}",${p.quantity},${p.revenue.toFixed(2)}`);
+   329→      });
+   330→    }
+   331→
+   332→    return lines.join('\n');
+   333→  };
+   334→
+   335→  const handleExportCSV = () => {
+   336→    const content = buildCSVContent();
+   337→    downloadFile(content, `pharmacare-report-${period}-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv;charset=utf-8;');
+   338→    toast.success('CSV report downloaded.');
+   339→  };
+   340→
+   341→  const handleExportExcel = () => {
+   342→    const s = stats ?? {
+   343→      totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+   344→    };
+   345→    const lines: string[] = [];
+   346→
+   347→    lines.push('PharmaCare Pro - Sales Analytics Report');
+   348→    lines.push(`Period:\t${periodLabel}`);
+   349→    lines.push(`Generated:\t${new Date().toLocaleString()}`);
+   350→    lines.push('');
+   351→    lines.push('Summary');
+   352→    lines.push('Total Revenue\tTotal Profit\tProfit Margin %\tTransactions\tItems Sold\tAvg Transaction Value\tBest Selling Product');
+   353→    lines.push(
+   354→      `${s.totalRevenue.toFixed(2)}\t${s.totalProfit.toFixed(2)}\t${profitMargin}%\t${s.totalSales}\t${s.totalItemsSold}\t${s.avgSaleValue.toFixed(2)}\t${s.bestProduct?.name ?? 'N/A'}`
+   355→    );
+   356→    lines.push('');
+   357→
+   358→    if (dailyBreakdown.length > 0) {
+   359→      lines.push('Daily Sales Breakdown');
+   360→      lines.push('Date\tTransactions\tRevenue (GHS)\tProfit (GHS)\tItems Sold\tAvg Transaction Value');
+   361→      for (const d of dailyBreakdown) {
+   362→        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
+   363→        lines.push(`${d.date}\t${d.sales}\t${d.revenue.toFixed(2)}\t${d.profit.toFixed(2)}\t${d.items}\t${avg}`);
+   364→      }
+   365→      lines.push('');
+   366→    }
+   367→
+   368→    if (cashierPerformance.length > 0) {
+   369→      lines.push('Staff Performance');
+   370→      lines.push('Staff Name\tTransactions\tRevenue (GHS)\tProfit (GHS)\tAvg Sale Value');
+   371→      for (const c of cashierPerformance) {
+   372→        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
+   373→        lines.push(`${c.name}\t${c.sales}\t${c.revenue.toFixed(2)}\t${c.profit.toFixed(2)}\t${avg}`);
+   374→      }
+   375→      lines.push('');
+   376→    }
+   377→
+   378→    if (revenueData.length > 0) {
+   379→      lines.push('Revenue by Period');
+   380→      lines.push('Period\tRevenue');
+   381→      for (const d of revenueData) {
+   382→        lines.push(`${d.name}\t${d.value.toFixed(2)}`);
+   383→      }
+   384→      lines.push('');
+   385→    }
+   386→
+   387→    if (paymentData.length > 0) {
+   388→      lines.push('Sales by Payment Method');
+   389→      lines.push('Payment Method\tAmount');
+   390→      for (const d of paymentData) {
+   391→        lines.push(`${d.name}\t${d.value.toFixed(2)}`);
+   392→      }
+   393→      lines.push('');
+   394→    }
+   395→
+   396→    if (topProducts.length > 0) {
+   397→      lines.push('Top Selling Products');
+   398→      lines.push('Rank\tProduct Name\tQuantity Sold\tRevenue');
+   399→      topProducts.forEach((p, i) => {
+   400→        lines.push(`${i + 1}\t${p.name}\t${p.quantity}\t${p.revenue.toFixed(2)}`);
+   401→      });
+   402→    }
+   403→
+   404→    downloadFile(lines.join('\n'), `pharmacare-report-${period}-${new Date().toISOString().slice(0, 10)}.xls`, 'application/vnd.ms-excel');
+   405→    toast.success('Excel report downloaded.');
+   406→  };
+   407→
+   408→  const handleExportPDF = () => {
+   409→    const s = stats ?? {
+   410→      totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+   411→    };
+   412→
+   413→    const revenueRows = revenueData
+   414→      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+   415→      .join('');
+   416→
+   417→    const paymentRows = paymentData
+   418→      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+   419→      .join('');
+   420→
+   421→    const productRows = topProducts
+   422→      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${formatGHS(p.revenue)}</td></tr>`)
+   423→      .join('');
+   424→
+   425→    const dailyRows = dailyBreakdown
+   426→      .map((d) => {
+   427→        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
+   428→        return `<tr><td>${d.date}</td><td class="num">${d.sales}</td><td class="num">${formatGHS(d.revenue)}</td><td class="num">${formatGHS(d.profit)}</td><td class="num">${d.items}</td><td class="num">${formatGHS(Number(avg))}</td></tr>`;
+   429→      })
+   430→      .join('');
+   431→
+   432→    const cashierRows = cashierPerformance
+   433→      .map((c) => {
+   434→        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
+   435→        return `<tr><td>${c.name}</td><td class="num">${c.sales}</td><td class="num">${formatGHS(c.revenue)}</td><td class="num">${formatGHS(c.profit)}</td><td class="num">${formatGHS(Number(avg))}</td></tr>`;
+   436→      })
+   437→      .join('');
+   438→
+   439→    const html = `<!DOCTYPE html>
+   440→<html lang="en">
+   441→<head>
+   442→<meta charset="UTF-8">
+   443→<title>PharmaCare Pro - Sales Report</title>
+   444→<style>
+   445→  * { margin: 0; padding: 0; box-sizing: border-box; }
+   446→  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1f2937; padding: 40px; max-width: 900px; margin: 0 auto; }
+   447→  h1 { font-size: 24px; color: #047857; margin-bottom: 4px; }
+   448→  .subtitle { font-size: 13px; color: #6b7280; margin-bottom: 24px; }
+   449→  .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 32px; }
+   450→  .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; text-align: center; }
+   451→  .stat-card .label { font-size: 11px; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+   452→  .stat-card .value { font-size: 18px; font-weight: 700; color: #111827; }
+   453→  .stat-card.profit .value { color: #047857; }
+   454→  .stat-card.margin .value { color: #14b8a6; }
+   455→  h2 { font-size: 15px; color: #111827; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #10b981; }
+   456→  table { width: 100%; border-collapse: collapse; margin-bottom: 24px; font-size: 12px; }
+   457→  th { background: #f0fdf4; color: #047857; text-align: left; padding: 7px 10px; font-weight: 600; border-bottom: 2px solid #d1fae5; }
+   458→  td { padding: 7px 10px; border-bottom: 1px solid #f3f4f6; }
+   459→  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+   460→  tr:nth-child(even) td { background: #f9fafb; }
+   461→  .footer { margin-top: 32px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 11px; color: #9ca3af; }
+   462→  @media print { body { padding: 20px; } .no-print { display: none; } }
+   463→</style>
+   464→</head>
+   465→<body>
+   466→  <h1>PharmaCare Pro - Sales Analytics</h1>
+   467→  <p class="subtitle">Period: ${periodLabel} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</p>
+   468→
+   469→  <div class="stats-grid">
+   470→    <div class="stat-card">
+   471→      <div class="label">Total Revenue</div>
+   472→      <div class="value">${formatGHS(s.totalRevenue)}</div>
+   473→    </div>
+   474→    <div class="stat-card profit">
+   475→      <div class="label">Total Profit</div>
+   476→      <div class="value">${formatGHS(s.totalProfit)}</div>
+   477→    </div>
+   478→    <div class="stat-card margin">
+   479→      <div class="label">Profit Margin</div>
+   480→      <div class="value">${profitMargin}%</div>
+   481→    </div>
+   482→    <div class="stat-card">
+   483→      <div class="label">Transactions</div>
+   484→      <div class="value">${s.totalSales.toLocaleString()}</div>
+   485→    </div>
+   486→    <div class="stat-card">
+   487→      <div class="label">Avg Transaction</div>
+   488→      <div class="value">${formatGHS(s.avgSaleValue)}</div>
+   489→    </div>
+   490→    <div class="stat-card">
+   491→      <div class="label">Items Sold</div>
+   492→      <div class="value">${s.totalItemsSold.toLocaleString()}</div>
+   493→    </div>
+   494→  </div>
+   495→
+   496→  ${dailyBreakdown.length > 0 ? `
+   497→  <h2>Daily Sales Breakdown</h2>
+   498→  <table>
+   499→    <thead><tr><th>Date</th><th class="num">Txns</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num">Items</th><th class="num">Avg Txn</th></tr></thead>
+   500→    <tbody>${dailyRows}</tbody>
+   501→  </table>` : ''}
+   502→
+   503→  ${cashierPerformance.length > 0 ? `
+   504→  <h2>Staff Performance</h2>
+   505→  <table>
+   506→    <thead><tr><th>Staff Name</th><th class="num">Txns</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num">Avg Sale</th></tr></thead>
+   507→    <tbody>${cashierRows}</tbody>
+   508→  </table>` : ''}
+   509→
+   510→  ${revenueData.length > 0 ? `
+   511→  <h2>Revenue Trend</h2>
+   512→  <table>
+   513→    <thead><tr><th>Period</th><th class="num">Revenue</th></tr></thead>
+   514→    <tbody>${revenueRows}</tbody>
+   515→  </table>` : ''}
+   516→
+   517→  ${paymentData.length > 0 ? `
+   518→  <h2>Sales by Payment Method</h2>
+   519→  <table>
+   520→    <thead><tr><th>Payment Method</th><th class="num">Amount</th></tr></thead>
+   521→    <tbody>${paymentRows}</tbody>
+   522→  </table>` : ''}
+   523→
+   524→  ${topProducts.length > 0 ? `
+   525→  <h2>Top Selling Products</h2>
+   526→  <table>
+   527→    <thead><tr><th>#</th><th>Product Name</th><th class="num">Qty Sold</th><th class="num">Revenue</th></tr></thead>
+   528→    <tbody>${productRows}</tbody>
+   529→  </table>` : ''}
+   530→
+   531→  <div class="footer">PharmaCare Pro &mdash; Auto-generated report</div>
+   532→
+   533→  <div class="no-print" style="margin-top:20px;text-align:center;">
+   534→    <button onclick="window.print()" style="padding:10px 24px;background:#047857;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>
+   535→  </div>
+   536→</body>
+   537→</html>`;
+   538→
+   539→    const win = window.open('', '_blank');
+   540→    if (win) {
+   541→      win.document.write(html);
+   542→      win.document.close();
+   543→    }
+   544→    toast.success('PDF report opened in new tab.');
+   545→  };
+   546→
+   547→  // ─── Chart Configs ──────────────────────────────────────────────
+   548→  const revenueConfig = { revenue: { label: 'Revenue', color: '#10b981' } };
+   549→  const pieConfig = { value: { label: 'Amount' } };
+   550→  const monthBarConfig = {
+   551→    revenue: { label: 'Revenue', color: '#10b981' },
+   552→    profit: { label: 'Profit', color: '#14b8a6' },
+   553→  };
+   554→
+   555→  // ─── Render ─────────────────────────────────────────────────────
+   556→  return (
+   557→    <div className="space-y-6 p-4 md:p-6">
+   558→      {/* ─── Header: Period Selector, Date Range, Export ─── */}
+   559→      <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
+   560→        <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+   561→          {/* Period Buttons */}
+   562→          <div className="flex gap-2 flex-wrap">
+   563→            {periods.map((p) => (
+   564→              <Button
+   565→                key={p.value}
+   566→                variant={period === p.value ? 'default' : 'outline'}
+   567→                size="sm"
+   568→                className={period === p.value ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : ''}
+   569→                onClick={() => setPeriod(p.value)}
+   570→              >
+   571→                {p.value === 'custom' && <CalendarDays className="h-3.5 w-3.5 mr-1.5" />}
+   572→                {p.label}
+   573→              </Button>
+   574→            ))}
+   575→          </div>
+   576→
+   577→          {/* Custom Date Range */}
+   578→          {period === 'custom' && (
+   579→            <div className="flex items-center gap-2">
+   580→              <Input
+   581→                type="date"
+   582→                value={fromDate}
+   583→                onChange={(e) => setFromDate(e.target.value)}
+   584→                className="w-[160px] h-9 text-sm"
+   585→                max={toDate}
+   586→              />
+   587→              <span className="text-muted-foreground text-sm">→</span>
+   588→              <Input
+   589→                type="date"
+   590→                value={toDate}
+   591→                onChange={(e) => setToDate(e.target.value)}
+   592→                className="w-[160px] h-9 text-sm"
+   593→                min={fromDate}
+   594→              />
+   595→              <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleApplyCustom}>
+   596→                Apply
+   597→              </Button>
+   598→            </div>
+   599→          )}
+   600→        </div>
+   601→
+   602→        {/* Export Buttons */}
+   603→        <div className="flex gap-2 flex-shrink-0">
+   604→          <Button variant="outline" size="sm" onClick={handleExportPDF} disabled={loading}>
+   605→            <Receipt className="h-4 w-4 mr-1.5" /> PDF
+   606→          </Button>
+   607→          <Button variant="outline" size="sm" onClick={handleExportExcel} disabled={loading}>
+   608→            <FileSpreadsheet className="h-4 w-4 mr-1.5" /> Excel
+   609→          </Button>
+   610→          <Button variant="outline" size="sm" onClick={handleExportCSV} disabled={loading}>
+   611→            <Download className="h-4 w-4 mr-1.5" /> CSV
+   612→          </Button>
+   613→        </div>
+   614→      </div>
+   615→
+   616→      {/* ─── KPI Cards ─── */}
+   617→      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+   618→        {loading ? (
+   619→          Array.from({ length: 6 }).map((_, i) => (
+   620→            <Card key={i}>
+   621→              <CardContent className="p-4 space-y-2">
+   622→                <Skeleton className="h-4 w-20" />
+   623→                <Skeleton className="h-7 w-28" />
+   624→              </CardContent>
+   625→            </Card>
+   626→          ))
+   627→        ) : (
+   628→          <>
+   629→            {/* Total Revenue */}
+   630→            <Card>
+   631→              <CardContent className="p-4">
+   632→                <div className="flex items-center gap-2 mb-1">
+   633→                  <div className="p-1.5 rounded-md bg-emerald-100">
+   634→                    <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
+   635→                  </div>
+   636→                  <p className="text-xs text-muted-foreground font-medium">Total Revenue</p>
+   637→                </div>
+   638→                <p className="text-lg font-bold">{formatGHS(stats?.totalRevenue ?? 0)}</p>
+   639→                <div className="flex items-center gap-1 mt-1">
+   640→                  <ArrowUpRight className="h-3 w-3 text-emerald-500" />
+   641→                  <span className="text-[11px] text-emerald-600 font-medium">Sales</span>
+   642→                </div>
+   643→              </CardContent>
+   644→            </Card>
+   645→
+   646→            {/* Total Profit */}
+   647→            <Card>
+   648→              <CardContent className="p-4">
+   649→                <div className="flex items-center gap-2 mb-1">
+   650→                  <div className="p-1.5 rounded-md bg-teal-100">
+   651→                    <TrendingUp className="h-3.5 w-3.5 text-teal-600" />
+   652→                  </div>
+   653→                  <p className="text-xs text-muted-foreground font-medium">Total Profit</p>
+   654→                </div>
+   655→                <p className="text-lg font-bold text-teal-600">{formatGHS(stats?.totalProfit ?? 0)}</p>
+   656→                <div className="flex items-center gap-1 mt-1">
+   657→                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-teal-600 border-teal-200 bg-teal-50">
+   658→                    {profitMargin}% margin
+   659→                  </Badge>
+   660→                </div>
+   661→              </CardContent>
+   662→            </Card>
+   663→
+   664→            {/* Total Transactions */}
+   665→            <Card>
+   666→              <CardContent className="p-4">
+   667→                <div className="flex items-center gap-2 mb-1">
+   668→                  <div className="p-1.5 rounded-md bg-green-100">
+   669→                    <ShoppingCart className="h-3.5 w-3.5 text-green-600" />
+   670→                  </div>
+   671→                  <p className="text-xs text-muted-foreground font-medium">Transactions</p>
+   672→                </div>
+   673→                <p className="text-lg font-bold">{(stats?.totalSales ?? 0).toLocaleString()}</p>
+   674→                <div className="flex items-center gap-1 mt-1">
+   675→                  <span className="text-[11px] text-muted-foreground">Completed orders</span>
+   676→                </div>
+   677→              </CardContent>
+   678→            </Card>
+   679→
+   680→            {/* Avg Transaction Value */}
+   681→            <Card>
+   682→              <CardContent className="p-4">
+   683→                <div className="flex items-center gap-2 mb-1">
+   684→                  <div className="p-1.5 rounded-md bg-amber-100">
+   685→                    <BarChart3 className="h-3.5 w-3.5 text-amber-600" />
+   686→                  </div>
+   687→                  <p className="text-xs text-muted-foreground font-medium">Avg Transaction</p>
+   688→                </div>
+   689→                <p className="text-lg font-bold">{formatGHS(stats?.avgSaleValue ?? 0)}</p>
+   690→                <div className="flex items-center gap-1 mt-1">
+   691→                  <span className="text-[11px] text-muted-foreground">Per transaction</span>
+   692→                </div>
+   693→              </CardContent>
+   694→            </Card>
+   695→
+   696→            {/* Items Sold */}
+   697→            <Card>
+   698→              <CardContent className="p-4">
+   699→                <div className="flex items-center gap-2 mb-1">
+   700→                  <div className="p-1.5 rounded-md bg-violet-100">
+   701→                    <Package className="h-3.5 w-3.5 text-violet-600" />
+   702→                  </div>
+   703→                  <p className="text-xs text-muted-foreground font-medium">Items Sold</p>
+   704→                </div>
+   705→                <p className="text-lg font-bold">{(stats?.totalItemsSold ?? 0).toLocaleString()}</p>
+   706→                <div className="flex items-center gap-1 mt-1">
+   707→                  <span className="text-[11px] text-muted-foreground">Units dispensed</span>
+   708→                </div>
+   709→              </CardContent>
+   710→            </Card>
+   711→
+   712→            {/* Best Selling Product */}
+   713→            <Card>
+   714→              <CardContent className="p-4">
+   715→                <div className="flex items-center gap-2 mb-1">
+   716→                  <div className="p-1.5 rounded-md bg-rose-100">
+   717→                    <Trophy className="h-3.5 w-3.5 text-rose-600" />
+   718→                  </div>
+   719→                  <p className="text-xs text-muted-foreground font-medium">Best Seller</p>
+   720→                </div>
+   721→                <p className="text-sm font-bold truncate" title={stats?.bestProduct?.name ?? 'N/A'}>
+   722→                  {stats?.bestProduct?.name ?? 'N/A'}
+   723→                </p>
+   724→                <div className="flex items-center gap-1 mt-1">
+   725→                  <ArrowUpRight className="h-3 w-3 text-emerald-500" />
+   726→                  <span className="text-[11px] text-emerald-600 font-medium">
+   727→                    {stats?.bestProduct?.quantity ?? 0} units
+   728→                  </span>
+   729→                </div>
+   730→              </CardContent>
+   731→            </Card>
+   732→          </>
+   733→        )}
+   734→      </div>
+   735→
+   736→      {/* ─── Charts Row ─── */}
+   737→      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+   738→        {/* Revenue Chart */}
+   739→        <Card>
+   740→          <CardHeader className="pb-2">
+   741→            <CardTitle className="text-base font-semibold">Revenue Trend</CardTitle>
+   742→          </CardHeader>
+   743→          <CardContent>
+   744→            {loading ? (
+   745→              <Skeleton className="h-64 w-full" />
+   746→            ) : revenueData.length > 0 ? (
+   747→              <ChartContainer config={revenueConfig} className="h-64">
+   748→                <AreaChart data={revenueData}>
+   749→                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+   750→                  <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} />
+   751→                  <YAxis fontSize={11} tickLine={false} axisLine={false} />
+   752→                  <ChartTooltip content={<ChartTooltipContent />} />
+   753→                  <defs>
+   754→                    <linearGradient id="reportRevenueGrad" x1="0" y1="0" x2="0" y2="1">
+   755→                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+   756→                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+   757→                    </linearGradient>
+   758→                  </defs>
+   759→                  <Area type="monotone" dataKey="value" stroke="var(--color-revenue)" fill="url(#reportRevenueGrad)" strokeWidth={2} />
+   760→                </AreaChart>
+   761→              </ChartContainer>
+   762→            ) : (
+   763→              <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+   764→                No revenue data for this period
+   765→              </div>
+   766→            )}
+   767→          </CardContent>
+   768→        </Card>
+   769→
+   770→        {/* Payment Method Pie Chart */}
+   771→        <Card>
+   772→          <CardHeader className="pb-2">
+   773→            <CardTitle className="text-base font-semibold">Sales by Payment Method</CardTitle>
+   774→          </CardHeader>
+   775→          <CardContent>
+   776→            {loading ? (
+   777→              <Skeleton className="h-64 w-full" />
+   778→            ) : paymentData.length > 0 ? (
+   779→              <ChartContainer config={pieConfig} className="h-64">
+   780→                <PieChart>
+   781→                  <Pie
+   782→                    data={paymentData}
+   783→                    cx="50%"
+   784→                    cy="50%"
+   785→                    innerRadius={60}
+   786→                    outerRadius={90}
+   787→                    paddingAngle={4}
+   788→                    dataKey="value"
+   789→                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+   790→                    labelLine={false}
+   791→                    fontSize={12}
+   792→                  >
+   793→                    {paymentData.map((_, index) => (
+   794→                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+   795→                    ))}
+   796→                  </Pie>
+   797→                  <ChartTooltip content={<ChartTooltipContent />} />
+   798→                </PieChart>
+   799→              </ChartContainer>
+   800→            ) : (
+   801→              <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
+   802→                No payment data for this period
+   803→              </div>
+   804→            )}
+   805→          </CardContent>
+   806→        </Card>
+   807→      </div>
+   808→
+   809→      {/* ─── Monthly Summary (shown for yearly or long custom ranges) ─── */}
+   810→      {showMonthly && !loading && (
+   811→        <Card>
+   812→          <CardHeader className="pb-2">
+   813→            <div className="flex items-center justify-between">
+   814→              <CardTitle className="text-base font-semibold">Monthly Summary</CardTitle>
+   815→              <Badge variant="outline" className="text-emerald-600 border-emerald-200 bg-emerald-50">
+   816→                {monthlySummary.length} months
+   817→              </Badge>
+   818→            </div>
+   819→          </CardHeader>
+   820→          <CardContent>
+   821→            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+   822→              {monthlySummary.map((m) => {
+   823→                const isBest = bestMonth && m.month === bestMonth.month && m.year === bestMonth.year;
+   824→                const barWidth = maxMonthRevenue > 0 ? (m.revenue / maxMonthRevenue) * 100 : 0;
+   825→                return (
+   826→                  <Card
+   827→                    key={`${m.year}-${m.monthIndex}`}
+   828→                    className={`p-3 transition-colors ${isBest ? 'ring-2 ring-emerald-500 bg-emerald-50' : ''}`}
+   829→                  >
+   830→                    <div className="space-y-2">
+   831→                      <div className="flex items-center justify-between">
+   832→                        <p className="font-semibold text-sm">{m.month}</p>
+   833→                        {isBest && (
+   834→                          <Badge className="bg-emerald-600 text-white text-[9px] px-1.5 py-0">
+   835→                            <Trophy className="h-2.5 w-2.5 mr-0.5" /> Best
+   836→                          </Badge>
+   837→                        )}
+   838→                      </div>
+   839→                      <p className="text-lg font-bold">{formatGHS(m.revenue)}</p>
+   840→                      <p className="text-xs text-muted-foreground">
+   841→                        Profit: <span className="text-teal-600 font-medium">{formatGHS(m.profit)}</span>
+   842→                      </p>
+   843→                      <p className="text-xs text-muted-foreground">
+   844→                        {m.sales} sales · {m.items} items
+   845→                      </p>
+   846→                      {/* Mini bar indicator */}
+   847→                      <div className="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+   848→                        <div
+   849→                          className="h-full bg-emerald-500 rounded-full transition-all"
+   850→                          style={{ width: `${barWidth}%` }}
+   851→                        />
+   852→                      </div>
+   853→                    </div>
+   854→                  </Card>
+   855→                );
+   856→              })}
+   857→            </div>
+   858→
+   859→            {/* Monthly bar chart */}
+   860→            {monthlySummary.length > 1 && (
+   861→              <div className="mt-6">
+   862→                <ChartContainer config={monthBarConfig} className="h-48">
+   863→                  <BarChart data={monthlySummary}>
+   864→                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+   865→                    <XAxis dataKey="month" fontSize={11} tickLine={false} axisLine={false} />
+   866→                    <YAxis fontSize={11} tickLine={false} axisLine={false} />
+   867→                    <ChartTooltip content={<ChartTooltipContent />} />
+   868→                    <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[4, 4, 0, 0]} />
+   869→                    <Bar dataKey="profit" fill="var(--color-profit)" radius={[4, 4, 0, 0]} />
+   870→                  </BarChart>
+   871→                </ChartContainer>
+   872→              </div>
+   873→            )}
+   874→          </CardContent>
+   875→        </Card>
+   876→      )}
+   877→
+   878→      {/* ─── Daily Sales Breakdown Table ─── */}
+   879→      <Card>
+   880→        <CardHeader className="pb-2">
+   881→          <div className="flex items-center justify-between">
+   882→            <CardTitle className="text-base font-semibold">Daily Sales Breakdown</CardTitle>
+   883→            <Badge variant="outline" className="text-muted-foreground">
+   884→              {dailyBreakdown.length} days
+   885→            </Badge>
+   886→          </div>
+   887→        </CardHeader>
+   888→        <CardContent>
+   889→          <div className="max-h-[500px] overflow-y-auto">
+   890→            <Table>
+   891→              <TableHeader>
+   892→                <TableRow>
+   893→                  <TableHead>Date</TableHead>
+   894→                  <TableHead className="text-right">Transactions</TableHead>
+   895→                  <TableHead className="text-right">Revenue (GHS)</TableHead>
+   896→                  <TableHead className="text-right">Profit (GHS)</TableHead>
+   897→                  <TableHead className="text-right">Items Sold</TableHead>
+   898→                  <TableHead className="text-right">Avg. Transaction</TableHead>
+   899→                </TableRow>
+   900→              </TableHeader>
+   901→              <TableBody>
+   902→                {loading ? (
+   903→                  Array.from({ length: 8 }).map((_, i) => (
+   904→                    <TableRow key={i}>
+   905→                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+   906→                      <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+   907→                      <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+   908→                      <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+   909→                      <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+   910→                      <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+   911→                    </TableRow>
+   912→                  ))
+   913→                ) : dailyBreakdown.length > 0 ? (
+   914→                  <>
+   915→                    {dailyBreakdown.map((d) => {
+   916→                      const isHighest = highestRevenueDay?.date === d.date;
+   917→                      const avgTxn = d.sales > 0 ? d.revenue / d.sales : 0;
+   918→                      return (
+   919→                        <TableRow
+   920→                          key={d.date}
+   921→                          className={isHighest ? 'bg-emerald-50 hover:bg-emerald-100' : ''}
+   922→                        >
+   923→                          <TableCell className="font-medium">
+   924→                            <div className="flex items-center gap-2">
+   925→                              {isHighest && (
+   926→                                <ArrowUpRight className="h-3.5 w-3.5 text-emerald-600" />
+   927→                              )}
+   928→                              {d.date}
+   929→                            </div>
+   930→                          </TableCell>
+   931→                          <TableCell className="text-right font-mono">{d.sales}</TableCell>
+   932→                          <TableCell className="text-right font-medium">{formatGHS(d.revenue)}</TableCell>
+   933→                          <TableCell className="text-right text-teal-600 font-medium">{formatGHS(d.profit)}</TableCell>
+   934→                          <TableCell className="text-right font-mono">{d.items}</TableCell>
+   935→                          <TableCell className="text-right font-mono text-muted-foreground">{formatGHS(avgTxn)}</TableCell>
+   936→                        </TableRow>
+   937→                      );
+   938→                    })}
+   939→                    {/* Totals Row */}
+   940→                    <TableRow className="bg-gray-50 font-semibold border-t-2 border-gray-200">
+   941→                      <TableCell>Totals</TableCell>
+   942→                      <TableCell className="text-right font-mono">{dailyTotals.sales}</TableCell>
+   943→                      <TableCell className="text-right">{formatGHS(dailyTotals.revenue)}</TableCell>
+   944→                      <TableCell className="text-right text-teal-600">{formatGHS(dailyTotals.profit)}</TableCell>
+   945→                      <TableCell className="text-right font-mono">{dailyTotals.items}</TableCell>
+   946→                      <TableCell className="text-right font-mono">
+   947→                        {dailyTotals.sales > 0
+   948→                          ? formatGHS(dailyTotals.revenue / dailyTotals.sales)
+   949→                          : formatGHS(0)}
+   950→                      </TableCell>
+   951→                    </TableRow>
+   952→                  </>
+   953→                ) : (
+   954→                  <TableRow>
+   955→                    <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+   956→                      No sales data for this period
+   957→                    </TableCell>
+   958→                  </TableRow>
+   959→                )}
+   960→              </TableBody>
+   961→            </Table>
+   962→          </div>
+   963→        </CardContent>
+   964→      </Card>
+   965→
+   966→      {/* ─── Cashier / Staff Performance ─── */}
+   967→      {cashierPerformance.length > 0 && !loading && (
+   968→        <Card>
+   969→          <CardHeader className="pb-2">
+   970→            <div className="flex items-center justify-between">
+   971→              <div className="flex items-center gap-2">
+   972→                <Users className="h-4 w-4 text-emerald-600" />
+   973→                <CardTitle className="text-base font-semibold">Staff Performance</CardTitle>
+   974→              </div>
+   975→              <Badge variant="outline" className="text-muted-foreground">
+   976→                {cashierPerformance.length} staff
+   977→              </Badge>
+   978→            </div>
+   979→          </CardHeader>
+   980→          <CardContent>
+   981→            <Table>
+   982→              <TableHeader>
+   983→                <TableRow>
+   984→                  <TableHead>Staff Member</TableHead>
+   985→                  <TableHead className="text-right">Transactions</TableHead>
+   986→                  <TableHead className="text-right">Revenue (GHS)</TableHead>
+   987→                  <TableHead className="text-right">Profit (GHS)</TableHead>
+   988→                  <TableHead className="text-right">Avg. Sale Value</TableHead>
+   989→                </TableRow>
+   990→              </TableHeader>
+   991→              <TableBody>
+   992→                {cashierPerformance.map((c) => {
+   993→                  const isTop = topCashier?.userId === c.userId;
+   994→                  const avgSale = c.sales > 0 ? c.revenue / c.sales : 0;
+   995→                  return (
+   996→                    <TableRow key={c.userId} className={isTop ? 'bg-emerald-50 hover:bg-emerald-100' : ''}>
+   997→                      <TableCell>
+   998→                        <div className="flex items-center gap-3">
+   999→                          <Avatar className="h-8 w-8">
+  1000→                            <AvatarFallback
+  1001→                              className={`text-xs font-semibold ${isTop ? 'bg-emerald-600 text-white' : 'bg-gray-200 text-gray-600'}`}
+  1002→                            >
+  1003→                              {getInitials(c.name)}
+  1004→                            </AvatarFallback>
+  1005→                          </Avatar>
+  1006→                          <div className="flex items-center gap-2">
+  1007→                            <span className="font-medium">{c.name}</span>
+  1008→                            {isTop && (
+  1009→                              <Badge className="bg-emerald-600 text-white text-[10px] px-1.5 py-0">
+  1010→                                <Trophy className="h-2.5 w-2.5 mr-0.5" /> Top
+  1011→                              </Badge>
+  1012→                            )}
+  1013→                          </div>
+  1014→                        </div>
+  1015→                      </TableCell>
+  1016→                      <TableCell className="text-right font-mono">{c.sales}</TableCell>
+  1017→                      <TableCell className="text-right font-medium">{formatGHS(c.revenue)}</TableCell>
+  1018→                      <TableCell className="text-right text-teal-600 font-medium">{formatGHS(c.profit)}</TableCell>
+  1019→                      <TableCell className="text-right font-mono text-muted-foreground">{formatGHS(avgSale)}</TableCell>
+  1020→                    </TableRow>
+  1021→                  );
+  1022→                })}
+  1023→              </TableBody>
+  1024→            </Table>
+  1025→          </CardContent>
+  1026→        </Card>
+  1027→      )}
+  1028→
+  1029→      {/* ─── Top Products Table ─── */}
+  1030→      <Card>
+  1031→        <CardHeader className="pb-2">
+  1032→          <CardTitle className="text-base font-semibold">Top Selling Products</CardTitle>
+  1033→        </CardHeader>
+  1034→        <CardContent>
+  1035→          <div className="max-h-[500px] overflow-y-auto">
+  1036→            <Table>
+  1037→              <TableHeader>
+  1038→                <TableRow>
+  1039→                  <TableHead>#</TableHead>
+  1040→                  <TableHead>Product Name</TableHead>
+  1041→                  <TableHead className="text-right">Quantity Sold</TableHead>
+  1042→                  <TableHead className="text-right">Revenue</TableHead>
+  1043→                </TableRow>
+  1044→              </TableHeader>
+  1045→              <TableBody>
+  1046→                {loading ? (
+  1047→                  Array.from({ length: 5 }).map((_, i) => (
+  1048→                    <TableRow key={i}>
+  1049→                      <TableCell><Skeleton className="h-4 w-4" /></TableCell>
+  1050→                      <TableCell><Skeleton className="h-4 w-40" /></TableCell>
+  1051→                      <TableCell><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
+  1052→                      <TableCell><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
+  1053→                    </TableRow>
+  1054→                  ))
+  1055→                ) : topProducts.length > 0 ? (
+  1056→                  topProducts.map((product, i) => (
+  1057→                    <TableRow key={i}>
+  1058→                      <TableCell className="font-medium">{i + 1}</TableCell>
+  1059→                      <TableCell>
+  1060→                        <div className="flex items-center gap-2">
+  1061→                          <Badge
+  1062→                            variant="outline"
+  1063→                            className={`text-[10px] px-1.5 py-0 ${
+  1064→                              i === 0
+  1065→                                ? 'bg-amber-50 text-amber-700 border-amber-200'
+  1066→                                : i === 1
+  1067→                                  ? 'bg-gray-100 text-gray-600 border-gray-300'
+  1068→                                  : i === 2
+  1069→                                    ? 'bg-orange-50 text-orange-700 border-orange-200'
+  1070→                                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+  1071→                            }`}
+  1072→                          >
+  1073→                            {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
+  1074→                          </Badge>
+  1075→                          {product.name}
+  1076→                        </div>
+  1077→                      </TableCell>
+  1078→                      <TableCell className="text-right font-mono">{product.quantity}</TableCell>
+  1079→                      <TableCell className="text-right font-medium">{formatGHS(product.revenue)}</TableCell>
+  1080→                    </TableRow>
+  1081→                  ))
+  1082→                ) : (
+  1083→                  <TableRow>
+  1084→                    <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+  1085→                      No product data for this period
+  1086→                    </TableCell>
+  1087→                  </TableRow>
+  1088→                )}
+  1089→              </TableBody>
+  1090→            </Table>
+  1091→          </div>
+  1092→        </CardContent>
+  1093→      </Card>
+  1094→    </div>
+  1095→  );
+  1096→}

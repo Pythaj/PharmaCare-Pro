@@ -42,11 +42,11 @@ interface NavSection {
 }
 
 const navSections: NavSection[] = [
+  // Admin navigation — full access to all sections
   {
-    title: 'MAIN',
+    title: 'OVERVIEW',
     items: [
       { label: 'Dashboard', page: 'admin-dashboard', icon: LayoutDashboard, roles: ['admin'] },
-      { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard, roles: ['sales'] },
     ],
   },
   {
@@ -54,14 +54,14 @@ const navSections: NavSection[] = [
     items: [
       { label: 'POS', page: 'pos', icon: ShoppingCart, roles: ['admin', 'sales'] },
       { label: 'Products', page: 'products', icon: Package, roles: ['admin', 'sales'] },
-      { label: 'Inventory', page: 'inventory', icon: Warehouse, roles: ['admin', 'sales'] },
+      { label: 'Inventory', page: 'inventory', icon: Warehouse, roles: ['admin'] },
       { label: 'Customers', page: 'customers', icon: Users, roles: ['admin', 'sales'] },
     ],
   },
   {
     title: 'PROCUREMENT',
     items: [
-      { label: 'Purchases', page: 'purchases', icon: Truck, roles: ['admin', 'sales'] },
+      { label: 'Purchases', page: 'purchases', icon: Truck, roles: ['admin'] },
       { label: 'Suppliers', page: 'suppliers', icon: Building2, roles: ['admin'] },
     ],
   },
@@ -73,17 +73,33 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: 'REPORTS',
+    title: 'ANALYTICS',
     items: [
       { label: 'Reports', page: 'reports', icon: BarChart3, roles: ['admin'] },
     ],
   },
   {
-    title: 'ADMIN',
+    title: 'MANAGEMENT',
     items: [
       { label: 'Users', page: 'users', icon: UserCog, roles: ['admin'] },
       { label: 'Audit Logs', page: 'audit-logs', icon: FileText, roles: ['admin'] },
       { label: 'Settings', page: 'settings', icon: Settings, roles: ['admin'] },
+    ],
+  },
+  // Sales person navigation — clean, minimal, no admin hints
+  {
+    title: 'MENU',
+    items: [
+      { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard, roles: ['sales'] },
+    ],
+  },
+  {
+    title: 'SALES',
+    items: [
+      { label: 'POS', page: 'pos', icon: ShoppingCart, roles: ['sales'] },
+      { label: 'Products', page: 'products', icon: Package, roles: ['sales'] },
+      { label: 'Sales History', page: 'sales-history', icon: Receipt, roles: ['sales'] },
+      { label: 'Customers', page: 'customers', icon: Users, roles: ['sales'] },
     ],
   },
 ];
@@ -287,23 +303,20 @@ export function Sidebar() {
                 <p className="truncate text-sm font-medium text-white">
                   {currentUser?.name || 'User'}
                 </p>
+                {isAdmin && (
                 <Badge
                   variant="secondary"
-                  className={cn(
-                    'mt-0.5 text-[10px] font-medium px-1.5 py-0 h-4',
-                    currentUser?.role === 'admin'
-                      ? 'bg-amber-500/15 text-amber-400 border-amber-500/20'
-                      : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
-                  )}
+                  className="mt-0.5 text-[10px] font-medium px-1.5 py-0 h-4 bg-amber-500/15 text-amber-400 border-amber-500/20"
                 >
-                  {currentUser?.role === 'admin' ? 'Administrator' : 'Sales Person'}
+                  Administrator
                 </Badge>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
-          {sidebarOpen && (
+          {sidebarOpen && isAdmin && (
             <span className="ml-auto text-[10px] text-slate-500">
-              {isAdmin ? 'Settings →' : 'Profile →'}
+              Settings →
             </span>
           )}
         </button>

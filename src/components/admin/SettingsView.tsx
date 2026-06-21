@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Save,
   Building2,
@@ -25,6 +25,15 @@ import {
   DollarSign,
   FileText,
   ToggleLeft,
+  Palette,
+  Globe,
+  Timer,
+  Lock,
+  Activity,
+  HardDrive,
+  Store,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -33,6 +42,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Select,
   SelectContent,
@@ -56,30 +66,39 @@ import { toast } from 'sonner';
 // ─── Types ───────────────────────────────────────────────────────
 
 interface PharmacyInfo {
+  appName: string;
   name: string;
+  tagline: string;
   address: string;
   phone: string;
   email: string;
   taxRate: number;
   logoUrl: string;
+  faviconUrl: string;
 }
 
 interface ReceiptSettings {
   headerText: string;
   footerText: string;
   width: string;
+  showTax: boolean;
+  showDiscount: boolean;
 }
 
 interface DisplaySettings {
   currency: string;
   dateFormat: string;
   timeFormat: string;
+  primaryColor: string;
 }
 
 interface POSSettings {
   defaultPaymentMethod: string;
   autoPrintReceipt: boolean;
   defaultDiscount: number;
+  requireCustomer: boolean;
+  allowNegativeStock: boolean;
+  maxLineItems: number;
 }
 
 interface NotificationSettings {
@@ -88,12 +107,27 @@ interface NotificationSettings {
   enableNotifications: boolean;
 }
 
+interface BusinessSettings {
+  enableHours: boolean;
+  openTime: string;
+  closeTime: string;
+  closedDays: string;
+}
+
+interface DataSettings {
+  autoBackup: string;
+  sessionTimeout: number;
+  requirePassword: boolean;
+}
+
 interface AllSettings {
   pharmacy: PharmacyInfo;
   receipt: ReceiptSettings;
   display: DisplaySettings;
   pos: POSSettings;
   notifications: NotificationSettings;
+  business: BusinessSettings;
+  data: DataSettings;
 }
 
 // ─── Helpers: flatten / unflatten settings for API ─────────────
@@ -135,38 +169,79 @@ function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
   return result as unknown as Partial<AllSettings>;
 }
 
-// ─── Defaults ────────────────────────────────────────────────────
+// ─── Constants ──────────────────────────────────────────────────
 
 const STORAGE_KEY = 'pharmacy_settings';
 
+const COLOR_SWATCHES = [
+  { name: 'Emerald', value: 'emerald', className: 'bg-emerald-500' },
+  { name: 'Blue', value: 'blue', className: 'bg-blue-500' },
+  { name: 'Violet', value: 'violet', className: 'bg-violet-500' },
+  { name: 'Rose', value: 'rose', className: 'bg-rose-500' },
+  { name: 'Amber', value: 'amber', className: 'bg-amber-500' },
+  { name: 'Teal', value: 'teal', className: 'bg-teal-500' },
+];
+
+const DAYS_OF_WEEK = [
+  { label: 'Sunday', value: '0' },
+  { label: 'Monday', value: '1' },
+  { label: 'Tuesday', value: '2' },
+  { label: 'Wednesday', value: '3' },
+  { label: 'Thursday', value: '4' },
+  { label: 'Friday', value: '5' },
+  { label: 'Saturday', value: '6' },
+];
+
+// ─── Defaults ────────────────────────────────────────────────────
+
 const defaults: AllSettings = {
   pharmacy: {
+    appName: 'PharmaCare Pro',
     name: 'GreenLife Pharmacy',
+    tagline: 'Pharmacy Management',
     address: '123 Health Street, Accra, Ghana',
     phone: '+233 30 123 4567',
     email: 'info@greenlifepharmacy.com',
     taxRate: 12.5,
     logoUrl: '',
+    faviconUrl: '',
   },
   receipt: {
     headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
     footerText: 'Thank you for your purchase!',
     width: '80mm',
+    showTax: true,
+    showDiscount: false,
   },
   display: {
     currency: 'GHS',
     dateFormat: 'dd/MM/yyyy',
     timeFormat: 'HH:mm',
+    primaryColor: 'emerald',
   },
   pos: {
     defaultPaymentMethod: 'cash',
     autoPrintReceipt: true,
     defaultDiscount: 0,
+    requireCustomer: false,
+    allowNegativeStock: false,
+    maxLineItems: 50,
   },
   notifications: {
     lowStockThreshold: 10,
     expiryAlertDays: 30,
     enableNotifications: true,
+  },
+  business: {
+    enableHours: false,
+    openTime: '08:00',
+    closeTime: '18:00',
+    closedDays: '0',
+  },
+  data: {
+    autoBackup: 'off',
+    sessionTimeout: 480,
+    requirePassword: true,
   },
 };
 
@@ -178,10 +253,29 @@ export default function SettingsView() {
   const [display, setDisplay] = useState<DisplaySettings>(defaults.display);
   const [pos, setPos] = useState<POSSettings>(defaults.pos);
   const [notifications, setNotifications] = useState<NotificationSettings>(defaults.notifications);
+  const [business, setBusiness] = useState<BusinessSettings>(defaults.business);
+  const [data, setData] = useState<DataSettings>(defaults.data);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [saved, setSaved] = useState(false);
+
+  // System uptime tracking
+  const loadTimeRef = useRef(Date.now());
+  const [uptime, setUptime] = useState('0m 0s');
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - loadTimeRef.current) / 1000);
+      const h = Math.floor(elapsed / 3600);
+      const m = Math.floor((elapsed % 3600) / 60);
+      const s = elapsed % 60;
+      if (h > 0) setUptime(`${h}h ${m}m ${s}s`);
+      else if (m > 0) setUptime(`${m}m ${s}s`);
+      else setUptime(`${s}s`);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load settings from API first, then fall back to localStorage
   useEffect(() => {
@@ -191,6 +285,8 @@ export default function SettingsView() {
       if (s.display) setDisplay({ ...defaults.display, ...s.display });
       if (s.pos) setPos({ ...defaults.pos, ...s.pos });
       if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
+      if (s.business) setBusiness({ ...defaults.business, ...s.business });
+      if (s.data) setData({ ...defaults.data, ...s.data });
     };
 
     (async () => {
@@ -208,6 +304,8 @@ export default function SettingsView() {
               display: { ...defaults.display, ...unflat.display },
               pos: { ...defaults.pos, ...unflat.pos },
               notifications: { ...defaults.notifications, ...unflat.notifications },
+              business: { ...defaults.business, ...unflat.business },
+              data: { ...defaults.data, ...unflat.data },
             }));
             return;
           }
@@ -230,8 +328,8 @@ export default function SettingsView() {
 
   // Gather all settings into one object
   const gatherSettings = useCallback((): AllSettings => {
-    return { pharmacy, receipt, display, pos, notifications };
-  }, [pharmacy, receipt, display, pos, notifications]);
+    return { pharmacy, receipt, display, pos, notifications, business, data };
+  }, [pharmacy, receipt, display, pos, notifications, business, data]);
 
   // Save all settings at once (API first, localStorage as backup)
   const handleSave = async () => {
@@ -335,6 +433,33 @@ export default function SettingsView() {
     }
   };
 
+  // Toggle a day in closedDays
+  const toggleClosedDay = (dayValue: string) => {
+    const currentDays = business.closedDays
+      ? business.closedDays.split(',').filter(Boolean)
+      : [];
+    const idx = currentDays.indexOf(dayValue);
+    if (idx >= 0) {
+      currentDays.splice(idx, 1);
+    } else {
+      currentDays.push(dayValue);
+      currentDays.sort((a, b) => Number(a) - Number(b));
+    }
+    setBusiness({ ...business, closedDays: currentDays.join(',') });
+  };
+
+  // Reset all settings to defaults
+  const handleReset = () => {
+    setPharmacy(defaults.pharmacy);
+    setReceipt(defaults.receipt);
+    setDisplay(defaults.display);
+    setPos(defaults.pos);
+    setNotifications(defaults.notifications);
+    setBusiness(defaults.business);
+    setData(defaults.data);
+    toast.info('Settings reset to defaults');
+  };
+
   // ─── Section card helper ────────────────────────────────────────
   const sectionHeader = (icon: React.ReactNode, title: string, description?: string) => (
     <CardHeader className="pb-4">
@@ -350,6 +475,32 @@ export default function SettingsView() {
         </CardDescription>
       )}
     </CardHeader>
+  );
+
+  // Toggle row helper
+  const toggleRow = (
+    id: string,
+    icon: React.ReactNode,
+    label: string,
+    description: string,
+    checked: boolean,
+    onChange: (val: boolean) => void,
+  ) => (
+    <div className="flex items-center justify-between rounded-lg border p-3">
+      <div className="space-y-0.5">
+        <Label htmlFor={id} className="text-sm font-medium flex items-center gap-1.5">
+          {icon}
+          {label}
+        </Label>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      <Switch
+        id={id}
+        checked={checked}
+        onCheckedChange={onChange}
+        className="data-[state=checked]:bg-emerald-600"
+      />
+    </div>
   );
 
   return (
@@ -380,12 +531,12 @@ export default function SettingsView() {
 
       <Separator />
 
-      {/* 1. Pharmacy Information */}
+      {/* 1. App Branding */}
       <Card className="overflow-hidden border-emerald-100 dark:border-emerald-950/50">
         {sectionHeader(
-          <Building2 className="h-4 w-4" />,
-          'Pharmacy Information',
-          'Basic details about your pharmacy',
+          <Palette className="h-4 w-4" />,
+          'App Branding',
+          'Customize your app name, logo, and visual identity',
         )}
         <CardContent className="space-y-4 pt-0">
           {/* Logo URL */}
@@ -406,7 +557,7 @@ export default function SettingsView() {
             )}
             <div className="flex-1 min-w-0">
               <Label htmlFor="pharmacy-logo-url" className="text-sm font-medium">
-                Pharmacy Logo URL
+                Logo URL
               </Label>
               <Input
                 id="pharmacy-logo-url"
@@ -418,21 +569,111 @@ export default function SettingsView() {
             </div>
           </div>
 
-          <div>
-            <Label htmlFor="pharmacy-name" className="text-sm font-medium">
-              Pharmacy Name
-            </Label>
-            <div className="relative mt-1.5">
-              <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                id="pharmacy-name"
-                value={pharmacy.name}
-                onChange={(e) => setPharmacy({ ...pharmacy, name: e.target.value })}
-                className="pl-10"
-                placeholder="Enter pharmacy name"
-              />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="app-name" className="text-sm font-medium">
+                App Display Name
+              </Label>
+              <div className="relative mt-1.5">
+                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="app-name"
+                  value={pharmacy.appName}
+                  onChange={(e) => setPharmacy({ ...pharmacy, appName: e.target.value })}
+                  className="pl-10"
+                  placeholder="PharmaCare Pro"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Shown in sidebar and header</p>
+            </div>
+            <div>
+              <Label htmlFor="pharmacy-name" className="text-sm font-medium">
+                Pharmacy Name
+              </Label>
+              <div className="relative mt-1.5">
+                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="pharmacy-name"
+                  value={pharmacy.name}
+                  onChange={(e) => setPharmacy({ ...pharmacy, name: e.target.value })}
+                  className="pl-10"
+                  placeholder="Enter pharmacy name"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Business name for receipts</p>
             </div>
           </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="pharmacy-tagline" className="text-sm font-medium">
+                Tagline
+              </Label>
+              <div className="relative mt-1.5">
+                <Store className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="pharmacy-tagline"
+                  value={pharmacy.tagline}
+                  onChange={(e) => setPharmacy({ ...pharmacy, tagline: e.target.value })}
+                  className="pl-10"
+                  placeholder="Pharmacy Management"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Shown in sidebar under logo</p>
+            </div>
+            <div>
+              <Label htmlFor="favicon-url" className="text-sm font-medium">
+                Favicon URL
+              </Label>
+              <div className="relative mt-1.5">
+                <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  id="favicon-url"
+                  value={pharmacy.faviconUrl}
+                  onChange={(e) => setPharmacy({ ...pharmacy, faviconUrl: e.target.value })}
+                  className="pl-10"
+                  placeholder="https://example.com/favicon.ico"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Browser tab icon (optional)</p>
+            </div>
+          </div>
+
+          <div>
+            <Label className="text-sm font-medium">Primary Color</Label>
+            <p className="text-xs text-muted-foreground mb-2">Choose the app&apos;s accent color theme</p>
+            <div className="flex flex-wrap gap-2">
+              {COLOR_SWATCHES.map((swatch) => (
+                <button
+                  key={swatch.value}
+                  type="button"
+                  onClick={() => setDisplay({ ...display, primaryColor: swatch.value })}
+                  className={`group flex items-center gap-2 rounded-lg border-2 px-3 py-2 transition-all ${
+                    display.primaryColor === swatch.value
+                      ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'
+                      : 'border-transparent bg-muted/50 hover:bg-muted'
+                  }`}
+                >
+                  <span
+                    className={`h-5 w-5 rounded-full shadow-sm ring-2 ring-offset-2 ring-offset-background ${
+                      display.primaryColor === swatch.value ? 'ring-emerald-600' : 'ring-transparent'
+                    } ${swatch.className}`}
+                  />
+                  <span
+                    className={`text-xs font-medium ${
+                      display.primaryColor === swatch.value
+                        ? 'text-emerald-700 dark:text-emerald-300'
+                        : 'text-muted-foreground'
+                    }`}
+                  >
+                    {swatch.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <Separator className="my-2" />
 
           <div>
             <Label htmlFor="pharmacy-address" className="text-sm font-medium">
@@ -506,18 +747,19 @@ export default function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* 2. Receipt Settings */}
+      {/* 2. Receipt Customization */}
       <Card className="overflow-hidden">
         {sectionHeader(
           <Receipt className="h-4 w-4" />,
-          'Receipt Settings',
-          'Customize receipt appearance and content',
+          'Receipt Customization',
+          'Configure what appears on printed receipts',
         )}
         <CardContent className="space-y-4 pt-0">
           <div>
             <Label htmlFor="receipt-header" className="text-sm font-medium">
-              Receipt Header Text
+              Header Line 1
             </Label>
+            <p className="text-xs text-muted-foreground mb-1.5">Pharmacy name and tagline on receipt</p>
             <Textarea
               id="receipt-header"
               value={receipt.headerText}
@@ -528,8 +770,9 @@ export default function SettingsView() {
           </div>
           <div>
             <Label htmlFor="receipt-footer" className="text-sm font-medium">
-              Receipt Footer Text
+              Footer Message
             </Label>
+            <p className="text-xs text-muted-foreground mb-1.5">Thank you message or contact info</p>
             <Textarea
               id="receipt-footer"
               value={receipt.footerText}
@@ -538,6 +781,26 @@ export default function SettingsView() {
               placeholder="Footer text for receipts"
             />
           </div>
+
+          <div className="space-y-3">
+            {toggleRow(
+              'show-tax-receipt',
+              <Percent className="h-3.5 w-3.5 text-muted-foreground" />,
+              'Show Tax on Receipt',
+              'Display the tax breakdown line on printed receipts',
+              receipt.showTax,
+              (checked) => setReceipt({ ...receipt, showTax: checked }),
+            )}
+            {toggleRow(
+              'show-discount-receipt',
+              <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />,
+              'Show Discount on Receipt',
+              'Display applied discounts as a separate line item',
+              receipt.showDiscount,
+              (checked) => setReceipt({ ...receipt, showDiscount: checked }),
+            )}
+          </div>
+
           <div className="w-full sm:w-1/2">
             <Label htmlFor="receipt-width" className="text-sm font-medium">
               Receipt Width
@@ -559,7 +822,117 @@ export default function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* 3. Display Settings */}
+      {/* 3. POS Configuration */}
+      <Card className="overflow-hidden">
+        {sectionHeader(
+          <ShoppingCart className="h-4 w-4" />,
+          'POS Configuration',
+          'Point-of-sale behavior, defaults, and constraints',
+        )}
+        <CardContent className="space-y-4 pt-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-sm font-medium flex items-center gap-1.5">
+                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+                Default Payment Method
+              </Label>
+              <Select
+                value={pos.defaultPaymentMethod}
+                onValueChange={(v) => setPos({ ...pos, defaultPaymentMethod: v })}
+              >
+                <SelectTrigger className="mt-1.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="cash">Cash</SelectItem>
+                  <SelectItem value="card">Card</SelectItem>
+                  <SelectItem value="mobile_money">Mobile Money</SelectItem>
+                  <SelectItem value="insurance">Insurance</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="default-discount" className="text-sm font-medium flex items-center gap-1.5">
+                <Percent className="h-3.5 w-3.5 text-muted-foreground" />
+                Default Discount (%)
+              </Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="default-discount"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.5"
+                  value={pos.defaultDiscount}
+                  onChange={(e) => setPos({ ...pos, defaultDiscount: Number(e.target.value) || 0 })}
+                  placeholder="0"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                  %
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label htmlFor="max-line-items" className="text-sm font-medium flex items-center gap-1.5">
+                <ShoppingCart className="h-3.5 w-3.5 text-muted-foreground" />
+                Max Line Items
+              </Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="max-line-items"
+                  type="number"
+                  min="1"
+                  max="200"
+                  value={pos.maxLineItems}
+                  onChange={(e) =>
+                    setPos({
+                      ...pos,
+                      maxLineItems: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
+                    })
+                  }
+                  placeholder="50"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                  items
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Max items allowed in a single sale cart</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {toggleRow(
+              'auto-print',
+              <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />,
+              'Auto-Print Receipt',
+              'Automatically print receipt after completing a sale',
+              pos.autoPrintReceipt,
+              (checked) => setPos({ ...pos, autoPrintReceipt: checked }),
+            )}
+            {toggleRow(
+              'require-customer',
+              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />,
+              'Require Customer for Sale',
+              'Require customer selection before completing a sale',
+              pos.requireCustomer,
+              (checked) => setPos({ ...pos, requireCustomer: checked }),
+            )}
+            {toggleRow(
+              'allow-negative-stock',
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />,
+              'Allow Negative Stock',
+              'Allow selling products even when stock is zero',
+              pos.allowNegativeStock,
+              (checked) => setPos({ ...pos, allowNegativeStock: checked }),
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 4. Display Settings */}
       <Card className="overflow-hidden">
         {sectionHeader(
           <Monitor className="h-4 w-4" />,
@@ -630,78 +1003,6 @@ export default function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* 4. POS Settings */}
-      <Card className="overflow-hidden">
-        {sectionHeader(
-          <ShoppingCart className="h-4 w-4" />,
-          'POS Settings',
-          'Point-of-sale behavior and defaults',
-        )}
-        <CardContent className="space-y-5 pt-0">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <Label className="text-sm font-medium flex items-center gap-1.5">
-                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
-                Default Payment Method
-              </Label>
-              <Select
-                value={pos.defaultPaymentMethod}
-                onValueChange={(v) => setPos({ ...pos, defaultPaymentMethod: v })}
-              >
-                <SelectTrigger className="mt-1.5">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="card">Card</SelectItem>
-                  <SelectItem value="mobile_money">Mobile Money</SelectItem>
-                  <SelectItem value="insurance">Insurance</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="default-discount" className="text-sm font-medium flex items-center gap-1.5">
-                <Percent className="h-3.5 w-3.5 text-muted-foreground" />
-                Default Discount (%)
-              </Label>
-              <div className="relative mt-1.5">
-                <Input
-                  id="default-discount"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="0.5"
-                  value={pos.defaultDiscount}
-                  onChange={(e) => setPos({ ...pos, defaultDiscount: Number(e.target.value) || 0 })}
-                  placeholder="0"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                  %
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between rounded-lg border p-3">
-            <div className="space-y-0.5">
-              <Label htmlFor="auto-print" className="text-sm font-medium flex items-center gap-1.5">
-                <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />
-                Auto-Print Receipt
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Automatically print receipt after completing a sale
-              </p>
-            </div>
-            <Switch
-              id="auto-print"
-              checked={pos.autoPrintReceipt}
-              onCheckedChange={(checked) => setPos({ ...pos, autoPrintReceipt: checked })}
-              className="data-[state=checked]:bg-emerald-600"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
       {/* 5. Notifications */}
       <Card className="overflow-hidden">
         {sectionHeader(
@@ -710,23 +1011,14 @@ export default function SettingsView() {
           'Alert thresholds and notification preferences',
         )}
         <CardContent className="space-y-5 pt-0">
-          <div className="flex items-center justify-between rounded-lg border p-3">
-            <div className="space-y-0.5">
-              <Label htmlFor="enable-notifications" className="text-sm font-medium flex items-center gap-1.5">
-                <Bell className="h-3.5 w-3.5 text-muted-foreground" />
-                Enable Notifications
-              </Label>
-              <p className="text-xs text-muted-foreground">
-                Show alerts for low stock and expiring products
-              </p>
-            </div>
-            <Switch
-              id="enable-notifications"
-              checked={notifications.enableNotifications}
-              onCheckedChange={(checked) => setNotifications({ ...notifications, enableNotifications: checked })}
-              className="data-[state=checked]:bg-emerald-600"
-            />
-          </div>
+          {toggleRow(
+            'enable-notifications',
+            <Bell className="h-3.5 w-3.5 text-muted-foreground" />,
+            'Enable Notifications',
+            'Show alerts for low stock and expiring products',
+            notifications.enableNotifications,
+            (checked) => setNotifications({ ...notifications, enableNotifications: checked }),
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -780,14 +1072,167 @@ export default function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* 6. Data Management */}
+      {/* 6. Business Hours */}
       <Card className="overflow-hidden">
         {sectionHeader(
-          <Database className="h-4 w-4" />,
-          'Data Management',
-          'Export data and manage system records',
+          <Clock className="h-4 w-4" />,
+          'Business Hours',
+          'Set operating hours and closed days for your pharmacy',
         )}
         <CardContent className="space-y-4 pt-0">
+          {toggleRow(
+            'enable-hours',
+            <Store className="h-3.5 w-3.5 text-muted-foreground" />,
+            'Enable Business Hours',
+            'Restrict POS availability to operating hours',
+            business.enableHours,
+            (checked) => setBusiness({ ...business, enableHours: checked }),
+          )}
+
+          {business.enableHours && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="open-time" className="text-sm font-medium">
+                    Opening Time
+                  </Label>
+                  <div className="relative mt-1.5">
+                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="open-time"
+                      type="time"
+                      value={business.openTime}
+                      onChange={(e) => setBusiness({ ...business, openTime: e.target.value })}
+                      className="pl-10"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label htmlFor="close-time" className="text-sm font-medium">
+                    Closing Time
+                  </Label>
+                  <div className="relative mt-1.5">
+                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="close-time"
+                      type="time"
+                      value={business.closeTime}
+                      onChange={(e) => setBusiness({ ...business, closeTime: e.target.value })}
+                      className="pl-10"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <Label className="text-sm font-medium">Closed Days</Label>
+                <p className="text-xs text-muted-foreground mb-2">Select days the business is closed</p>
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+                  {DAYS_OF_WEEK.map((day) => {
+                    const isChecked = business.closedDays
+                      .split(',')
+                      .filter(Boolean)
+                      .includes(day.value);
+                    return (
+                      <label
+                        key={day.value}
+                        className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium cursor-pointer transition-all ${
+                          isChecked
+                            ? 'border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+                            : 'border-muted bg-muted/30 text-muted-foreground hover:bg-muted/50'
+                        }`}
+                      >
+                        <Checkbox
+                          checked={isChecked}
+                          onCheckedChange={() => toggleClosedDay(day.value)}
+                          className="sr-only"
+                        />
+                        <span className="select-none">{day.label.slice(0, 3)}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+                <Info className="h-3 w-3" />
+                Business hours affect POS availability. Sales outside hours will show a warning.
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* 7. Data & Security */}
+      <Card className="overflow-hidden">
+        {sectionHeader(
+          <ShieldCheck className="h-4 w-4" />,
+          'Data & Security',
+          'Backup, session, and data management settings',
+        )}
+        <CardContent className="space-y-4 pt-0">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Label className="text-sm font-medium flex items-center gap-1.5">
+                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+                Auto Backup Interval
+              </Label>
+              <Select
+                value={data.autoBackup}
+                onValueChange={(v) => setData({ ...data, autoBackup: v })}
+              >
+                <SelectTrigger className="mt-1.5">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="off">Off</SelectItem>
+                  <SelectItem value="daily">Daily</SelectItem>
+                  <SelectItem value="weekly">Weekly</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">Automatic data backup schedule</p>
+            </div>
+            <div>
+              <Label htmlFor="session-timeout" className="text-sm font-medium flex items-center gap-1.5">
+                <Timer className="h-3.5 w-3.5 text-muted-foreground" />
+                Session Timeout
+              </Label>
+              <div className="relative mt-1.5">
+                <Input
+                  id="session-timeout"
+                  type="number"
+                  min="5"
+                  max="1440"
+                  value={data.sessionTimeout}
+                  onChange={(e) =>
+                    setData({
+                      ...data,
+                      sessionTimeout: Math.max(5, Math.min(1440, Number(e.target.value) || 5)),
+                    })
+                  }
+                  placeholder="480"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                  min
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Auto-logout after idle (default: 8 hrs)</p>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            {toggleRow(
+              'require-password',
+              <Lock className="h-3.5 w-3.5 text-muted-foreground" />,
+              'Require Password on Return from Idle',
+              'Prompt for password when resuming an idle session',
+              data.requirePassword,
+              (checked) => setData({ ...data, requirePassword: checked }),
+            )}
+          </div>
+
+          <Separator />
+
           <div className="flex flex-col sm:flex-row gap-3">
             <Button
               variant="outline"
@@ -849,12 +1294,12 @@ export default function SettingsView() {
         </CardContent>
       </Card>
 
-      {/* 7. About System */}
+      {/* 8. About System */}
       <Card className="overflow-hidden">
         {sectionHeader(
           <Info className="h-4 w-4" />,
           'About System',
-          'System version and technology information',
+          'System version, technology stack, and runtime information',
         )}
         <CardContent className="pt-0">
           <div className="rounded-lg border bg-muted/30">
@@ -887,7 +1332,10 @@ export default function SettingsView() {
               </div>
               <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-sm text-muted-foreground">Database</span>
-                <span className="text-sm font-medium">SQLite (Prisma ORM)</span>
+                <div className="flex items-center gap-1.5">
+                  <HardDrive className="h-4 w-4 text-emerald-500" />
+                  <span className="text-sm font-medium">SQLite (local)</span>
+                </div>
               </div>
               <div className="flex items-center justify-between px-4 py-3">
                 <span className="text-sm text-muted-foreground">State Management</span>
@@ -900,6 +1348,20 @@ export default function SettingsView() {
                   <span className="text-sm font-medium">NextAuth.js v4</span>
                 </div>
               </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm text-muted-foreground">System Uptime</span>
+                <div className="flex items-center gap-1.5">
+                  <Activity className="h-4 w-4 text-emerald-500" />
+                  <span className="text-sm font-medium tabular-nums">{uptime}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-sm text-muted-foreground">Database Size</span>
+                <div className="flex items-center gap-1.5">
+                  <Database className="h-4 w-4 text-emerald-500" />
+                  <span className="text-sm font-medium">SQLite (local)</span>
+                </div>
+              </div>
             </div>
           </div>
         </CardContent>
@@ -909,14 +1371,7 @@ export default function SettingsView() {
       <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-xl border bg-background/80 backdrop-blur-sm p-4 shadow-sm">
         <Button
           variant="outline"
-          onClick={() => {
-            setPharmacy(defaults.pharmacy);
-            setReceipt(defaults.receipt);
-            setDisplay(defaults.display);
-            setPos(defaults.pos);
-            setNotifications(defaults.notifications);
-            toast.info('Settings reset to defaults');
-          }}
+          onClick={handleReset}
         >
           Reset to Defaults
         </Button>

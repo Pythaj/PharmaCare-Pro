@@ -55,7 +55,7 @@ function PageLoader() {
 }
 
 // Pages that are admin-only
-const adminOnlyPages: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings'];
+const adminOnlyPages: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings', 'inventory', 'purchases'];
 
 const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<() => React.JSX.Element>> = {
   'admin-dashboard': AdminDashboard,
