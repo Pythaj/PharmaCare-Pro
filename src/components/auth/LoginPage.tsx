@@ -87,7 +87,7 @@ export default function LoginPage() {
   return (
     <div className="flex min-h-screen">
       {/* Left branding panel - hidden on mobile */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden bg-gradient-to-br from-emerald-600 via-emerald-700 to-teal-800">
+      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden" style={{ background: 'linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-via), var(--accent-gradient-to))' }}>
         {/* Decorative elements */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute -top-24 -left-24 h-96 w-96 rounded-full bg-white" />
@@ -129,7 +129,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="mb-12 text-lg text-emerald-100"
+            className="mb-12 text-lg opacity-90"
           >
             Premium Pharmacy Management System
           </motion.p>
@@ -138,7 +138,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
-            className="space-y-4 text-left text-emerald-50/80"
+            className="space-y-4 text-left text-white/80"
           >
             {[
               'Point of Sale & Billing',
@@ -170,7 +170,7 @@ export default function LoginPage() {
         >
           {/* Mobile logo */}
           <div className="mb-8 flex flex-col items-center lg:hidden">
-            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl bg-emerald-500">
+            <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl" style={{ backgroundColor: 'var(--accent-primary)' }}>
               <Pill className="h-7 w-7 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-slate-900">PharmaCare Pro</h1>
@@ -196,7 +196,7 @@ export default function LoginPage() {
                     placeholder="Enter your email"
                     autoComplete="email"
                     disabled={isLoading}
-                    className="h-11 border-slate-200 bg-white text-sm placeholder:text-slate-400 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
+                    className="h-11 border-slate-200 bg-white text-sm placeholder:text-slate-400 focus-visible:border-[var(--accent-primary)]"
                     {...register('email')}
                   />
                   {errors.email && (
@@ -215,7 +215,7 @@ export default function LoginPage() {
                       placeholder="Enter your password"
                       autoComplete="current-password"
                       disabled={isLoading}
-                      className="h-11 border-slate-200 bg-white pr-10 text-sm placeholder:text-slate-400 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
+                      className="h-11 border-slate-200 bg-white pr-10 text-sm placeholder:text-slate-400 focus-visible:border-[var(--accent-primary)]"
                       {...register('password')}
                     />
                     <button
@@ -235,7 +235,8 @@ export default function LoginPage() {
                 <Button
                   type="submit"
                   disabled={isLoading}
-                  className="h-11 w-full bg-emerald-600 text-white hover:bg-emerald-700 focus-visible:ring-emerald-500/30 font-medium transition-colors"
+                  className="h-11 w-full text-white font-medium transition-colors"
+                  style={{ backgroundColor: 'var(--accent-primary)' }}
                 >
                   {isLoading ? (
                     <>

@@ -1,0 +1,1395 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useCallback, useRef } from 'react';
+     4→import {
+     5→  Save,
+     6→  Building2,
+     7→  Phone,
+     8→  Mail,
+     9→  MapPin,
+    10→  Percent,
+    11→  Receipt,
+    12→  Monitor,
+    13→  ShoppingCart,
+    14→  Bell,
+    15→  Database,
+    16→  Info,
+    17→  Download,
+    18→  Trash2,
+    19→  ImageIcon,
+    20→  Loader2,
+    21→  CheckCircle2,
+    22→  ShieldCheck,
+    23→  Calendar,
+    24→  Clock,
+    25→  DollarSign,
+    26→  FileText,
+    27→  ToggleLeft,
+    28→  Palette,
+    29→  Globe,
+    30→  Timer,
+    31→  Lock,
+    32→  Activity,
+    33→  HardDrive,
+    34→  Store,
+    35→  RefreshCw,
+    36→  AlertTriangle,
+    37→} from 'lucide-react';
+    38→import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+    39→import { Button } from '@/components/ui/button';
+    40→import { Input } from '@/components/ui/input';
+    41→import { Label } from '@/components/ui/label';
+    42→import { Textarea } from '@/components/ui/textarea';
+    43→import { Separator } from '@/components/ui/separator';
+    44→import { Switch } from '@/components/ui/switch';
+    45→import { Checkbox } from '@/components/ui/checkbox';
+    46→import {
+    47→  Select,
+    48→  SelectContent,
+    49→  SelectItem,
+    50→  SelectTrigger,
+    51→  SelectValue,
+    52→} from '@/components/ui/select';
+    53→import {
+    54→  AlertDialog,
+    55→  AlertDialogAction,
+    56→  AlertDialogCancel,
+    57→  AlertDialogContent,
+    58→  AlertDialogDescription,
+    59→  AlertDialogFooter,
+    60→  AlertDialogHeader,
+    61→  AlertDialogTitle,
+    62→  AlertDialogTrigger,
+    63→} from '@/components/ui/alert-dialog';
+    64→import { toast } from 'sonner';
+    65→
+    66→// ─── Types ───────────────────────────────────────────────────────
+    67→
+    68→interface PharmacyInfo {
+    69→  appName: string;
+    70→  name: string;
+    71→  tagline: string;
+    72→  address: string;
+    73→  phone: string;
+    74→  email: string;
+    75→  taxRate: number;
+    76→  logoUrl: string;
+    77→  faviconUrl: string;
+    78→}
+    79→
+    80→interface ReceiptSettings {
+    81→  headerText: string;
+    82→  footerText: string;
+    83→  width: string;
+    84→  showTax: boolean;
+    85→  showDiscount: boolean;
+    86→}
+    87→
+    88→interface DisplaySettings {
+    89→  currency: string;
+    90→  dateFormat: string;
+    91→  timeFormat: string;
+    92→  primaryColor: string;
+    93→}
+    94→
+    95→interface POSSettings {
+    96→  defaultPaymentMethod: string;
+    97→  autoPrintReceipt: boolean;
+    98→  defaultDiscount: number;
+    99→  requireCustomer: boolean;
+   100→  allowNegativeStock: boolean;
+   101→  maxLineItems: number;
+   102→}
+   103→
+   104→interface NotificationSettings {
+   105→  lowStockThreshold: number;
+   106→  expiryAlertDays: number;
+   107→  enableNotifications: boolean;
+   108→}
+   109→
+   110→interface BusinessSettings {
+   111→  enableHours: boolean;
+   112→  openTime: string;
+   113→  closeTime: string;
+   114→  closedDays: string;
+   115→}
+   116→
+   117→interface DataSettings {
+   118→  autoBackup: string;
+   119→  sessionTimeout: number;
+   120→  requirePassword: boolean;
+   121→}
+   122→
+   123→interface AllSettings {
+   124→  pharmacy: PharmacyInfo;
+   125→  receipt: ReceiptSettings;
+   126→  display: DisplaySettings;
+   127→  pos: POSSettings;
+   128→  notifications: NotificationSettings;
+   129→  business: BusinessSettings;
+   130→  data: DataSettings;
+   131→}
+   132→
+   133→// ─── Helpers: flatten / unflatten settings for API ─────────────
+   134→
+   135→function flattenSettings(s: AllSettings): Record<string, string> {
+   136→  const result: Record<string, string> = {};
+   137→  const walk = (obj: Record<string, unknown>, prefix: string) => {
+   138→    for (const [k, v] of Object.entries(obj)) {
+   139→      const key = prefix ? `${prefix}.${k}` : k;
+   140→      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+   141→        walk(v as Record<string, unknown>, key);
+   142→      } else {
+   143→        result[key] = String(v);
+   144→      }
+   145→    }
+   146→  };
+   147→  walk(s as unknown as Record<string, unknown>, '');
+   148→  return result;
+   149→}
+   150→
+   151→function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
+   152→  const result: Record<string, unknown> = {};
+   153→  for (const [compoundKey, value] of Object.entries(flat)) {
+   154→    const parts = compoundKey.split('.');
+   155→    let current: Record<string, unknown> = result;
+   156→    for (let i = 0; i < parts.length - 1; i++) {
+   157→      if (!current[parts[i]] || typeof current[parts[i]] !== 'object') {
+   158→        current[parts[i]] = {};
+   159→      }
+   160→      current = current[parts[i]] as Record<string, unknown>;
+   161→    }
+   162→    // Parse numbers and booleans
+   163→    let parsed: string | number | boolean = value;
+   164→    if (value === 'true') parsed = true;
+   165→    else if (value === 'false') parsed = false;
+   166→    else if (value !== '' && !isNaN(Number(value))) parsed = Number(value);
+   167→    current[parts[parts.length - 1]] = parsed;
+   168→  }
+   169→  return result as unknown as Partial<AllSettings>;
+   170→}
+   171→
+   172→// ─── Constants ──────────────────────────────────────────────────
+   173→
+   174→const STORAGE_KEY = 'pharmacy_settings';
+   175→
+   176→const COLOR_SWATCHES = [
+   177→  { name: 'Emerald', value: 'emerald', className: 'bg-emerald-500' },
+   178→  { name: 'Blue', value: 'blue', className: 'bg-blue-500' },
+   179→  { name: 'Violet', value: 'violet', className: 'bg-violet-500' },
+   180→  { name: 'Rose', value: 'rose', className: 'bg-rose-500' },
+   181→  { name: 'Amber', value: 'amber', className: 'bg-amber-500' },
+   182→  { name: 'Teal', value: 'teal', className: 'bg-teal-500' },
+   183→];
+   184→
+   185→const DAYS_OF_WEEK = [
+   186→  { label: 'Sunday', value: '0' },
+   187→  { label: 'Monday', value: '1' },
+   188→  { label: 'Tuesday', value: '2' },
+   189→  { label: 'Wednesday', value: '3' },
+   190→  { label: 'Thursday', value: '4' },
+   191→  { label: 'Friday', value: '5' },
+   192→  { label: 'Saturday', value: '6' },
+   193→];
+   194→
+   195→// ─── Defaults ────────────────────────────────────────────────────
+   196→
+   197→const defaults: AllSettings = {
+   198→  pharmacy: {
+   199→    appName: 'PharmaCare Pro',
+   200→    name: 'GreenLife Pharmacy',
+   201→    tagline: 'Pharmacy Management',
+   202→    address: '123 Health Street, Accra, Ghana',
+   203→    phone: '+233 30 123 4567',
+   204→    email: 'info@greenlifepharmacy.com',
+   205→    taxRate: 12.5,
+   206→    logoUrl: '',
+   207→    faviconUrl: '',
+   208→  },
+   209→  receipt: {
+   210→    headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
+   211→    footerText: 'Thank you for your purchase!',
+   212→    width: '80mm',
+   213→    showTax: true,
+   214→    showDiscount: false,
+   215→  },
+   216→  display: {
+   217→    currency: 'GHS',
+   218→    dateFormat: 'dd/MM/yyyy',
+   219→    timeFormat: 'HH:mm',
+   220→    primaryColor: 'emerald',
+   221→  },
+   222→  pos: {
+   223→    defaultPaymentMethod: 'cash',
+   224→    autoPrintReceipt: true,
+   225→    defaultDiscount: 0,
+   226→    requireCustomer: false,
+   227→    allowNegativeStock: false,
+   228→    maxLineItems: 50,
+   229→  },
+   230→  notifications: {
+   231→    lowStockThreshold: 10,
+   232→    expiryAlertDays: 30,
+   233→    enableNotifications: true,
+   234→  },
+   235→  business: {
+   236→    enableHours: false,
+   237→    openTime: '08:00',
+   238→    closeTime: '18:00',
+   239→    closedDays: '0',
+   240→  },
+   241→  data: {
+   242→    autoBackup: 'off',
+   243→    sessionTimeout: 480,
+   244→    requirePassword: true,
+   245→  },
+   246→};
+   247→
+   248→// ─── Component ───────────────────────────────────────────────────
+   249→
+   250→export default function SettingsView() {
+   251→  const [pharmacy, setPharmacy] = useState<PharmacyInfo>(defaults.pharmacy);
+   252→  const [receipt, setReceipt] = useState<ReceiptSettings>(defaults.receipt);
+   253→  const [display, setDisplay] = useState<DisplaySettings>(defaults.display);
+   254→  const [pos, setPos] = useState<POSSettings>(defaults.pos);
+   255→  const [notifications, setNotifications] = useState<NotificationSettings>(defaults.notifications);
+   256→  const [business, setBusiness] = useState<BusinessSettings>(defaults.business);
+   257→  const [data, setData] = useState<DataSettings>(defaults.data);
+   258→  const [saving, setSaving] = useState(false);
+   259→  const [exporting, setExporting] = useState(false);
+   260→  const [clearing, setClearing] = useState(false);
+   261→  const [saved, setSaved] = useState(false);
+   262→
+   263→  // System uptime tracking
+   264→  const loadTimeRef = useRef(Date.now());
+   265→  const [uptime, setUptime] = useState('0m 0s');
+   266→
+   267→  useEffect(() => {
+   268→    const interval = setInterval(() => {
+   269→      const elapsed = Math.floor((Date.now() - loadTimeRef.current) / 1000);
+   270→      const h = Math.floor(elapsed / 3600);
+   271→      const m = Math.floor((elapsed % 3600) / 60);
+   272→      const s = elapsed % 60;
+   273→      if (h > 0) setUptime(`${h}h ${m}m ${s}s`);
+   274→      else if (m > 0) setUptime(`${m}m ${s}s`);
+   275→      else setUptime(`${s}s`);
+   276→    }, 1000);
+   277→    return () => clearInterval(interval);
+   278→  }, []);
+   279→
+   280→  // Load settings from API first, then fall back to localStorage
+   281→  useEffect(() => {
+   282→    const applySettings = (s: Partial<AllSettings>) => {
+   283→      if (s.pharmacy) setPharmacy({ ...defaults.pharmacy, ...s.pharmacy });
+   284→      if (s.receipt) setReceipt({ ...defaults.receipt, ...s.receipt });
+   285→      if (s.display) setDisplay({ ...defaults.display, ...s.display });
+   286→      if (s.pos) setPos({ ...defaults.pos, ...s.pos });
+   287→      if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
+   288→      if (s.business) setBusiness({ ...defaults.business, ...s.business });
+   289→      if (s.data) setData({ ...defaults.data, ...s.data });
+   290→    };
+   291→
+   292→    (async () => {
+   293→      try {
+   294→        const res = await fetch('/api/settings');
+   295→        if (res.ok) {
+   296→          const { settings } = await res.json();
+   297→          if (settings && Object.keys(settings).length > 0) {
+   298→            const unflat = unflattenSettings(settings);
+   299→            applySettings(unflat);
+   300→            // Cache in localStorage
+   301→            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+   302→              pharmacy: { ...defaults.pharmacy, ...unflat.pharmacy },
+   303→              receipt: { ...defaults.receipt, ...unflat.receipt },
+   304→              display: { ...defaults.display, ...unflat.display },
+   305→              pos: { ...defaults.pos, ...unflat.pos },
+   306→              notifications: { ...defaults.notifications, ...unflat.notifications },
+   307→              business: { ...defaults.business, ...unflat.business },
+   308→              data: { ...defaults.data, ...unflat.data },
+   309→            }));
+   310→            return;
+   311→          }
+   312→        }
+   313→      } catch {
+   314→        // API unavailable — fall through to localStorage
+   315→      }
+   316→      // Fallback: load from localStorage
+   317→      try {
+   318→        const raw = localStorage.getItem(STORAGE_KEY);
+   319→        if (raw) {
+   320→          const parsed: AllSettings = JSON.parse(raw);
+   321→          applySettings(parsed);
+   322→        }
+   323→      } catch {
+   324→        // silent — use defaults
+   325→      }
+   326→    })();
+   327→  }, []);
+   328→
+   329→  // Gather all settings into one object
+   330→  const gatherSettings = useCallback((): AllSettings => {
+   331→    return { pharmacy, receipt, display, pos, notifications, business, data };
+   332→  }, [pharmacy, receipt, display, pos, notifications, business, data]);
+   333→
+   334→  // Save all settings at once (API first, localStorage as backup)
+   335→  const handleSave = async () => {
+   336→    setSaving(true);
+   337→    const current = gatherSettings();
+   338→    try {
+   339→      // Try to persist via API
+   340→      const res = await fetch('/api/settings', {
+   341→        method: 'PUT',
+   342→        headers: { 'Content-Type': 'application/json' },
+   343→        body: JSON.stringify({ settings: flattenSettings(current) }),
+   344→      });
+   345→      if (res.ok) {
+   346→        // API success — also cache to localStorage
+   347→        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+   348→        setSaved(true);
+   349→        toast.success('Settings saved successfully');
+   350→        setTimeout(() => setSaved(false), 2000);
+   351→        return;
+   352→      }
+   353→      // API returned non-OK
+   354→      throw new Error(`API returned ${res.status}`);
+   355→    } catch {
+   356→      // API failed — fall back to localStorage only
+   357→      try {
+   358→        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+   359→        toast.warning('Settings saved locally (backend unavailable)');
+   360→      } catch {
+   361→        toast.error('Failed to save settings');
+   362→      }
+   363→    } finally {
+   364→      setSaving(false);
+   365→    }
+   366→  };
+   367→
+   368→  // Export all data as JSON
+   369→  const handleExportData = async () => {
+   370→    setExporting(true);
+   371→    try {
+   372→      const endpoints = [
+   373→        '/api/dashboard/stats',
+   374→        '/api/products',
+   375→        '/api/sales',
+   376→        '/api/customers',
+   377→        '/api/suppliers',
+   378→        '/api/purchases',
+   379→        '/api/categories',
+   380→        '/api/batches',
+   381→        '/api/returns',
+   382→        '/api/users',
+   383→        '/api/audit-logs',
+   384→      ];
+   385→
+   386→      const data: Record<string, unknown> = { _exportedAt: new Date().toISOString() };
+   387→
+   388→      await Promise.all(
+   389→        endpoints.map(async (url) => {
+   390→          try {
+   391→            const res = await fetch(url);
+   392→            if (res.ok) {
+   393→              const json = await res.json();
+   394→              data[url.replace('/api/', '')] = json;
+   395→            }
+   396→          } catch {
+   397→            data[url.replace('/api/', '')] = 'Failed to fetch';
+   398→          }
+   399→        }),
+   400→      );
+   401→
+   402→      // Also include settings
+   403→      data._settings = gatherSettings();
+   404→
+   405→      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+   406→      const url = URL.createObjectURL(blob);
+   407→      const a = document.createElement('a');
+   408→      a.href = url;
+   409→      a.download = `pharmacy-export-${new Date().toISOString().slice(0, 10)}.json`;
+   410→      document.body.appendChild(a);
+   411→      a.click();
+   412→      document.body.removeChild(a);
+   413→      URL.revokeObjectURL(url);
+   414→
+   415→      toast.success('Data exported successfully');
+   416→    } catch {
+   417→      toast.error('Failed to export data');
+   418→    } finally {
+   419→      setExporting(false);
+   420→    }
+   421→  };
+   422→
+   423→  // Clear all sales data
+   424→  const handleClearSales = async () => {
+   425→    setClearing(true);
+   426→    try {
+   427→      await fetch('/api/sales', { method: 'DELETE' });
+   428→      toast.success('All sales data cleared');
+   429→    } catch {
+   430→      toast.error('Failed to clear sales data');
+   431→    } finally {
+   432→      setClearing(false);
+   433→    }
+   434→  };
+   435→
+   436→  // Toggle a day in closedDays
+   437→  const toggleClosedDay = (dayValue: string) => {
+   438→    const currentDays = business.closedDays
+   439→      ? business.closedDays.split(',').filter(Boolean)
+   440→      : [];
+   441→    const idx = currentDays.indexOf(dayValue);
+   442→    if (idx >= 0) {
+   443→      currentDays.splice(idx, 1);
+   444→    } else {
+   445→      currentDays.push(dayValue);
+   446→      currentDays.sort((a, b) => Number(a) - Number(b));
+   447→    }
+   448→    setBusiness({ ...business, closedDays: currentDays.join(',') });
+   449→  };
+   450→
+   451→  // Reset all settings to defaults
+   452→  const handleReset = () => {
+   453→    setPharmacy(defaults.pharmacy);
+   454→    setReceipt(defaults.receipt);
+   455→    setDisplay(defaults.display);
+   456→    setPos(defaults.pos);
+   457→    setNotifications(defaults.notifications);
+   458→    setBusiness(defaults.business);
+   459→    setData(defaults.data);
+   460→    toast.info('Settings reset to defaults');
+   461→  };
+   462→
+   463→  // ─── Section card helper ────────────────────────────────────────
+   464→  const sectionHeader = (icon: React.ReactNode, title: string, description?: string) => (
+   465→    <CardHeader className="pb-4">
+   466→      <CardTitle className="text-base font-semibold flex items-center gap-2.5">
+   467→        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/50 dark:text-emerald-400">
+   468→          {icon}
+   469→        </span>
+   470→        {title}
+   471→      </CardTitle>
+   472→      {description && (
+   473→        <CardDescription className="text-sm text-muted-foreground ml-[42px]">
+   474→          {description}
+   475→        </CardDescription>
+   476→      )}
+   477→    </CardHeader>
+   478→  );
+   479→
+   480→  // Toggle row helper
+   481→  const toggleRow = (
+   482→    id: string,
+   483→    icon: React.ReactNode,
+   484→    label: string,
+   485→    description: string,
+   486→    checked: boolean,
+   487→    onChange: (val: boolean) => void,
+   488→  ) => (
+   489→    <div className="flex items-center justify-between rounded-lg border p-3">
+   490→      <div className="space-y-0.5">
+   491→        <Label htmlFor={id} className="text-sm font-medium flex items-center gap-1.5">
+   492→          {icon}
+   493→          {label}
+   494→        </Label>
+   495→        <p className="text-xs text-muted-foreground">{description}</p>
+   496→      </div>
+   497→      <Switch
+   498→        id={id}
+   499→        checked={checked}
+   500→        onCheckedChange={onChange}
+   501→        className="data-[state=checked]:bg-emerald-600"
+   502→      />
+   503→    </div>
+   504→  );
+   505→
+   506→  return (
+   507→    <div className="space-y-6 p-6 max-w-3xl">
+   508→      {/* Page Header */}
+   509→      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+   510→        <div>
+   511→          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+   512→          <p className="text-muted-foreground text-sm mt-1">
+   513→            Manage your pharmacy system preferences and configuration
+   514→          </p>
+   515→        </div>
+   516→        <Button
+   517→          className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200 dark:shadow-emerald-950/50 transition-all"
+   518→          onClick={handleSave}
+   519→          disabled={saving}
+   520→        >
+   521→          {saving ? (
+   522→            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+   523→          ) : saved ? (
+   524→            <CheckCircle2 className="h-4 w-4 mr-2" />
+   525→          ) : (
+   526→            <Save className="h-4 w-4 mr-2" />
+   527→          )}
+   528→          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save All Settings'}
+   529→        </Button>
+   530→      </div>
+   531→
+   532→      <Separator />
+   533→
+   534→      {/* 1. App Branding */}
+   535→      <Card className="overflow-hidden border-emerald-100 dark:border-emerald-950/50">
+   536→        {sectionHeader(
+   537→          <Palette className="h-4 w-4" />,
+   538→          'App Branding',
+   539→          'Customize your app name, logo, and visual identity',
+   540→        )}
+   541→        <CardContent className="space-y-4 pt-0">
+   542→          {/* Logo URL */}
+   543→          <div className="flex items-center gap-4 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20">
+   544→            {pharmacy.logoUrl ? (
+   545→              <img
+   546→                src={pharmacy.logoUrl}
+   547→                alt="Pharmacy logo"
+   548→                className="h-12 w-12 shrink-0 rounded-lg object-contain bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800"
+   549→                onError={(e) => {
+   550→                  (e.target as HTMLImageElement).style.display = 'none';
+   551→                }}
+   552→              />
+   553→            ) : (
+   554→              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-white dark:bg-slate-800 shadow-sm border border-emerald-100 dark:border-emerald-800">
+   555→                <ImageIcon className="h-5 w-5 text-emerald-500" />
+   556→              </div>
+   557→            )}
+   558→            <div className="flex-1 min-w-0">
+   559→              <Label htmlFor="pharmacy-logo-url" className="text-sm font-medium">
+   560→                Logo URL
+   561→              </Label>
+   562→              <Input
+   563→                id="pharmacy-logo-url"
+   564→                value={pharmacy.logoUrl}
+   565→                onChange={(e) => setPharmacy({ ...pharmacy, logoUrl: e.target.value })}
+   566→                placeholder="https://example.com/logo.png"
+   567→                className="mt-1 text-sm"
+   568→              />
+   569→            </div>
+   570→          </div>
+   571→
+   572→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   573→            <div>
+   574→              <Label htmlFor="app-name" className="text-sm font-medium">
+   575→                App Display Name
+   576→              </Label>
+   577→              <div className="relative mt-1.5">
+   578→                <Globe className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   579→                <Input
+   580→                  id="app-name"
+   581→                  value={pharmacy.appName}
+   582→                  onChange={(e) => setPharmacy({ ...pharmacy, appName: e.target.value })}
+   583→                  className="pl-10"
+   584→                  placeholder="PharmaCare Pro"
+   585→                />
+   586→              </div>
+   587→              <p className="text-xs text-muted-foreground mt-1">Shown in sidebar and header</p>
+   588→            </div>
+   589→            <div>
+   590→              <Label htmlFor="pharmacy-name" className="text-sm font-medium">
+   591→                Pharmacy Name
+   592→              </Label>
+   593→              <div className="relative mt-1.5">
+   594→                <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   595→                <Input
+   596→                  id="pharmacy-name"
+   597→                  value={pharmacy.name}
+   598→                  onChange={(e) => setPharmacy({ ...pharmacy, name: e.target.value })}
+   599→                  className="pl-10"
+   600→                  placeholder="Enter pharmacy name"
+   601→                />
+   602→              </div>
+   603→              <p className="text-xs text-muted-foreground mt-1">Business name for receipts</p>
+   604→            </div>
+   605→          </div>
+   606→
+   607→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   608→            <div>
+   609→              <Label htmlFor="pharmacy-tagline" className="text-sm font-medium">
+   610→                Tagline
+   611→              </Label>
+   612→              <div className="relative mt-1.5">
+   613→                <Store className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   614→                <Input
+   615→                  id="pharmacy-tagline"
+   616→                  value={pharmacy.tagline}
+   617→                  onChange={(e) => setPharmacy({ ...pharmacy, tagline: e.target.value })}
+   618→                  className="pl-10"
+   619→                  placeholder="Pharmacy Management"
+   620→                />
+   621→              </div>
+   622→              <p className="text-xs text-muted-foreground mt-1">Shown in sidebar under logo</p>
+   623→            </div>
+   624→            <div>
+   625→              <Label htmlFor="favicon-url" className="text-sm font-medium">
+   626→                Favicon URL
+   627→              </Label>
+   628→              <div className="relative mt-1.5">
+   629→                <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   630→                <Input
+   631→                  id="favicon-url"
+   632→                  value={pharmacy.faviconUrl}
+   633→                  onChange={(e) => setPharmacy({ ...pharmacy, faviconUrl: e.target.value })}
+   634→                  className="pl-10"
+   635→                  placeholder="https://example.com/favicon.ico"
+   636→                />
+   637→              </div>
+   638→              <p className="text-xs text-muted-foreground mt-1">Browser tab icon (optional)</p>
+   639→            </div>
+   640→          </div>
+   641→
+   642→          <div>
+   643→            <Label className="text-sm font-medium">Primary Color</Label>
+   644→            <p className="text-xs text-muted-foreground mb-2">Choose the app&apos;s accent color theme</p>
+   645→            <div className="flex flex-wrap gap-2">
+   646→              {COLOR_SWATCHES.map((swatch) => (
+   647→                <button
+   648→                  key={swatch.value}
+   649→                  type="button"
+   650→                  onClick={() => setDisplay({ ...display, primaryColor: swatch.value })}
+   651→                  className={`group flex items-center gap-2 rounded-lg border-2 px-3 py-2 transition-all ${
+   652→                    display.primaryColor === swatch.value
+   653→                      ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'
+   654→                      : 'border-transparent bg-muted/50 hover:bg-muted'
+   655→                  }`}
+   656→                >
+   657→                  <span
+   658→                    className={`h-5 w-5 rounded-full shadow-sm ring-2 ring-offset-2 ring-offset-background ${
+   659→                      display.primaryColor === swatch.value ? 'ring-emerald-600' : 'ring-transparent'
+   660→                    } ${swatch.className}`}
+   661→                  />
+   662→                  <span
+   663→                    className={`text-xs font-medium ${
+   664→                      display.primaryColor === swatch.value
+   665→                        ? 'text-emerald-700 dark:text-emerald-300'
+   666→                        : 'text-muted-foreground'
+   667→                    }`}
+   668→                  >
+   669→                    {swatch.name}
+   670→                  </span>
+   671→                </button>
+   672→              ))}
+   673→            </div>
+   674→          </div>
+   675→
+   676→          <Separator className="my-2" />
+   677→
+   678→          <div>
+   679→            <Label htmlFor="pharmacy-address" className="text-sm font-medium">
+   680→              Address
+   681→            </Label>
+   682→            <div className="relative mt-1.5">
+   683→              <MapPin className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+   684→              <Textarea
+   685→                id="pharmacy-address"
+   686→                value={pharmacy.address}
+   687→                onChange={(e) => setPharmacy({ ...pharmacy, address: e.target.value })}
+   688→                className="pl-10 min-h-[60px] resize-none"
+   689→                placeholder="Enter pharmacy address"
+   690→              />
+   691→            </div>
+   692→          </div>
+   693→
+   694→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   695→            <div>
+   696→              <Label htmlFor="pharmacy-phone" className="text-sm font-medium">
+   697→                Phone Number
+   698→              </Label>
+   699→              <div className="relative mt-1.5">
+   700→                <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   701→                <Input
+   702→                  id="pharmacy-phone"
+   703→                  value={pharmacy.phone}
+   704→                  onChange={(e) => setPharmacy({ ...pharmacy, phone: e.target.value })}
+   705→                  className="pl-10"
+   706→                  placeholder="+233 ..."
+   707→                />
+   708→              </div>
+   709→            </div>
+   710→            <div>
+   711→              <Label htmlFor="pharmacy-email" className="text-sm font-medium">
+   712→                Email Address
+   713→              </Label>
+   714→              <div className="relative mt-1.5">
+   715→                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   716→                <Input
+   717→                  id="pharmacy-email"
+   718→                  type="email"
+   719→                  value={pharmacy.email}
+   720→                  onChange={(e) => setPharmacy({ ...pharmacy, email: e.target.value })}
+   721→                  className="pl-10"
+   722→                  placeholder="pharmacy@example.com"
+   723→                />
+   724→              </div>
+   725→            </div>
+   726→          </div>
+   727→
+   728→          <div className="w-full sm:w-1/2">
+   729→            <Label htmlFor="tax-rate" className="text-sm font-medium">
+   730→              Tax Rate
+   731→            </Label>
+   732→            <div className="relative mt-1.5">
+   733→              <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   734→              <Input
+   735→                id="tax-rate"
+   736→                type="number"
+   737→                step="0.1"
+   738→                min="0"
+   739→                max="100"
+   740→                value={pharmacy.taxRate}
+   741→                onChange={(e) => setPharmacy({ ...pharmacy, taxRate: Number(e.target.value) || 0 })}
+   742→                className="pl-10"
+   743→                placeholder="0"
+   744→              />
+   745→            </div>
+   746→          </div>
+   747→        </CardContent>
+   748→      </Card>
+   749→
+   750→      {/* 2. Receipt Customization */}
+   751→      <Card className="overflow-hidden">
+   752→        {sectionHeader(
+   753→          <Receipt className="h-4 w-4" />,
+   754→          'Receipt Customization',
+   755→          'Configure what appears on printed receipts',
+   756→        )}
+   757→        <CardContent className="space-y-4 pt-0">
+   758→          <div>
+   759→            <Label htmlFor="receipt-header" className="text-sm font-medium">
+   760→              Header Line 1
+   761→            </Label>
+   762→            <p className="text-xs text-muted-foreground mb-1.5">Pharmacy name and tagline on receipt</p>
+   763→            <Textarea
+   764→              id="receipt-header"
+   765→              value={receipt.headerText}
+   766→              onChange={(e) => setReceipt({ ...receipt, headerText: e.target.value })}
+   767→              className="mt-1.5 min-h-[60px] resize-none"
+   768→              placeholder="Header text for receipts"
+   769→            />
+   770→          </div>
+   771→          <div>
+   772→            <Label htmlFor="receipt-footer" className="text-sm font-medium">
+   773→              Footer Message
+   774→            </Label>
+   775→            <p className="text-xs text-muted-foreground mb-1.5">Thank you message or contact info</p>
+   776→            <Textarea
+   777→              id="receipt-footer"
+   778→              value={receipt.footerText}
+   779→              onChange={(e) => setReceipt({ ...receipt, footerText: e.target.value })}
+   780→              className="mt-1.5 min-h-[60px] resize-none"
+   781→              placeholder="Footer text for receipts"
+   782→            />
+   783→          </div>
+   784→
+   785→          <div className="space-y-3">
+   786→            {toggleRow(
+   787→              'show-tax-receipt',
+   788→              <Percent className="h-3.5 w-3.5 text-muted-foreground" />,
+   789→              'Show Tax on Receipt',
+   790→              'Display the tax breakdown line on printed receipts',
+   791→              receipt.showTax,
+   792→              (checked) => setReceipt({ ...receipt, showTax: checked }),
+   793→            )}
+   794→            {toggleRow(
+   795→              'show-discount-receipt',
+   796→              <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />,
+   797→              'Show Discount on Receipt',
+   798→              'Display applied discounts as a separate line item',
+   799→              receipt.showDiscount,
+   800→              (checked) => setReceipt({ ...receipt, showDiscount: checked }),
+   801→            )}
+   802→          </div>
+   803→
+   804→          <div className="w-full sm:w-1/2">
+   805→            <Label htmlFor="receipt-width" className="text-sm font-medium">
+   806→              Receipt Width
+   807→            </Label>
+   808→            <Select
+   809→              value={receipt.width}
+   810→              onValueChange={(v) => setReceipt({ ...receipt, width: v })}
+   811→            >
+   812→              <SelectTrigger id="receipt-width" className="mt-1.5">
+   813→                <SelectValue />
+   814→              </SelectTrigger>
+   815→              <SelectContent>
+   816→                <SelectItem value="58mm">58mm — Small Thermal</SelectItem>
+   817→                <SelectItem value="80mm">80mm — Standard Thermal</SelectItem>
+   818→                <SelectItem value="A4">A4 — Full Page</SelectItem>
+   819→              </SelectContent>
+   820→            </Select>
+   821→          </div>
+   822→        </CardContent>
+   823→      </Card>
+   824→
+   825→      {/* 3. POS Configuration */}
+   826→      <Card className="overflow-hidden">
+   827→        {sectionHeader(
+   828→          <ShoppingCart className="h-4 w-4" />,
+   829→          'POS Configuration',
+   830→          'Point-of-sale behavior, defaults, and constraints',
+   831→        )}
+   832→        <CardContent className="space-y-4 pt-0">
+   833→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   834→            <div>
+   835→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   836→                <FileText className="h-3.5 w-3.5 text-muted-foreground" />
+   837→                Default Payment Method
+   838→              </Label>
+   839→              <Select
+   840→                value={pos.defaultPaymentMethod}
+   841→                onValueChange={(v) => setPos({ ...pos, defaultPaymentMethod: v })}
+   842→              >
+   843→                <SelectTrigger className="mt-1.5">
+   844→                  <SelectValue />
+   845→                </SelectTrigger>
+   846→                <SelectContent>
+   847→                  <SelectItem value="cash">Cash</SelectItem>
+   848→                  <SelectItem value="card">Card</SelectItem>
+   849→                  <SelectItem value="mobile_money">Mobile Money</SelectItem>
+   850→                  <SelectItem value="insurance">Insurance</SelectItem>
+   851→                </SelectContent>
+   852→              </Select>
+   853→            </div>
+   854→            <div>
+   855→              <Label htmlFor="default-discount" className="text-sm font-medium flex items-center gap-1.5">
+   856→                <Percent className="h-3.5 w-3.5 text-muted-foreground" />
+   857→                Default Discount (%)
+   858→              </Label>
+   859→              <div className="relative mt-1.5">
+   860→                <Input
+   861→                  id="default-discount"
+   862→                  type="number"
+   863→                  min="0"
+   864→                  max="100"
+   865→                  step="0.5"
+   866→                  value={pos.defaultDiscount}
+   867→                  onChange={(e) => setPos({ ...pos, defaultDiscount: Number(e.target.value) || 0 })}
+   868→                  placeholder="0"
+   869→                />
+   870→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+   871→                  %
+   872→                </span>
+   873→              </div>
+   874→            </div>
+   875→          </div>
+   876→
+   877→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+   878→            <div>
+   879→              <Label htmlFor="max-line-items" className="text-sm font-medium flex items-center gap-1.5">
+   880→                <ShoppingCart className="h-3.5 w-3.5 text-muted-foreground" />
+   881→                Max Line Items
+   882→              </Label>
+   883→              <div className="relative mt-1.5">
+   884→                <Input
+   885→                  id="max-line-items"
+   886→                  type="number"
+   887→                  min="1"
+   888→                  max="200"
+   889→                  value={pos.maxLineItems}
+   890→                  onChange={(e) =>
+   891→                    setPos({
+   892→                      ...pos,
+   893→                      maxLineItems: Math.max(1, Math.min(200, Number(e.target.value) || 1)),
+   894→                    })
+   895→                  }
+   896→                  placeholder="50"
+   897→                />
+   898→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+   899→                  items
+   900→                </span>
+   901→              </div>
+   902→              <p className="text-xs text-muted-foreground mt-1">Max items allowed in a single sale cart</p>
+   903→            </div>
+   904→          </div>
+   905→
+   906→          <div className="space-y-3">
+   907→            {toggleRow(
+   908→              'auto-print',
+   909→              <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />,
+   910→              'Auto-Print Receipt',
+   911→              'Automatically print receipt after completing a sale',
+   912→              pos.autoPrintReceipt,
+   913→              (checked) => setPos({ ...pos, autoPrintReceipt: checked }),
+   914→            )}
+   915→            {toggleRow(
+   916→              'require-customer',
+   917→              <Building2 className="h-3.5 w-3.5 text-muted-foreground" />,
+   918→              'Require Customer for Sale',
+   919→              'Require customer selection before completing a sale',
+   920→              pos.requireCustomer,
+   921→              (checked) => setPos({ ...pos, requireCustomer: checked }),
+   922→            )}
+   923→            {toggleRow(
+   924→              'allow-negative-stock',
+   925→              <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />,
+   926→              'Allow Negative Stock',
+   927→              'Allow selling products even when stock is zero',
+   928→              pos.allowNegativeStock,
+   929→              (checked) => setPos({ ...pos, allowNegativeStock: checked }),
+   930→            )}
+   931→          </div>
+   932→        </CardContent>
+   933→      </Card>
+   934→
+   935→      {/* 4. Display Settings */}
+   936→      <Card className="overflow-hidden">
+   937→        {sectionHeader(
+   938→          <Monitor className="h-4 w-4" />,
+   939→          'Display Settings',
+   940→          'Currency, date, and time formatting preferences',
+   941→        )}
+   942→        <CardContent className="space-y-4 pt-0">
+   943→          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+   944→            <div>
+   945→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   946→                <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
+   947→                Currency
+   948→              </Label>
+   949→              <Select
+   950→                value={display.currency}
+   951→                onValueChange={(v) => setDisplay({ ...display, currency: v })}
+   952→              >
+   953→                <SelectTrigger className="mt-1.5">
+   954→                  <SelectValue />
+   955→                </SelectTrigger>
+   956→                <SelectContent>
+   957→                  <SelectItem value="GHS">GHS — Ghana Cedi</SelectItem>
+   958→                  <SelectItem value="USD">USD — US Dollar</SelectItem>
+   959→                  <SelectItem value="EUR">EUR — Euro</SelectItem>
+   960→                  <SelectItem value="GBP">GBP — British Pound</SelectItem>
+   961→                </SelectContent>
+   962→              </Select>
+   963→            </div>
+   964→            <div>
+   965→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   966→                <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+   967→                Date Format
+   968→              </Label>
+   969→              <Select
+   970→                value={display.dateFormat}
+   971→                onValueChange={(v) => setDisplay({ ...display, dateFormat: v })}
+   972→              >
+   973→                <SelectTrigger className="mt-1.5">
+   974→                  <SelectValue />
+   975→                </SelectTrigger>
+   976→                <SelectContent>
+   977→                  <SelectItem value="dd/MM/yyyy">DD/MM/YYYY</SelectItem>
+   978→                  <SelectItem value="MM/dd/yyyy">MM/DD/YYYY</SelectItem>
+   979→                  <SelectItem value="yyyy-MM-dd">YYYY-MM-DD</SelectItem>
+   980→                  <SelectItem value="dd-MMM-yyyy">DD-MMM-YYYY</SelectItem>
+   981→                </SelectContent>
+   982→              </Select>
+   983→            </div>
+   984→            <div>
+   985→              <Label className="text-sm font-medium flex items-center gap-1.5">
+   986→                <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+   987→                Time Format
+   988→              </Label>
+   989→              <Select
+   990→                value={display.timeFormat}
+   991→                onValueChange={(v) => setDisplay({ ...display, timeFormat: v })}
+   992→              >
+   993→                <SelectTrigger className="mt-1.5">
+   994→                  <SelectValue />
+   995→                </SelectTrigger>
+   996→                <SelectContent>
+   997→                  <SelectItem value="HH:mm">24-Hour (14:30)</SelectItem>
+   998→                  <SelectItem value="hh:mm a">12-Hour (2:30 PM)</SelectItem>
+   999→                </SelectContent>
+  1000→              </Select>
+  1001→            </div>
+  1002→          </div>
+  1003→        </CardContent>
+  1004→      </Card>
+  1005→
+  1006→      {/* 5. Notifications */}
+  1007→      <Card className="overflow-hidden">
+  1008→        {sectionHeader(
+  1009→          <Bell className="h-4 w-4" />,
+  1010→          'Notifications',
+  1011→          'Alert thresholds and notification preferences',
+  1012→        )}
+  1013→        <CardContent className="space-y-5 pt-0">
+  1014→          {toggleRow(
+  1015→            'enable-notifications',
+  1016→            <Bell className="h-3.5 w-3.5 text-muted-foreground" />,
+  1017→            'Enable Notifications',
+  1018→            'Show alerts for low stock and expiring products',
+  1019→            notifications.enableNotifications,
+  1020→            (checked) => setNotifications({ ...notifications, enableNotifications: checked }),
+  1021→          )}
+  1022→
+  1023→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  1024→            <div>
+  1025→              <Label htmlFor="low-stock-threshold" className="text-sm font-medium">
+  1026→                Low Stock Alert Threshold
+  1027→              </Label>
+  1028→              <p className="text-xs text-muted-foreground mb-1.5">
+  1029→                Alert when stock falls below this quantity
+  1030→              </p>
+  1031→              <Input
+  1032→                id="low-stock-threshold"
+  1033→                type="number"
+  1034→                min="1"
+  1035→                value={notifications.lowStockThreshold}
+  1036→                onChange={(e) =>
+  1037→                  setNotifications({
+  1038→                    ...notifications,
+  1039→                    lowStockThreshold: Math.max(1, Number(e.target.value) || 1),
+  1040→                  })
+  1041→                }
+  1042→                placeholder="10"
+  1043→              />
+  1044→            </div>
+  1045→            <div>
+  1046→              <Label htmlFor="expiry-alert-days" className="text-sm font-medium">
+  1047→                Expiry Alert (Days)
+  1048→              </Label>
+  1049→              <p className="text-xs text-muted-foreground mb-1.5">
+  1050→                Alert when products expire within this many days
+  1051→              </p>
+  1052→              <div className="relative">
+  1053→                <Input
+  1054→                  id="expiry-alert-days"
+  1055→                  type="number"
+  1056→                  min="1"
+  1057→                  value={notifications.expiryAlertDays}
+  1058→                  onChange={(e) =>
+  1059→                    setNotifications({
+  1060→                      ...notifications,
+  1061→                      expiryAlertDays: Math.max(1, Number(e.target.value) || 1),
+  1062→                    })
+  1063→                  }
+  1064→                  placeholder="30"
+  1065→                />
+  1066→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+  1067→                  days
+  1068→                </span>
+  1069→              </div>
+  1070→            </div>
+  1071→          </div>
+  1072→        </CardContent>
+  1073→      </Card>
+  1074→
+  1075→      {/* 6. Business Hours */}
+  1076→      <Card className="overflow-hidden">
+  1077→        {sectionHeader(
+  1078→          <Clock className="h-4 w-4" />,
+  1079→          'Business Hours',
+  1080→          'Set operating hours and closed days for your pharmacy',
+  1081→        )}
+  1082→        <CardContent className="space-y-4 pt-0">
+  1083→          {toggleRow(
+  1084→            'enable-hours',
+  1085→            <Store className="h-3.5 w-3.5 text-muted-foreground" />,
+  1086→            'Enable Business Hours',
+  1087→            'Restrict POS availability to operating hours',
+  1088→            business.enableHours,
+  1089→            (checked) => setBusiness({ ...business, enableHours: checked }),
+  1090→          )}
+  1091→
+  1092→          {business.enableHours && (
+  1093→            <>
+  1094→              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  1095→                <div>
+  1096→                  <Label htmlFor="open-time" className="text-sm font-medium">
+  1097→                    Opening Time
+  1098→                  </Label>
+  1099→                  <div className="relative mt-1.5">
+  1100→                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+  1101→                    <Input
+  1102→                      id="open-time"
+  1103→                      type="time"
+  1104→                      value={business.openTime}
+  1105→                      onChange={(e) => setBusiness({ ...business, openTime: e.target.value })}
+  1106→                      className="pl-10"
+  1107→                    />
+  1108→                  </div>
+  1109→                </div>
+  1110→                <div>
+  1111→                  <Label htmlFor="close-time" className="text-sm font-medium">
+  1112→                    Closing Time
+  1113→                  </Label>
+  1114→                  <div className="relative mt-1.5">
+  1115→                    <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+  1116→                    <Input
+  1117→                      id="close-time"
+  1118→                      type="time"
+  1119→                      value={business.closeTime}
+  1120→                      onChange={(e) => setBusiness({ ...business, closeTime: e.target.value })}
+  1121→                      className="pl-10"
+  1122→                    />
+  1123→                  </div>
+  1124→                </div>
+  1125→              </div>
+  1126→
+  1127→              <div>
+  1128→                <Label className="text-sm font-medium">Closed Days</Label>
+  1129→                <p className="text-xs text-muted-foreground mb-2">Select days the business is closed</p>
+  1130→                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+  1131→                  {DAYS_OF_WEEK.map((day) => {
+  1132→                    const isChecked = business.closedDays
+  1133→                      .split(',')
+  1134→                      .filter(Boolean)
+  1135→                      .includes(day.value);
+  1136→                    return (
+  1137→                      <label
+  1138→                        key={day.value}
+  1139→                        className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium cursor-pointer transition-all ${
+  1140→                          isChecked
+  1141→                            ? 'border-emerald-600 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300'
+  1142→                            : 'border-muted bg-muted/30 text-muted-foreground hover:bg-muted/50'
+  1143→                        }`}
+  1144→                      >
+  1145→                        <Checkbox
+  1146→                          checked={isChecked}
+  1147→                          onCheckedChange={() => toggleClosedDay(day.value)}
+  1148→                          className="sr-only"
+  1149→                        />
+  1150→                        <span className="select-none">{day.label.slice(0, 3)}</span>
+  1151→                      </label>
+  1152→                    );
+  1153→                  })}
+  1154→                </div>
+  1155→              </div>
+  1156→
+  1157→              <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+  1158→                <Info className="h-3 w-3" />
+  1159→                Business hours affect POS availability. Sales outside hours will show a warning.
+  1160→              </p>
+  1161→            </>
+  1162→          )}
+  1163→        </CardContent>
+  1164→      </Card>
+  1165→
+  1166→      {/* 7. Data & Security */}
+  1167→      <Card className="overflow-hidden">
+  1168→        {sectionHeader(
+  1169→          <ShieldCheck className="h-4 w-4" />,
+  1170→          'Data & Security',
+  1171→          'Backup, session, and data management settings',
+  1172→        )}
+  1173→        <CardContent className="space-y-4 pt-0">
+  1174→          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+  1175→            <div>
+  1176→              <Label className="text-sm font-medium flex items-center gap-1.5">
+  1177→                <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
+  1178→                Auto Backup Interval
+  1179→              </Label>
+  1180→              <Select
+  1181→                value={data.autoBackup}
+  1182→                onValueChange={(v) => setData({ ...data, autoBackup: v })}
+  1183→              >
+  1184→                <SelectTrigger className="mt-1.5">
+  1185→                  <SelectValue />
+  1186→                </SelectTrigger>
+  1187→                <SelectContent>
+  1188→                  <SelectItem value="off">Off</SelectItem>
+  1189→                  <SelectItem value="daily">Daily</SelectItem>
+  1190→                  <SelectItem value="weekly">Weekly</SelectItem>
+  1191→                </SelectContent>
+  1192→              </Select>
+  1193→              <p className="text-xs text-muted-foreground mt-1">Automatic data backup schedule</p>
+  1194→            </div>
+  1195→            <div>
+  1196→              <Label htmlFor="session-timeout" className="text-sm font-medium flex items-center gap-1.5">
+  1197→                <Timer className="h-3.5 w-3.5 text-muted-foreground" />
+  1198→                Session Timeout
+  1199→              </Label>
+  1200→              <div className="relative mt-1.5">
+  1201→                <Input
+  1202→                  id="session-timeout"
+  1203→                  type="number"
+  1204→                  min="5"
+  1205→                  max="1440"
+  1206→                  value={data.sessionTimeout}
+  1207→                  onChange={(e) =>
+  1208→                    setData({
+  1209→                      ...data,
+  1210→                      sessionTimeout: Math.max(5, Math.min(1440, Number(e.target.value) || 5)),
+  1211→                    })
+  1212→                  }
+  1213→                  placeholder="480"
+  1214→                />
+  1215→                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+  1216→                  min
+  1217→                </span>
+  1218→              </div>
+  1219→              <p className="text-xs text-muted-foreground mt-1">Auto-logout after idle (default: 8 hrs)</p>
+  1220→            </div>
+  1221→          </div>
+  1222→
+  1223→          <div className="space-y-3">
+  1224→            {toggleRow(
+  1225→              'require-password',
+  1226→              <Lock className="h-3.5 w-3.5 text-muted-foreground" />,
+  1227→              'Require Password on Return from Idle',
+  1228→              'Prompt for password when resuming an idle session',
+  1229→              data.requirePassword,
+  1230→              (checked) => setData({ ...data, requirePassword: checked }),
+  1231→            )}
+  1232→          </div>
+  1233→
+  1234→          <Separator />
+  1235→
+  1236→          <div className="flex flex-col sm:flex-row gap-3">
+  1237→            <Button
+  1238→              variant="outline"
+  1239→              className="flex-1 h-11"
+  1240→              onClick={handleExportData}
+  1241→              disabled={exporting}
+  1242→            >
+  1243→              {exporting ? (
+  1244→                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+  1245→              ) : (
+  1246→                <Download className="h-4 w-4 mr-2" />
+  1247→              )}
+  1248→              {exporting ? 'Exporting...' : 'Export All Data'}
+  1249→            </Button>
+  1250→            <AlertDialog>
+  1251→              <AlertDialogTrigger asChild>
+  1252→                <Button
+  1253→                  variant="destructive"
+  1254→                  className="flex-1 h-11"
+  1255→                  disabled={clearing}
+  1256→                >
+  1257→                  {clearing ? (
+  1258→                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+  1259→                  ) : (
+  1260→                    <Trash2 className="h-4 w-4 mr-2" />
+  1261→                  )}
+  1262→                  {clearing ? 'Clearing...' : 'Clear Sales Data'}
+  1263→                </Button>
+  1264→              </AlertDialogTrigger>
+  1265→              <AlertDialogContent>
+  1266→                <AlertDialogHeader>
+  1267→                  <AlertDialogTitle className="flex items-center gap-2">
+  1268→                    <span className="flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+  1269→                      <Trash2 className="h-4 w-4" />
+  1270→                    </span>
+  1271→                    Clear All Sales Data?
+  1272→                  </AlertDialogTitle>
+  1273→                  <AlertDialogDescription className="text-sm leading-relaxed">
+  1274→                    This action <strong className="text-foreground">cannot be undone</strong>. This will
+  1275→                    permanently delete all sales records, sale items, and related return records from the
+  1276→                    system. Product inventory and customer data will be preserved.
+  1277→                  </AlertDialogDescription>
+  1278→                </AlertDialogHeader>
+  1279→                <AlertDialogFooter>
+  1280→                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+  1281→                  <AlertDialogAction
+  1282→                    onClick={handleClearSales}
+  1283→                    className="bg-destructive hover:bg-destructive/90 text-white"
+  1284→                  >
+  1285→                    Yes, Clear All Sales
+  1286→                  </AlertDialogAction>
+  1287→                </AlertDialogFooter>
+  1288→              </AlertDialogContent>
+  1289→            </AlertDialog>
+  1290→          </div>
+  1291→          <p className="text-xs text-muted-foreground">
+  1292→            Export creates a JSON backup of all system data. Sales data clear affects transactions only.
+  1293→          </p>
+  1294→        </CardContent>
+  1295→      </Card>
+  1296→
+  1297→      {/* 8. About System */}
+  1298→      <Card className="overflow-hidden">
+  1299→        {sectionHeader(
+  1300→          <Info className="h-4 w-4" />,
+  1301→          'About System',
+  1302→          'System version, technology stack, and runtime information',
+  1303→        )}
+  1304→        <CardContent className="pt-0">
+  1305→          <div className="rounded-lg border bg-muted/30">
+  1306→            <div className="divide-y">
+  1307→              <div className="flex items-center justify-between px-4 py-3">
+  1308→                <span className="text-sm text-muted-foreground">Version</span>
+  1309→                <span className="text-sm font-medium">1.0.0</span>
+  1310→              </div>
+  1311→              <div className="flex items-center justify-between px-4 py-3">
+  1312→                <span className="text-sm text-muted-foreground">Build Date</span>
+  1313→                <span className="text-sm font-medium">
+  1314→                  {new Date().toLocaleDateString('en-GB', {
+  1315→                    day: '2-digit',
+  1316→                    month: 'short',
+  1317→                    year: 'numeric',
+  1318→                  })}
+  1319→                </span>
+  1320→              </div>
+  1321→              <div className="flex items-center justify-between px-4 py-3">
+  1322→                <span className="text-sm text-muted-foreground">Framework</span>
+  1323→                <span className="text-sm font-medium">Next.js 16 (App Router)</span>
+  1324→              </div>
+  1325→              <div className="flex items-center justify-between px-4 py-3">
+  1326→                <span className="text-sm text-muted-foreground">Language</span>
+  1327→                <span className="text-sm font-medium">TypeScript 5</span>
+  1328→              </div>
+  1329→              <div className="flex items-center justify-between px-4 py-3">
+  1330→                <span className="text-sm text-muted-foreground">UI Library</span>
+  1331→                <span className="text-sm font-medium">shadcn/ui + Tailwind CSS 4</span>
+  1332→              </div>
+  1333→              <div className="flex items-center justify-between px-4 py-3">
+  1334→                <span className="text-sm text-muted-foreground">Database</span>
+  1335→                <div className="flex items-center gap-1.5">
+  1336→                  <HardDrive className="h-4 w-4 text-emerald-500" />
+  1337→                  <span className="text-sm font-medium">SQLite (local)</span>
+  1338→                </div>
+  1339→              </div>
+  1340→              <div className="flex items-center justify-between px-4 py-3">
+  1341→                <span className="text-sm text-muted-foreground">State Management</span>
+  1342→                <span className="text-sm font-medium">Zustand + TanStack Query</span>
+  1343→              </div>
+  1344→              <div className="flex items-center justify-between px-4 py-3">
+  1345→                <span className="text-sm text-muted-foreground">Security</span>
+  1346→                <div className="flex items-center gap-1.5">
+  1347→                  <ShieldCheck className="h-4 w-4 text-emerald-500" />
+  1348→                  <span className="text-sm font-medium">NextAuth.js v4</span>
+  1349→                </div>
+  1350→              </div>
+  1351→              <div className="flex items-center justify-between px-4 py-3">
+  1352→                <span className="text-sm text-muted-foreground">System Uptime</span>
+  1353→                <div className="flex items-center gap-1.5">
+  1354→                  <Activity className="h-4 w-4 text-emerald-500" />
+  1355→                  <span className="text-sm font-medium tabular-nums">{uptime}</span>
+  1356→                </div>
+  1357→              </div>
+  1358→              <div className="flex items-center justify-between px-4 py-3">
+  1359→                <span className="text-sm text-muted-foreground">Database Size</span>
+  1360→                <div className="flex items-center gap-1.5">
+  1361→                  <Database className="h-4 w-4 text-emerald-500" />
+  1362→                  <span className="text-sm font-medium">SQLite (local)</span>
+  1363→                </div>
+  1364→              </div>
+  1365→            </div>
+  1366→          </div>
+  1367→        </CardContent>
+  1368→      </Card>
+  1369→
+  1370→      {/* Bottom Save Bar */}
+  1371→      <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-xl border bg-background/80 backdrop-blur-sm p-4 shadow-sm">
+  1372→        <Button
+  1373→          variant="outline"
+  1374→          onClick={handleReset}
+  1375→        >
+  1376→          Reset to Defaults
+  1377→        </Button>
+  1378→        <Button
+  1379→          className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-200 dark:shadow-emerald-950/50 transition-all min-w-[180px]"
+  1380→          onClick={handleSave}
+  1381→          disabled={saving}
+  1382→        >
+  1383→          {saving ? (
+  1384→            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+  1385→          ) : saved ? (
+  1386→            <CheckCircle2 className="h-4 w-4 mr-2" />
+  1387→          ) : (
+  1388→            <Save className="h-4 w-4 mr-2" />
+  1389→          )}
+  1390→          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save All Settings'}
+  1391→        </Button>
+  1392→      </div>
+  1393→    </div>
+  1394→  );
+  1395→}

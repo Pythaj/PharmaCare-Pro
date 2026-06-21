@@ -62,6 +62,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { useAccentTheme, THEME_SWATCHES, type AccentTheme } from '@/hooks/use-accent-theme';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -171,16 +172,8 @@ function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
 
 // ─── Constants ──────────────────────────────────────────────────
 
+// Re-exported from hook for convenience — COLOR_SWATCHES is now imported from useAccentTheme
 const STORAGE_KEY = 'pharmacy_settings';
-
-const COLOR_SWATCHES = [
-  { name: 'Emerald', value: 'emerald', className: 'bg-emerald-500' },
-  { name: 'Blue', value: 'blue', className: 'bg-blue-500' },
-  { name: 'Violet', value: 'violet', className: 'bg-violet-500' },
-  { name: 'Rose', value: 'rose', className: 'bg-rose-500' },
-  { name: 'Amber', value: 'amber', className: 'bg-amber-500' },
-  { name: 'Teal', value: 'teal', className: 'bg-teal-500' },
-];
 
 const DAYS_OF_WEEK = [
   { label: 'Sunday', value: '0' },
@@ -248,6 +241,9 @@ const defaults: AllSettings = {
 // ─── Component ───────────────────────────────────────────────────
 
 export default function SettingsView() {
+  // Accent theme hook — applies CSS vars and persists to localStorage
+  const { theme: currentAccentTheme, setTheme: setAccentTheme } = useAccentTheme();
+
   const [pharmacy, setPharmacy] = useState<PharmacyInfo>(defaults.pharmacy);
   const [receipt, setReceipt] = useState<ReceiptSettings>(defaults.receipt);
   const [display, setDisplay] = useState<DisplaySettings>(defaults.display);
@@ -282,7 +278,14 @@ export default function SettingsView() {
     const applySettings = (s: Partial<AllSettings>) => {
       if (s.pharmacy) setPharmacy({ ...defaults.pharmacy, ...s.pharmacy });
       if (s.receipt) setReceipt({ ...defaults.receipt, ...s.receipt });
-      if (s.display) setDisplay({ ...defaults.display, ...s.display });
+      if (s.display) {
+        setDisplay({ ...defaults.display, ...s.display });
+        // Also apply the saved accent theme
+        const savedColor = (s.display as any).primaryColor;
+        if (savedColor && ['emerald', 'blue', 'violet', 'rose', 'amber', 'teal'].includes(savedColor)) {
+          setAccentTheme(savedColor as AccentTheme);
+        }
+      }
       if (s.pos) setPos({ ...defaults.pos, ...s.pos });
       if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
       if (s.business) setBusiness({ ...defaults.business, ...s.business });
@@ -643,33 +646,40 @@ export default function SettingsView() {
             <Label className="text-sm font-medium">Primary Color</Label>
             <p className="text-xs text-muted-foreground mb-2">Choose the app&apos;s accent color theme</p>
             <div className="flex flex-wrap gap-2">
-              {COLOR_SWATCHES.map((swatch) => (
-                <button
-                  key={swatch.value}
-                  type="button"
-                  onClick={() => setDisplay({ ...display, primaryColor: swatch.value })}
-                  className={`group flex items-center gap-2 rounded-lg border-2 px-3 py-2 transition-all ${
-                    display.primaryColor === swatch.value
-                      ? 'border-emerald-600 bg-emerald-50 dark:bg-emerald-950/30'
-                      : 'border-transparent bg-muted/50 hover:bg-muted'
-                  }`}
-                >
-                  <span
-                    className={`h-5 w-5 rounded-full shadow-sm ring-2 ring-offset-2 ring-offset-background ${
-                      display.primaryColor === swatch.value ? 'ring-emerald-600' : 'ring-transparent'
-                    } ${swatch.className}`}
-                  />
-                  <span
-                    className={`text-xs font-medium ${
-                      display.primaryColor === swatch.value
-                        ? 'text-emerald-700 dark:text-emerald-300'
-                        : 'text-muted-foreground'
-                    }`}
+              {THEME_SWATCHES.map((swatch) => {
+                const isActive = currentAccentTheme === swatch.value;
+                return (
+                  <button
+                    key={swatch.value}
+                    type="button"
+                    onClick={() => {
+                      setAccentTheme(swatch.value);
+                      setDisplay({ ...display, primaryColor: swatch.value });
+                      toast.success(`Theme changed to ${swatch.name}`);
+                    }}
+                    className="group flex items-center gap-2 rounded-lg border-2 px-3 py-2 transition-all"
+                    style={isActive
+                      ? { borderColor: 'var(--accent-primary)', backgroundColor: 'var(--accent-primary-light)' }
+                      : { borderColor: 'transparent' }
+                    }
                   >
-                    {swatch.name}
-                  </span>
-                </button>
-              ))}
+                    <span
+                      className="h-5 w-5 rounded-full shadow-sm ring-2 ring-offset-2 ring-offset-background"
+                      style={{
+                        backgroundColor: swatch.preview,
+                        ringColor: isActive ? swatch.preview : 'transparent',
+                        boxShadow: isActive ? `0 0 0 2px ${swatch.preview}` : undefined,
+                      }}
+                    />
+                    <span
+                      className="text-xs font-medium"
+                      style={isActive ? { color: 'var(--accent-primary-foreground)' } : { color: 'var(--foreground)' }}
+                    >
+                      {swatch.name}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

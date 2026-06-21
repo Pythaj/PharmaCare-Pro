@@ -148,7 +148,7 @@ export function Sidebar() {
     <div className="flex h-full flex-col overflow-hidden">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 px-4">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: 'var(--accent-primary)' }}>
           <Pill className="h-5 w-5 text-white" />
         </div>
         <AnimatePresence>
@@ -220,14 +220,15 @@ export function Sidebar() {
                         className={cn(
                           'group flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-200',
                           isActive
-                            ? 'bg-emerald-500/15 text-emerald-400'
+                            ? 'text-[var(--accent-primary-fg-dark)]'
                             : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'
                         )}
+                        style={isActive ? { backgroundColor: 'var(--accent-primary-muted)' } : undefined}
                       >
                         <Icon
                           className={cn(
                             'h-4.5 w-4.5 shrink-0 transition-colors',
-                            isActive ? 'text-emerald-400' : 'text-slate-500 group-hover:text-slate-300'
+                            isActive ? 'text-[var(--accent-primary-fg-dark)]' : 'text-slate-500 group-hover:text-slate-300'
                           )}
                         />
                         <AnimatePresence>
@@ -246,7 +247,8 @@ export function Sidebar() {
                         {isActive && sidebarOpen && (
                           <motion.div
                             layoutId="sidebar-active-indicator"
-                            className="ml-auto h-1.5 w-1.5 rounded-full bg-emerald-400"
+                            className="ml-auto h-1.5 w-1.5 rounded-full"
+                            style={{ backgroundColor: 'var(--accent-primary-dot)' }}
                             transition={{ type: 'spring', stiffness: 500, damping: 30 }}
                           />
                         )}
@@ -286,8 +288,8 @@ export function Sidebar() {
             !sidebarOpen && 'justify-center px-0'
           )}
         >
-          <Avatar className="h-8 w-8 border border-emerald-500/30">
-            <AvatarFallback className="bg-emerald-500/20 text-xs font-semibold text-emerald-400">
+          <Avatar className="h-8 w-8" style={{ borderColor: 'var(--accent-primary-border)' }}>
+            <AvatarFallback className="text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary-muted)', color: 'var(--accent-primary-fg-dark)' }}>
               {currentUser?.name?.split(' ').map(n => n[0]).join('') || 'U'}
             </AvatarFallback>
           </Avatar>

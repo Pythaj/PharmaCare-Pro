@@ -5,6 +5,7 @@ import { useAppStore } from '@/stores/app-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import LoginPage from '@/components/auth/LoginPage';
+import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Page } from '@/types';
 
@@ -102,9 +103,15 @@ export default function Home() {
     return pageComponents[resolvedPage] || null;
   }, [resolvedPage]);
 
+  // Theme initialization (renders nothing, applies CSS vars)
+  // Must be rendered always, even on login page
+
   // Login page
   if (!isAuthenticated || currentPage === 'login') {
-    return <LoginPage />;
+    return <>
+      <ThemeInitializer />
+      <LoginPage />
+    </>;
   }
 
   // Sidebar width: only apply margin on desktop where sidebar is fixed
@@ -113,6 +120,7 @@ export default function Home() {
   // App layout
   return (
     <div className="h-screen overflow-hidden bg-slate-50/80">
+      <ThemeInitializer />
       <Sidebar />
       <div
         className="flex flex-1 flex-col min-w-0 h-full transition-[margin-left] duration-300 ease-in-out"

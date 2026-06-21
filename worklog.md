@@ -489,3 +489,33 @@ Stage Summary:
 - Rewritten: `/src/components/inventory/ProductsView.tsx` — enhanced product list with stock+expiry badges
 - Auto-detection categories: Out of Stock (stock=0), Low Stock (stock<=reorderLevel), Expiring Soon (within 90 days), Expired (past date)
 - Visual alerts: animated pulse for critical, collapsible panels, progress health bar, row highlighting
+
+---
+Task ID: 15
+Agent: Main Orchestrator
+Task: Implement working accent color theme switching (Emerald, Blue, Violet, Rose, Amber, Teal)
+
+Work Log:
+- Analyzed existing Settings page placeholder color swatches and identified all hardcoded emerald references
+- Created `AccentTheme` type and added `accentTheme` + `setAccentTheme` to Zustand store
+- Created `ThemeInitializer` component that syncs theme from localStorage → Zustand → CSS variables on app mount
+- Created `useAccentTheme` hook with full theme definitions including 20+ CSS custom properties per theme
+- Defined 6 complete themes (Emerald, Blue, Violet, Rose, Amber, Teal) with full color scales
+- Updated `Sidebar.tsx` — replaced 6 hardcoded emerald refs with CSS variable style props
+- Updated `Header.tsx` — replaced 31 hardcoded emerald refs with CSS variable style props (sidebar active, avatar, profile dialog gradient, buttons, badges, search focus)
+- Updated `LoginPage.tsx` — replaced 6 hardcoded emerald refs with CSS variable style props (gradient panel, logo, input focus, sign-in button)
+- Updated `SettingsView.tsx` — imported useAccentTheme, replaced static COLOR_SWATCHES with dynamic THEME_SWATCHES, wired click handlers to setAccentTheme + setDisplay + toast
+- Added settings load sync: when saved theme loads from API/localStorage, it's applied to Zustand store
+- Added `ThemeInitializer` to both login and app layout in page.tsx
+- Verified all 6 themes in browser — CSS vars update instantly, persist across page navigation, no console errors
+
+Stage Summary:
+- Created: `/src/hooks/use-accent-theme.ts` — theme definitions, hook, and swatch data
+- Created: `/src/components/ThemeInitializer.tsx` — CSS var sync from localStorage/Zustand
+- Modified: `/src/stores/app-store.ts` — added AccentTheme type, accentTheme state, setAccentTheme action
+- Modified: `/src/app/page.tsx` — renders ThemeInitializer on both login and app layout
+- Modified: `/src/components/layout/Sidebar.tsx` — 6 emerald refs → CSS vars
+- Modified: `/src/components/layout/Header.tsx` — 31 emerald refs → CSS vars
+- Modified: `/src/components/auth/LoginPage.tsx` — 6 emerald refs → CSS vars
+- Modified: `/src/components/admin/SettingsView.tsx` — wired swatches to real theme switching
+- All themes verified working: Emerald (#059669), Blue (#2563eb), Violet (#7c3aed), Rose (#e11d48), Amber (#d97706), Teal (#0d9488)

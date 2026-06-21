@@ -132,7 +132,7 @@ function ProfileDialog() {
     <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
       <DialogContent className="sm:max-w-md p-0 overflow-hidden gap-0">
         {/* Premium gradient header */}
-        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 px-6 pb-8 pt-8">
+        <div className="relative px-6 pb-8 pt-8" style={{ background: 'linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-via), var(--accent-gradient-to))' }}>
           {/* Subtle pattern overlay */}
           <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PGNpcmNsZSBjeD0iMzAiIGN5PSIzMCIgcj0iMiIvPjwvZz48L2c+PC9zdmc+')] opacity-50" />
           <DialogHeader>
@@ -148,7 +148,7 @@ function ProfileDialog() {
                 </AvatarFallback>
               </Avatar>
               {/* Online indicator */}
-              <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 border-emerald-500 bg-green-400" />
+              <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 bg-green-400" style={{ borderColor: 'var(--accent-primary)' }} />
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="text-lg font-bold text-white truncate">{currentUser.name}</h3>
@@ -187,16 +187,17 @@ function ProfileDialog() {
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => handleQuickAction('pos')}
-                className="flex items-center gap-2.5 rounded-xl bg-emerald-50 p-3 text-left transition-all hover:bg-emerald-100 hover:shadow-sm active:scale-[0.98] border border-emerald-100/80"
+                className="flex items-center gap-2.5 rounded-xl p-3 text-left transition-all hover:shadow-sm active:scale-[0.98] border"
+                style={{ backgroundColor: 'var(--accent-primary-light)', borderColor: 'var(--accent-primary-border)' }}
               >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500 shadow-sm">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg shadow-sm" style={{ backgroundColor: 'var(--accent-primary)' }}>
                   <ShoppingCart className="h-4 w-4 text-white" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold text-emerald-900">New Sale</p>
-                  <p className="text-[10px] text-emerald-600/70">Start POS</p>
+                  <p className="text-xs font-semibold" style={{ color: 'var(--accent-700, #047857)' }}>New Sale</p>
+                  <p className="text-[10px] opacity-70" style={{ color: 'var(--accent-primary)' }}>Start POS</p>
                 </div>
-                <ChevronRight className="ml-auto h-3.5 w-3.5 text-emerald-400" />
+                <ChevronRight className="ml-auto h-3.5 w-3.5" style={{ color: 'var(--accent-primary-dot)' }} />
               </button>
               <button
                 onClick={() => handleQuickAction('sales-history')}
@@ -219,30 +220,30 @@ function ProfileDialog() {
                 <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contact Information</h4>
                 <div className="space-y-2.5">
                   <div className="flex items-center gap-3 text-sm">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
-                      <Mail className="h-3.5 w-3.5 text-emerald-600" />
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
+                      <Mail className="h-3.5 w-3.5" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <span className="text-slate-700 truncate">{currentUser.email}</span>
                   </div>
                   {currentUser.phone && (
                     <div className="flex items-center gap-3 text-sm">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
-                        <Phone className="h-3.5 w-3.5 text-emerald-600" />
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
+                        <Phone className="h-3.5 w-3.5" style={{ color: 'var(--accent-primary)' }} />
                       </div>
                       <span className="text-slate-700">{currentUser.phone}</span>
                     </div>
                   )}
                   <div className="flex items-center gap-3 text-sm">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
-                      <Shield className="h-3.5 w-3.5 text-emerald-600" />
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
+                      <Shield className="h-3.5 w-3.5" style={{ color: 'var(--accent-primary)' }} />
                     </div>
-                    <span className={cn('font-medium', currentUser.active ? 'text-emerald-700' : 'text-red-600')}>
+                    <span className={cn('font-medium', currentUser.active ? '' : 'text-red-600')} style={currentUser.active ? { color: 'var(--accent-primary-foreground)' } : undefined}>
                       {currentUser.active ? '● Active Account' : '○ Inactive Account'}
                     </span>
                   </div>
                   <div className="flex items-center gap-3 text-sm">
-                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
-                      <Calendar className="h-3.5 w-3.5 text-emerald-600" />
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
+                      <Calendar className="h-3.5 w-3.5" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <span className="text-slate-700">
                       Joined {new Date(currentUser.createdAt).toLocaleDateString('en-GH', { year: 'numeric', month: 'long', day: 'numeric' })}
@@ -253,13 +254,13 @@ function ProfileDialog() {
             </Card>
 
             {/* Performance stats */}
-            <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 shadow-sm">
+            <Card className="shadow-sm" style={{ borderColor: 'var(--accent-primary-border)', background: 'linear-gradient(to bottom right, var(--accent-primary-light), rgba(13,148,136,0.05))' }}>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-3">
-                  <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-md" style={{ backgroundColor: 'var(--accent-primary)' }}>
                     <TrendingUp className="h-3.5 w-3.5 text-white" />
                   </div>
-                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Your Performance</h4>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--accent-primary-foreground)' }}>Your Performance</h4>
                 </div>
                 {loading ? (
                   <div className="grid grid-cols-2 gap-2.5">
@@ -269,30 +270,30 @@ function ProfileDialog() {
                   </div>
                 ) : stats ? (
                   <div className="grid grid-cols-2 gap-2.5">
-                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                    <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
                         <Star className="h-3 w-3 text-amber-500" />
                         <span className="text-[10px] font-medium text-slate-500">Transactions</span>
                       </div>
                       <p className="text-lg font-bold text-slate-800">{stats.txCount}</p>
                     </div>
-                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                    <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
-                        <TrendingUp className="h-3 w-3 text-emerald-500" />
+                        <TrendingUp className="h-3 w-3" style={{ color: 'var(--accent-primary)' }} />
                         <span className="text-[10px] font-medium text-slate-500">All Time</span>
                       </div>
                       <p className="text-base font-bold text-slate-800">{formatGHS(stats.totalSales)}</p>
                     </div>
-                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                    <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
                         <Clock className="h-3 w-3 text-blue-500" />
                         <span className="text-[10px] font-medium text-slate-500">This Week</span>
                       </div>
                       <p className="text-base font-bold text-slate-800">{formatGHS(stats.weekSales)}</p>
                     </div>
-                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                    <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
-                        <Award className="h-3 w-3 text-emerald-500" />
+                        <Award className="h-3 w-3" style={{ color: 'var(--accent-primary)' }} />
                         <span className="text-[10px] font-medium text-slate-500">Today</span>
                       </div>
                       <p className="text-base font-bold text-slate-800">{formatGHS(stats.todaySales)}</p>
@@ -300,13 +301,14 @@ function ProfileDialog() {
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2 py-4">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100">
-                      <TrendingUp className="h-5 w-5 text-emerald-500" />
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
+                      <TrendingUp className="h-5 w-5" style={{ color: 'var(--accent-primary)' }} />
                     </div>
                     <p className="text-sm text-slate-500">No sales data available yet.</p>
                     <button
                       onClick={() => handleQuickAction('pos')}
-                      className="mt-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 underline underline-offset-2"
+                      className="mt-1 text-xs font-medium underline underline-offset-2"
+                      style={{ color: 'var(--accent-primary)' }}
                     >
                       Start your first sale →
                     </button>
@@ -438,7 +440,7 @@ export function Header() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
-              className="h-9 w-full pl-9 border-slate-200 bg-slate-50/50 text-sm placeholder:text-slate-400 focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500"
+              className="h-9 w-full pl-9 border-slate-200 bg-slate-50/50 text-sm placeholder:text-slate-400 focus-visible:border-[var(--accent-primary)]"
             />
           </div>
         </div>
@@ -470,8 +472,8 @@ export function Header() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" className="relative flex h-9 items-center gap-2 rounded-full pl-1.5 pr-3 hover:bg-slate-100">
-              <Avatar className="h-7 w-7 border border-emerald-500/30">
-                <AvatarFallback className="bg-emerald-500/15 text-xs font-semibold text-emerald-600">
+              <Avatar className="h-7 w-7" style={{ borderColor: 'var(--accent-primary-border)' }}>
+                <AvatarFallback className="text-xs font-semibold" style={{ backgroundColor: 'var(--accent-primary-muted)', color: 'var(--accent-primary)' }}>
                   {currentUser?.name?.split(' ').map(n => n[0]).join('') || 'U'}
                 </AvatarFallback>
               </Avatar>

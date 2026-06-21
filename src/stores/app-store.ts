@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { Page, User, CartItem } from '@/types';
 
+export type AccentTheme = 'emerald' | 'blue' | 'violet' | 'rose' | 'amber' | 'teal';
+
 interface AppState {
   // Auth
   currentUser: User | null;
@@ -18,6 +20,7 @@ interface AppState {
   // UI State
   searchQuery: string;
   showProfileDialog: boolean;
+  accentTheme: AccentTheme;
   
   // Actions
   login: (user: User) => void;
@@ -36,6 +39,7 @@ interface AppState {
   // Search
   setSearchQuery: (query: string) => void;
   setShowProfileDialog: (open: boolean) => void;
+  setAccentTheme: (theme: AccentTheme) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -55,6 +59,7 @@ export const useAppStore = create<AppState>((set) => ({
   // UI State
   searchQuery: '',
   showProfileDialog: false,
+  accentTheme: 'emerald' as AccentTheme,
   
   // Actions
   login: (user) => set({
@@ -127,4 +132,5 @@ export const useAppStore = create<AppState>((set) => ({
   // Search
   setSearchQuery: (query) => set({ searchQuery: query }),
   setShowProfileDialog: (open) => set({ showProfileDialog: open }),
+  setAccentTheme: (theme) => set({ accentTheme: theme }),
 }));
