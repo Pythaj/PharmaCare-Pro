@@ -39,3 +39,38 @@ export async function GET(
     )
   }
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const sale = await db.sale.findUnique({
+      where: { id },
+      include: {
+        _count: { select: { returns: true } },
+      },
+    })
+
+    if (!sale) {
+      return NextResponse.json({ error: 'Sale not found' }, { status: 404 })
+    }
+
+    if (sale._count.returns > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete sale with existing return records' },
+        { status: 400 }
+      )
+    }
+
+    // SaleItem has onDelete: Cascade, so deleting sale removes all items
+    await db.sale.delete({ where: { id } })
+
+    return NextResponse.json({ message: 'Sale deleted successfully' })
+  } catch (error) {
+    console.error('Sale delete error:', error)
+    return NextResponse.json({ error: 'Failed to delete sale' }, { status: 500 })
+  }
+}

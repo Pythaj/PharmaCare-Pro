@@ -428,3 +428,31 @@ Stage Summary:
 - Global error handling utility created for consistent API error reporting
 - Triple-layer security: sidebar filtering, navigate() blocklist, page.tsx resolvedPage guard
 - Zero lint errors
+
+---
+Task ID: 13
+Agent: Main Orchestrator
+Task: Add delete functionality across all admin sections + fix security issues
+
+Work Log:
+- Fixed duplicate React key warning in Sidebar (two sections with title 'SALES')
+- Completely separated admin and sales navigation into distinct arrays for clean separation
+- Removed "View Only" admin restriction banner from sales ProductsView
+- Added DELETE /api/users/[id] — deletes users with no sales/purchases; blocks otherwise
+- Added delete button + confirmation dialog in UsersView for admin
+- Added delete button + confirmation dialog in ProductsView (soft-delete via existing endpoint)
+- Created DELETE /api/returns/[id] — only pending returns can be deleted; recalculates sale status
+- Added delete button + confirmation dialog in ReturnsView (only for pending returns)
+- Added DELETE /api/sales/[id] — deletes sales with no returns; blocks otherwise
+- Added delete button + confirmation dialog in SalesHistoryView (admin only, not visible to sales)
+- Fixed DELETE /api/sales bulk route (was missing, caused 405 in SettingsView)
+- Added auth check to DELETE /api/suppliers/[id] (was previously unprotected)
+- All delete operations use AlertDialog confirmation with descriptive messages
+
+Stage Summary:
+- Admin can now delete: Users, Products, Returns (pending only), Sales (no returns), Suppliers
+- All delete operations have proper confirmation dialogs with error handling
+- FK constraints respected: users with sales/purchases can't be deleted, sales with returns can't be deleted
+- Sales person sees zero delete buttons — delete UI is completely hidden from sales role
+- Bulk sales clear in Settings now works (was broken due to missing DELETE handler)
+- Supplier delete now requires admin role (was publicly accessible before)

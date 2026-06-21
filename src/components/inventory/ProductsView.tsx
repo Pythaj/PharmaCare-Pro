@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { usePermissions } from '@/hooks/use-permissions';
 import type { Product, Batch, Category } from '@/types';
@@ -54,6 +58,9 @@ export default function ProductsView() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [addForm, setAddForm] = useState({ name: '', genericName: '', categoryId: '', unit: 'pcs', reorderLevel: 10 });
   const [submitting, setSubmitting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [productToDelete, setProductToDelete] = useState<ProductWithStock | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const fetchProducts = useCallback(async (query: string, cat: string) => {
@@ -152,6 +159,26 @@ export default function ProductsView() {
     setLoadingBatches(false);
   };
 
+  const handleDeleteProduct = async () => {
+    if (!productToDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/products/${productToDelete.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to remove product');
+      }
+      toast.success(`Product "${productToDelete.name}" removed successfully`);
+      setShowDeleteDialog(false);
+      setProductToDelete(null);
+      fetchProducts(search, categoryFilter);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove product');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-4 p-6">
 
@@ -194,6 +221,7 @@ export default function ProductsView() {
                   <TableHead>Unit</TableHead>
                   <TableHead className="text-right">Stock Qty</TableHead>
                   <TableHead>Status</TableHead>
+                  {canManageProducts && <TableHead className="w-10"></TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -237,10 +265,23 @@ export default function ProductsView() {
                               {status.label}
                             </Badge>
                           </TableCell>
+                          {canManageProducts && (
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                                onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setShowDeleteDialog(true); }}
+                                title="Remove Product"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          )}
                         </TableRow>
                         {isExpanded && (
                           <TableRow key={`${rowKey}-batches`}>
-                            <TableCell colSpan={7} className="bg-muted/30 px-8 py-3">
+                            <TableCell colSpan={canManageProducts ? 8 : 7} className="bg-muted/30 px-8 py-3">
                               {loadingBatches ? (
                                 <div className="space-y-2">
                                   {Array.from({ length: 2 }).map((_, i) => (
@@ -365,6 +406,29 @@ export default function ProductsView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Product Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove Product — {productToDelete?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will deactivate the product and hide it from all listings. Existing sales records containing
+              this product will remain unaffected.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteProduct}
+              disabled={deleting}
+            >
+              {deleting ? 'Removing...' : 'Remove Product'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

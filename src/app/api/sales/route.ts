@@ -216,3 +216,35 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const confirm = searchParams.get('confirm')
+
+    if (confirm !== 'yes') {
+      return NextResponse.json(
+        { error: 'Confirmation required. Pass ?confirm=yes to delete all sales.' },
+        { status: 400 }
+      )
+    }
+
+    // Delete returns first (they reference sales)
+    const returnCount = await db.return.count()
+    if (returnCount > 0) {
+      await db.return.deleteMany()
+    }
+
+    // SaleItems cascade on sale delete
+    const saleCount = await db.sale.count()
+    await db.sale.deleteMany()
+
+    return NextResponse.json({ message: `Deleted ${saleCount} sales and ${returnCount} return records` })
+  } catch (error) {
+    console.error('Bulk sales delete error:', error)
+    return NextResponse.json(
+      { error: 'Failed to delete sales' },
+      { status: 500 }
+    )
+  }
+}

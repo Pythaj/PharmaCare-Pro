@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, RotateCcw } from 'lucide-react';
+import { Plus, RotateCcw, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,10 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import type { Return, Sale } from '@/types';
 
@@ -39,6 +43,9 @@ export default function ReturnsView() {
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [returnToDelete, setReturnToDelete] = useState<Return | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const [form, setForm] = useState({
     saleId: '',
@@ -136,6 +143,27 @@ export default function ReturnsView() {
     }
   };
 
+  const handleDeleteReturn = async () => {
+    if (!returnToDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/returns/${returnToDelete.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete return');
+      }
+      toast.success('Return deleted successfully');
+      setShowDeleteDialog(false);
+      setReturnToDelete(null);
+      const returnsRes = await fetch('/api/returns');
+      if (returnsRes.ok) { const d = await returnsRes.json(); setReturns(d.returns ?? []); }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete return');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="space-y-4 p-6">
       <div className="flex justify-end">
@@ -158,6 +186,7 @@ export default function ReturnsView() {
                   <TableHead className="text-right">Refund Amount</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
+                  <TableHead className="w-10"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -171,6 +200,7 @@ export default function ReturnsView() {
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell><Skeleton className="h-8 w-8" /></TableCell>
                     </TableRow>
                   ))
                 ) : returns.length > 0 ? (
@@ -185,11 +215,24 @@ export default function ReturnsView() {
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(ret.createdAt).toLocaleDateString('en-GH')}
                       </TableCell>
+                      <TableCell>
+                        {ret.status === 'pending' && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                            onClick={() => { setReturnToDelete(ret); setShowDeleteDialog(true); }}
+                            title="Delete Return"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
                       No returns recorded yet
                     </TableCell>
                   </TableRow>
@@ -273,6 +316,28 @@ export default function ReturnsView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Return Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Return — RET-{returnToDelete?.id.slice(0, 8)}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Only pending returns can be deleted. Approved or rejected returns are permanent records.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteReturn}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : 'Delete Return'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

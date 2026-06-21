@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, ChevronDown, ChevronRight, RotateCcw, Printer } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, RotateCcw, Printer, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -14,8 +14,13 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { useAppStore } from '@/stores/app-store';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { Sale, SaleItem, User } from '@/types';
 
 function formatGHS(value: number): string {
@@ -23,6 +28,7 @@ function formatGHS(value: number): string {
 }
 
 export default function SalesHistoryView() {
+  const { isAdmin } = usePermissions();
   const [sales, setSales] = useState<Sale[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState('');
@@ -33,6 +39,9 @@ export default function SalesHistoryView() {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [expandedItems, setExpandedItems] = useState<SaleItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [saleToDelete, setSaleToDelete] = useState<Sale | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const navigate = useAppStore((s) => s.navigate);
 
@@ -121,6 +130,26 @@ export default function SalesHistoryView() {
   const handleRefund = (sale: Sale) => {
     toast.info(`Processing refund for sale ${sale.invoiceNo}...`);
     navigate('returns');
+  };
+
+  const handleDeleteSale = async () => {
+    if (!saleToDelete) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/sales/${saleToDelete.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete sale');
+      }
+      toast.success(`Sale "${saleToDelete.invoiceNo}" deleted successfully`);
+      setShowDeleteDialog(false);
+      setSaleToDelete(null);
+      fetchSales();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete sale');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handlePrintReceipt = (sale: Sale) => {
@@ -294,6 +323,8 @@ export default function SalesHistoryView() {
                         onExpand={handleExpandRow}
                         onRefund={handleRefund}
                         onPrint={handlePrintReceipt}
+                        isAdmin={isAdmin}
+                        onDelete={isAdmin ? (s: Sale) => { setSaleToDelete(s); setShowDeleteDialog(true); } : undefined}
                       />
                     );
                   })
@@ -309,6 +340,29 @@ export default function SalesHistoryView() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Delete Sale Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Sale — {saleToDelete?.invoiceNo}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. The sale and all its items will be permanently deleted.
+              Sales with existing return records cannot be deleted.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteSale}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : 'Delete Sale'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -324,6 +378,8 @@ function SaleRow({
   onExpand,
   onRefund,
   onPrint,
+  isAdmin,
+  onDelete,
 }: {
   sale: Sale;
   isExpanded: boolean;
@@ -334,6 +390,8 @@ function SaleRow({
   onExpand: (id: string) => void;
   onRefund: (s: Sale) => void;
   onPrint: (s: Sale) => void;
+  isAdmin?: boolean;
+  onDelete?: (s: Sale) => void;
 }) {
   return (
     <>
@@ -374,6 +432,17 @@ function SaleRow({
             >
               <Printer className="h-4 w-4" />
             </Button>
+            {isAdmin && onDelete && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                onClick={(e) => { e.stopPropagation(); onDelete(sale); }}
+                title="Delete Sale"
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </TableCell>
       </TableRow>

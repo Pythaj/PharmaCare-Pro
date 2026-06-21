@@ -58,11 +58,17 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params
+
+    // Admin-only action
+    const role = request.headers.get('x-user-role')
+    if (role !== 'admin') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+    }
 
     const existing = await db.supplier.findUnique({
       where: { id },

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Shield, ShieldCheck, KeyRound } from 'lucide-react';
+import { Plus, Shield, ShieldCheck, KeyRound, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -33,6 +33,8 @@ export default function UsersView() {
   const [addForm, setAddForm] = useState({ name: '', email: '', password: '', role: 'sales' as 'admin' | 'sales', phone: '' });
   const [submitting, setSubmitting] = useState(false);
   const [resetPassword, setResetPassword] = useState('');
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -107,6 +109,26 @@ export default function UsersView() {
       }
     } catch {
       toast.error('Failed to reset password');
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (!selectedUser) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/users/${selectedUser.id}`, { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete user');
+      }
+      toast.success(`User "${selectedUser.name}" deleted successfully`);
+      setShowDeleteDialog(false);
+      setSelectedUser(null);
+      fetchUsers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete user');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -189,6 +211,15 @@ export default function UsersView() {
                             onClick={() => handleToggleActive(user)}
                           >
                             {user.active ? 'Deactivate' : 'Activate'}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-500 hover:text-red-600 hover:bg-red-50"
+                            onClick={() => { setSelectedUser(user); setShowDeleteDialog(true); }}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete
                           </Button>
                         </div>
                       </TableCell>
@@ -275,6 +306,29 @@ export default function UsersView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Delete User Confirmation */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete User — {selectedUser?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. The user account will be permanently removed.
+              Users with existing sales or purchase records cannot be deleted — deactivate them instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700 text-white"
+              onClick={handleDeleteUser}
+              disabled={deleting}
+            >
+              {deleting ? 'Deleting...' : 'Delete User'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

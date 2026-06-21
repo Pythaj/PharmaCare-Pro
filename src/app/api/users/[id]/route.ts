@@ -35,3 +35,38 @@ export async function PATCH(
     return NextResponse.json({ error: 'Failed to update user' }, { status: 500 })
   }
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+
+    const user = await db.user.findUnique({
+      where: { id },
+      include: {
+        _count: { select: { sales: true, purchases: true } },
+      },
+    })
+
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    }
+
+    if (user._count.sales > 0 || user._count.purchases > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete user with existing sales or purchase records. Deactivate instead.' },
+        { status: 400 }
+      )
+    }
+
+    await db.auditLog.deleteMany({ where: { userId: id } })
+    await db.user.delete({ where: { id } })
+
+    return NextResponse.json({ message: 'User deleted successfully' })
+  } catch (error) {
+    console.error('User delete error:', error)
+    return NextResponse.json({ error: 'Failed to delete user' }, { status: 500 })
+  }
+}
