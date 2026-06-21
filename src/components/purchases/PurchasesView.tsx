@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Trash2, CalendarDays } from 'lucide-react';
+import { Plus, Trash2, CalendarDays, Eye } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +22,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { Purchase, Supplier, Product } from '@/types';
 
 function formatGHS(value: number): string {
@@ -38,6 +39,7 @@ interface PurchaseItem {
 }
 
 export default function PurchasesView() {
+  const { canManagePurchases } = usePermissions();
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -146,12 +148,21 @@ export default function PurchasesView() {
 
   return (
     <div className="space-y-4 p-6">
-      <div className="flex justify-end">
-        <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
-          <Plus className="h-4 w-4 mr-1" />
-          New Purchase
-        </Button>
-      </div>
+      {!canManagePurchases && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-sm text-amber-800">
+          <Eye className="h-4 w-4 shrink-0" />
+          <span><strong>View Only</strong> — Procurement records are restricted to administrators. Contact your admin to create or modify purchase orders.</span>
+        </div>
+      )}
+
+      {canManagePurchases && (
+        <div className="flex justify-end">
+          <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
+            <Plus className="h-4 w-4 mr-1" />
+            New Purchase
+          </Button>
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-0">
@@ -165,7 +176,7 @@ export default function PurchasesView() {
                   <TableHead className="text-right">Total Amount</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Recorded By</TableHead>
-                  <TableHead className="w-20">Actions</TableHead>
+                  {canManagePurchases && <TableHead className="w-20">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -178,7 +189,7 @@ export default function PurchasesView() {
                       <TableCell><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-8" /></TableCell>
+                      {canManagePurchases && <TableCell><Skeleton className="h-4 w-8" /></TableCell>}
                     </TableRow>
                   ))
                 ) : purchases.length > 0 ? (
@@ -194,21 +205,23 @@ export default function PurchasesView() {
                         {new Date(purchase.createdAt).toLocaleDateString('en-GH')}
                       </TableCell>
                       <TableCell className="text-sm">{purchase.user?.name ?? '-'}</TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
-                          onClick={() => handleDeletePurchase(purchase)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
+                      {canManagePurchases && (
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => handleDeletePurchase(purchase)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={canManagePurchases ? 7 : 6} className="text-center text-muted-foreground py-12">
                       No purchases recorded yet
                     </TableCell>
                   </TableRow>

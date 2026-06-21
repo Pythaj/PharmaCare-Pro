@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin } from '@/lib/require-admin'
 
 export async function GET() {
   try {
@@ -29,6 +30,10 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    const auth = await requireAdmin(body)
+    if (!auth.success) {
+      return NextResponse.json({ error: auth.error }, { status: auth.status })
+    }
     const { invoiceNo, supplierId, userId, batches: batchItems, notes } = body
 
     if (!invoiceNo || !userId) {

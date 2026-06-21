@@ -7,6 +7,7 @@ import {
   DollarSign,
   AlertTriangle,
   Clock,
+  Eye,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +24,7 @@ import {
 } from '@/components/ui/table';
 import type { Product, Batch } from '@/types';
 import { useAppStore } from '@/stores/app-store';
+import { usePermissions } from '@/hooks/use-permissions';
 
 function formatGHS(value: number): string {
   return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
@@ -43,6 +45,7 @@ export default function InventoryView() {
   const [loading, setLoading] = useState(true);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useAppStore((s) => s.navigate);
+  const { canManageInventory } = usePermissions();
 
   const fetchProducts = useCallback(async (query: string) => {
     try {
@@ -118,6 +121,14 @@ export default function InventoryView() {
 
   return (
     <div className="space-y-4 p-6">
+      {/* Read-only banner for sales role */}
+      {!canManageInventory && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-sm text-amber-800">
+          <Eye className="h-4 w-4 shrink-0" />
+          <span><strong>View Only</strong> — Inventory management is restricted to administrators. Contact your admin to add stock or modify inventory.</span>
+        </div>
+      )}
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {summaryCards.map((card) => {
@@ -147,12 +158,14 @@ export default function InventoryView() {
           <Input placeholder="Search inventory..." value={search} onChange={(e) => handleSearch(e.target.value)} className="pl-10" />
         </div>
         <div className="flex gap-2 items-center">
-          <Button
-            className="bg-emerald-600 hover:bg-emerald-700 text-white"
-            onClick={() => navigate('purchases')}
-          >
-            Add Stock / New Purchase
-          </Button>
+          {canManageInventory && (
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={() => navigate('purchases')}
+            >
+              Add Stock / New Purchase
+            </Button>
+          )}
           {filterOptions.map((opt) => (
             <Button
               key={opt.value}

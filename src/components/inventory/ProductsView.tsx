@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Eye } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -31,6 +31,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { toast } from 'sonner';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { Product, Batch, Category } from '@/types';
 
 function formatGHS(value: number): string {
@@ -43,6 +44,7 @@ interface ProductWithStock extends Product {
 }
 
 export default function ProductsView() {
+  const { canManageProducts } = usePermissions();
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState('');
@@ -152,6 +154,12 @@ export default function ProductsView() {
 
   return (
     <div className="space-y-4 p-6">
+      {!canManageProducts && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-4 py-2.5 text-sm text-amber-800">
+          <Eye className="h-4 w-4 shrink-0" />
+          <span><strong>View Only</strong> — Product management is restricted to administrators. Contact your admin to add or modify products.</span>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
         <div className="relative flex-1 max-w-sm">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -169,10 +177,12 @@ export default function ProductsView() {
               ))}
             </SelectContent>
           </Select>
-          <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
-            <Plus className="h-4 w-4 mr-1" />
-            Add Product
-          </Button>
+          {canManageProducts && (
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
+              <Plus className="h-4 w-4 mr-1" />
+              Add Product
+            </Button>
+          )}
         </div>
       </div>
 

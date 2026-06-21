@@ -18,6 +18,7 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogAction, AlertDialogCancel,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
+import { usePermissions } from '@/hooks/use-permissions';
 import type { Customer } from '@/types';
 
 interface CustomerWithPurchases extends Customer {
@@ -26,6 +27,7 @@ interface CustomerWithPurchases extends Customer {
 }
 
 export default function CustomersView() {
+  const { canManageProducts, isAdmin } = usePermissions();
   const [customers, setCustomers] = useState<CustomerWithPurchases[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -189,7 +191,7 @@ export default function CustomersView() {
                   <TableHead>Phone</TableHead>
                   <TableHead>Address</TableHead>
                   <TableHead className="text-right">Total Purchases</TableHead>
-                  <TableHead className="w-24">Actions</TableHead>
+                  {isAdmin && <TableHead className="w-24">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -202,7 +204,7 @@ export default function CustomersView() {
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-36" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-16" /></TableCell>
+                      {isAdmin && <TableCell><Skeleton className="h-4 w-16" /></TableCell>}
                     </TableRow>
                   ))
                 ) : customers.length > 0 ? (
@@ -220,12 +222,13 @@ export default function CustomersView() {
                         onExpand={handleExpandRow}
                         onEdit={handleEditCustomer}
                         onDelete={handleDeleteCustomer}
+                        showActions={isAdmin}
                       />
                     );
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={isAdmin ? 7 : 6} className="text-center text-muted-foreground py-12">
                       No customers found
                     </TableCell>
                   </TableRow>
@@ -269,7 +272,8 @@ export default function CustomersView() {
         </DialogContent>
       </Dialog>
 
-      {/* Edit Customer Dialog */}
+      {/* Edit Customer Dialog - admin only */}
+      {isAdmin && (
       <Dialog open={!!editingCustomer} onOpenChange={(open) => { if (!open) setEditingCustomer(null); }}>
         <DialogContent>
           <DialogHeader>
@@ -301,8 +305,10 @@ export default function CustomersView() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      )}
 
-      {/* Delete Customer AlertDialog */}
+      {/* Delete Customer AlertDialog - admin only */}
+      {isAdmin && (
       <AlertDialog open={!!deletingCustomer} onOpenChange={(open) => { if (!open) setDeletingCustomer(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -323,6 +329,7 @@ export default function CustomersView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      )}
     </div>
   );
 }
@@ -338,6 +345,7 @@ function CustomerRow({
   onExpand,
   onEdit,
   onDelete,
+  showActions,
 }: {
   customer: CustomerWithPurchases;
   isExpanded: boolean;
@@ -348,6 +356,7 @@ function CustomerRow({
   onExpand: (id: string) => void;
   onEdit: (c: CustomerWithPurchases) => void;
   onDelete: (c: CustomerWithPurchases) => void;
+  showActions: boolean;
 }) {
   return (
     <>
@@ -360,6 +369,7 @@ function CustomerRow({
         <TableCell>{customer.phone ?? '-'}</TableCell>
         <TableCell className="max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
         <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
+        {showActions && (
         <TableCell>
           <div className="flex items-center gap-1">
             <Button
@@ -380,10 +390,11 @@ function CustomerRow({
             </Button>
           </div>
         </TableCell>
+        )}
       </TableRow>
       {isExpanded && (
         <TableRow key={`${customer.id}-history`}>
-          <TableCell colSpan={7} className="bg-muted/30 px-8 py-3">
+          <TableCell colSpan={showActions ? 7 : 6} className="bg-muted/30 px-8 py-3">
             {loadingHistory ? (
               <div className="space-y-2">
                 {Array.from({ length: 3 }).map((_, i) => (
