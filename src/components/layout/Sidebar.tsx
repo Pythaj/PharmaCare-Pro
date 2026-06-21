@@ -120,7 +120,7 @@ export function Sidebar() {
   })).filter((section) => section.items.length > 0);
 
   const sidebarContent = (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col overflow-hidden">
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 px-4">
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500">
@@ -164,10 +164,11 @@ export function Sidebar() {
 
       <Separator className="bg-slate-800" />
 
-      {/* Navigation */}
-      <ScrollArea className="flex-1 px-3 py-4">
+      {/* Navigation - min-h-0 allows flex child to scroll */}
+      <div className="flex-1 min-h-0">
+        <ScrollArea className="h-full px-3 py-2">
         <TooltipProvider delayDuration={0}>
-          <nav className="space-y-6">
+          <nav className="space-y-1">
             {visibleSections.map((section) => (
               <div key={section.title}>
                 <AnimatePresence>
@@ -182,7 +183,7 @@ export function Sidebar() {
                     </motion.p>
                   )}
                 </AnimatePresence>
-                <div className="space-y-1">
+                <div className="space-y-0.5">
                   {section.items.map((item) => {
                     const isActive = currentPage === item.page;
                     const Icon = item.icon;
@@ -192,7 +193,7 @@ export function Sidebar() {
                         key={item.page}
                         onClick={() => navigate(item.page)}
                         className={cn(
-                          'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200',
+                          'group flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-sm font-medium transition-all duration-200',
                           isActive
                             ? 'bg-emerald-500/15 text-emerald-400'
                             : 'text-slate-400 hover:bg-slate-800/70 hover:text-white'
@@ -245,12 +246,13 @@ export function Sidebar() {
             ))}
           </nav>
         </TooltipProvider>
-      </ScrollArea>
+        </ScrollArea>
+      </div>
 
       <Separator className="bg-slate-800" />
 
-      {/* User info */}
-      <div className="p-3">
+      {/* User info - shrink-0 keeps it always visible */}
+      <div className="shrink-0 p-3">
         <div className={cn(
           'flex items-center gap-3 rounded-lg bg-slate-800/50 px-3 py-2.5',
           !sidebarOpen && 'justify-center px-0'
@@ -320,16 +322,16 @@ export function Sidebar() {
         )}
       </AnimatePresence>
 
-      {/* Desktop sidebar - fixed position */}
-      <motion.aside
-        animate={{ width: sidebarOpen ? 260 : 68 }}
-        transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-        className="hidden lg:block fixed inset-y-0 left-0 z-40"
-      >
-        <div className="h-full bg-slate-950 border-r border-slate-800/50">
+      {/* Desktop sidebar - fixed position wrapper, inner div animated for width */}
+      <div className="hidden lg:block fixed inset-y-0 left-0 z-40">
+        <motion.div
+          animate={{ width: sidebarOpen ? 260 : 68 }}
+          transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+          className="h-full bg-slate-950 border-r border-slate-800/50"
+        >
           {sidebarContent}
-        </div>
-      </motion.aside>
+        </motion.div>
+      </div>
     </>
   );
 }

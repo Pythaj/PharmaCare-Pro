@@ -143,14 +143,31 @@
 /* Dark scrollbar for sidebar */
 .dark ::-webkit-scrollbar-thumb,
 .bg-slate-950 ::-webkit-scrollbar-thumb,
+.bg-slate-950 ::-webkit-scrollbar-track,
 [data-slot="sidebar"] ::-webkit-scrollbar-thumb {
   background: #475569;
 }
 
 .dark ::-webkit-scrollbar-thumb:hover,
 .bg-slate-950 ::-webkit-scrollbar-thumb:hover,
+.bg-slate-950 ::-webkit-scrollbar-track:hover,
 [data-slot="sidebar"] ::-webkit-scrollbar-thumb:hover {
   background: #64748b;
+}
+
+/* Sidebar scrollbar — always visible for discoverability */
+.bg-slate-950 [data-radix-scroll-area-viewport]::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 3px;
+}
+
+.bg-slate-950 [data-radix-scroll-area-viewport]::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.6);
+}
+
+.bg-slate-950 [data-radix-scroll-area-viewport] {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
 }
 
 /* Premium smooth scrolling */
