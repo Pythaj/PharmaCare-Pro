@@ -456,3 +456,36 @@ Stage Summary:
 - Sales person sees zero delete buttons — delete UI is completely hidden from sales role
 - Bulk sales clear in Settings now works (was broken due to missing DELETE handler)
 - Supplier delete now requires admin role (was publicly accessible before)
+
+---
+Task ID: 14
+Agent: Main Orchestrator
+Task: Enhance inventory section with auto-detection for Low Stock, Expiring Soon, Out of Stock
+
+Work Log:
+- Read and analyzed current Prisma schema, InventoryView, ProductsView, and AdminDashboard
+- Created dedicated `/api/inventory/alerts` API endpoint with comprehensive stock analysis
+- Updated `/api/products` GET endpoint to return stockStatus, expiryStatus, earliestExpiry, daysToExpiry, hasExpiringBatches, hasExpiredBatches
+- Completely rewrote `InventoryView` with professional design:
+  - 5 summary dashboard cards (Total Items, Inventory Value, Out of Stock, Low Stock, Expiry Alerts)
+  - Color-coded alert panels with collapsible sections for each alert type
+  - Animated pulse indicators for critical alerts
+  - Inventory Health progress bar with percentage
+  - Segmented filter buttons with counts (All, Out of Stock, Low Stock, Expiring Soon, Expired)
+  - Enhanced product table with stock level bars, expiry indicators, multi-badge status
+  - Expandable batch details with enhanced status badges (days-left countdown)
+- Enhanced `ProductsView` with combined stock + expiry status:
+  - New "Expiry" column with colored indicator dots
+  - Dual status badges (e.g., "Low Stock" + "Expiring Soon" simultaneously)
+  - Row background highlighting for alert products
+  - Enhanced batch detail view with countdown badges
+- Verified all changes via Agent Browser — no console errors
+- Lint passes clean
+
+Stage Summary:
+- Created: `/src/app/api/inventory/alerts/route.ts` — dedicated inventory alerts endpoint
+- Modified: `/src/app/api/products/route.ts` — added stock/expiry status fields
+- Rewritten: `/src/components/inventory/InventoryView.tsx` — professional inventory management page
+- Rewritten: `/src/components/inventory/ProductsView.tsx` — enhanced product list with stock+expiry badges
+- Auto-detection categories: Out of Stock (stock=0), Low Stock (stock<=reorderLevel), Expiring Soon (within 90 days), Expired (past date)
+- Visual alerts: animated pulse for critical, collapsible panels, progress health bar, row highlighting

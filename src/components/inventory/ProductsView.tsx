@@ -45,6 +45,12 @@ function formatGHS(value: number): string {
 interface ProductWithStock extends Product {
   totalStock: number;
   batches: (Batch & { currentQty: number })[];
+  earliestExpiry?: string | null;
+  daysToExpiry?: number | null;
+  hasExpiringBatches?: boolean;
+  hasExpiredBatches?: boolean;
+  stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
+  expiryStatus?: 'good' | 'expiring_soon' | 'expired';
 }
 
 export default function ProductsView() {
@@ -109,10 +115,41 @@ export default function ProductsView() {
     fetchProducts(search, value);
   };
 
-  const getStockStatus = (qty: number, reorderLevel: number) => {
-    if (qty === 0) return { label: 'Out of Stock', variant: 'destructive' as const };
-    if (qty <= reorderLevel) return { label: 'Low Stock', variant: 'default' as const };
-    return { label: 'In Stock', variant: 'default' as const };
+  /**
+   * Returns combined stock + expiry status badges.
+   * A product can have multiple statuses simultaneously:
+   * - Out of Stock (stock === 0)
+   * - Low Stock (stock > 0 && stock <= reorderLevel)
+   * - Expiring Soon (has batches within 90 days)
+   * - Expired (has batches past expiry)
+   */
+  const getProductStatusBadges = (product: ProductWithStock) => {
+    const badges: { label: string; className: string }[] = [];
+
+    // Stock status
+    if (product.totalStock === 0) {
+      badges.push({ label: 'Out of Stock', className: 'bg-red-500 text-white hover:bg-red-500' });
+    } else if (product.totalStock <= product.reorderLevel) {
+      badges.push({ label: 'Low Stock', className: 'bg-amber-100 text-amber-700 hover:bg-amber-100 border-amber-300' });
+    }
+
+    // Expiry status
+    if (product.hasExpiredBatches) {
+      badges.push({ label: 'Expired Batch', className: 'bg-red-100 text-red-700 hover:bg-red-100' });
+    } else if (product.hasExpiringBatches) {
+      badges.push({ label: 'Expiring Soon', className: 'bg-orange-100 text-orange-700 hover:bg-orange-100 border-orange-300' });
+    }
+
+    // If everything is fine
+    if (badges.length === 0) {
+      badges.push({ label: 'In Stock', className: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-emerald-300' });
+    }
+
+    return badges;
+  };
+
+  const isAlertProduct = (product: ProductWithStock) => {
+    return product.stockStatus !== 'in_stock' || product.hasExpiredBatches || product.hasExpiringBatches;
   };
 
   const handleAddProduct = async () => {
@@ -220,6 +257,7 @@ export default function ProductsView() {
                   <TableHead>Category</TableHead>
                   <TableHead>Unit</TableHead>
                   <TableHead className="text-right">Stock Qty</TableHead>
+                  <TableHead>Expiry</TableHead>
                   <TableHead>Status</TableHead>
                   {canManageProducts && <TableHead className="w-10"></TableHead>}
                 </TableRow>
@@ -234,36 +272,73 @@ export default function ProductsView() {
                       <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-12" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
-                      <TableCell><Skeleton className="h-5 w-20" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+                      <TableCell><Skeleton className="h-5 w-24" /></TableCell>
                     </TableRow>
                   ))
                 ) : products.length > 0 ? (
                   products.map((product, index) => {
-                    const status = getStockStatus(product.totalStock, product.reorderLevel);
+                    const badges = getProductStatusBadges(product);
+                    const hasAlert = isAlertProduct(product);
                     const isExpanded = expandedRow === product.id;
                     const rowKey = product.id || `product-${index}`;
                     return (
                       <Fragment key={rowKey}>
-                        <TableRow className="cursor-pointer hover:bg-muted/50" onClick={() => handleExpandRow(rowKey)}>
+                        <TableRow
+                          className={`cursor-pointer hover:bg-muted/50 ${
+                            hasAlert
+                              ? product.totalStock === 0
+                                ? 'bg-red-50/40'
+                                : product.hasExpiredBatches
+                                  ? 'bg-red-50/20'
+                                  : 'bg-amber-50/20'
+                              : ''
+                          }`}
+                          onClick={() => handleExpandRow(rowKey)}
+                        >
                           <TableCell>
                             {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
                           </TableCell>
                           <TableCell className="font-medium">{product.name}</TableCell>
-                          <TableCell className="text-muted-foreground">{product.genericName ?? '-'}</TableCell>
-                          <TableCell><Badge variant="outline">{product.category?.name ?? '-'}</Badge></TableCell>
-                          <TableCell>{product.unit}</TableCell>
-                          <TableCell className="text-right font-mono">{product.totalStock}</TableCell>
+                          <TableCell className="text-muted-foreground text-sm">{product.genericName ?? '-'}</TableCell>
+                          <TableCell><Badge variant="outline" className="text-xs">{product.category?.name ?? '-'}</Badge></TableCell>
+                          <TableCell className="text-sm">{product.unit}</TableCell>
+                          <TableCell className="text-right">
+                            <span className={`font-mono font-semibold ${
+                              product.totalStock === 0 ? 'text-red-600' :
+                              product.totalStock <= product.reorderLevel ? 'text-amber-600' :
+                              'text-slate-900'
+                            }`}>
+                              {product.totalStock}
+                            </span>
+                          </TableCell>
                           <TableCell>
-                            <Badge
-                              variant={status.variant}
-                              className={
-                                status.label === 'In Stock' ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' :
-                                status.label === 'Low Stock' ? 'bg-amber-100 text-amber-700 hover:bg-amber-100' :
-                                ''
-                              }
-                            >
-                              {status.label}
-                            </Badge>
+                            {product.earliestExpiry ? (
+                              <div className="flex items-center gap-1">
+                                <div className={`w-1.5 h-1.5 rounded-full ${
+                                  product.daysToExpiry !== null && product.daysToExpiry < 0 ? 'bg-red-500' :
+                                  product.daysToExpiry !== null && product.daysToExpiry < 30 ? 'bg-red-500' :
+                                  product.daysToExpiry !== null && product.daysToExpiry < 90 ? 'bg-amber-500' :
+                                  'bg-emerald-500'
+                                }`} />
+                                <span className="text-xs">{new Date(product.earliestExpiry).toLocaleDateString('en-GH')}</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1">
+                              {badges.map((b) => (
+                                <Badge
+                                  key={b.label}
+                                  variant="outline"
+                                  className={`text-[10px] px-1.5 py-0 h-5 ${b.className}`}
+                                >
+                                  {b.label}
+                                </Badge>
+                              ))}
+                            </div>
                           </TableCell>
                           {canManageProducts && (
                             <TableCell>
@@ -281,7 +356,7 @@ export default function ProductsView() {
                         </TableRow>
                         {isExpanded && (
                           <TableRow key={`${rowKey}-batches`}>
-                            <TableCell colSpan={canManageProducts ? 8 : 7} className="bg-muted/30 px-8 py-3">
+                            <TableCell colSpan={canManageProducts ? 9 : 8} className="bg-muted/30 px-8 py-3">
                               {loadingBatches ? (
                                 <div className="space-y-2">
                                   {Array.from({ length: 2 }).map((_, i) => (
@@ -290,37 +365,69 @@ export default function ProductsView() {
                                 </div>
                               ) : batches.length > 0 ? (
                                 <div className="text-sm">
-                                  <p className="font-medium mb-2">Batches for {product.name}</p>
+                                  <p className="font-medium mb-2 text-xs uppercase tracking-wider text-muted-foreground">
+                                    Batches for {product.name}
+                                  </p>
                                   <table className="w-full text-xs">
                                     <thead>
-                                      <tr className="border-b">
-                                        <th className="text-left py-1.5 font-medium">Batch#</th>
-                                        <th className="text-right py-1.5 font-medium">Qty</th>
-                                        <th className="text-right py-1.5 font-medium">Cost Price</th>
-                                        <th className="text-right py-1.5 font-medium">Selling Price</th>
-                                        <th className="text-right py-1.5 font-medium">Expiry Date</th>
-                                        <th className="text-center py-1.5 font-medium">Status</th>
+                                      <tr className="border-b border-dotted">
+                                        <th className="text-left py-1.5 font-medium text-muted-foreground">Batch#</th>
+                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Qty</th>
+                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Cost Price</th>
+                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Selling Price</th>
+                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Expiry Date</th>
+                                        <th className="text-center py-1.5 font-medium text-muted-foreground">Status</th>
                                       </tr>
                                     </thead>
                                     <tbody>
                                       {batches.map((batch) => {
-                                        const isExpired = new Date(batch.expiryDate) < new Date();
-                                        const isExpiringSoon = !isExpired && new Date(batch.expiryDate).getTime() - Date.now() < 90 * 24 * 60 * 60 * 1000;
+                                        const now = new Date();
+                                        const expiry = new Date(batch.expiryDate);
+                                        const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                                        const isExpired = diffDays < 0;
+                                        const isExpiringSoon = !isExpired && diffDays < 90;
+                                        const isDepleted = batch.currentQty <= 0;
+
+                                        let statusLabel: string;
+                                        let statusClass: string;
+                                        let dotColor: string;
+
+                                        if (isDepleted) {
+                                          statusLabel = 'Depleted';
+                                          statusClass = 'bg-slate-100 text-slate-500';
+                                          dotColor = 'bg-slate-400';
+                                        } else if (isExpired) {
+                                          statusLabel = 'Expired';
+                                          statusClass = 'bg-red-100 text-red-700';
+                                          dotColor = 'bg-red-500';
+                                        } else if (isExpiringSoon) {
+                                          statusLabel = diffDays < 30 ? `${diffDays}d left` : 'Expiring Soon';
+                                          statusClass = diffDays < 30
+                                            ? 'bg-red-100 text-red-700'
+                                            : 'bg-amber-100 text-amber-700';
+                                          dotColor = diffDays < 30 ? 'bg-red-500' : 'bg-amber-500';
+                                        } else {
+                                          statusLabel = 'Good';
+                                          statusClass = 'bg-emerald-100 text-emerald-700';
+                                          dotColor = 'bg-emerald-500';
+                                        }
+
                                         return (
-                                          <tr key={batch.id || `batch-${batch.batchNumber}`} className="border-b border-dotted">
+                                          <tr key={batch.id || `batch-${batch.batchNumber}`} className={`border-b border-dotted ${isExpired ? 'bg-red-50/40' : ''}`}>
                                             <td className="py-1.5 font-mono">{batch.batchNumber}</td>
-                                            <td className="text-right font-mono">{batch.currentQty}</td>
+                                            <td className="text-right font-mono font-medium">{batch.currentQty}</td>
                                             <td className="text-right">{formatGHS(batch.costPrice)}</td>
                                             <td className="text-right">{formatGHS(batch.sellingPrice)}</td>
-                                            <td className="text-right">{new Date(batch.expiryDate).toLocaleDateString('en-GH')}</td>
+                                            <td className="text-right">
+                                              <span className={isExpired ? 'text-red-600 font-medium' : ''}>
+                                                {new Date(batch.expiryDate).toLocaleDateString('en-GH')}
+                                              </span>
+                                            </td>
                                             <td className="text-center">
-                                              {isExpired ? (
-                                                <Badge variant="destructive">Expired</Badge>
-                                              ) : isExpiringSoon ? (
-                                                <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100">Expiring Soon</Badge>
-                                              ) : (
-                                                <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100">Good</Badge>
-                                              )}
+                                              <Badge className={`text-[10px] px-1.5 py-0 h-5 ${statusClass}`}>
+                                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor} mr-1`} />
+                                                {statusLabel}
+                                              </Badge>
                                             </td>
                                           </tr>
                                         );
@@ -339,7 +446,7 @@ export default function ProductsView() {
                   })
                 ) : (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground py-12">
+                    <TableCell colSpan={canManageProducts ? 9 : 8} className="text-center text-muted-foreground py-12">
                       No products found
                     </TableCell>
                   </TableRow>
