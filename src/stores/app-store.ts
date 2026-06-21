@@ -5,6 +5,7 @@ interface AppState {
   // Auth
   currentUser: User | null;
   isAuthenticated: boolean;
+  loginTime: number;
   
   // Navigation
   currentPage: Page;
@@ -41,6 +42,7 @@ export const useAppStore = create<AppState>((set) => ({
   // Auth
   currentUser: null,
   isAuthenticated: false,
+  loginTime: 0,
   
   // Navigation
   currentPage: 'login',
@@ -58,16 +60,19 @@ export const useAppStore = create<AppState>((set) => ({
   login: (user) => set({
     currentUser: user,
     isAuthenticated: true,
+    loginTime: Date.now(),
     currentPage: user.role === 'admin' ? 'admin-dashboard' : 'sales-dashboard',
   }),
   
   logout: () => set({
     currentUser: null,
     isAuthenticated: false,
+    loginTime: 0,
     currentPage: 'login',
     cart: [],
     selectedCustomerId: null,
     searchQuery: '',
+    showProfileDialog: false,
   }),
   
   navigate: (page) => set((state) => {

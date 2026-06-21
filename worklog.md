@@ -343,3 +343,33 @@ Stage Summary:
 - Role protection enforced at two levels: Zustand navigate function and page.tsx route resolver
 - Premium profile dialog features: gradient header, performance stats grid, loading states, emerald theme
 - Zero lint errors
+
+---
+Task ID: 11
+Agent: Main Orchestrator
+Task: Enhance sales profile dialog with session timer, quick actions, logout, and premium polish
+
+Work Log:
+- Added `loginTime: number` to Zustand store state, initialized to 0
+- Updated `login()` action to set `loginTime: Date.now()` on authentication
+- Updated `logout()` action to reset `loginTime: 0` and `showProfileDialog: false`
+- Enhanced ProfileDialog in Header.tsx with:
+  - Live session timer using `setInterval` that shows elapsed time since login (updates every second)
+  - `formatDuration()` helper displaying hours, minutes, seconds
+  - Green "online" indicator dot on avatar with border ring
+  - "Session active" pill with `Activity` icon and live elapsed timer in gradient header
+  - Quick action grid: "New Sale" (-> POS) and "Sales History" (-> Sales History) buttons with emerald/slate themes
+  - Active scale animation on quick action buttons
+  - Contact info card with active status indicator (green dot for active, red text for inactive)
+  - Performance stats with improved card styling (shadow-sm borders)
+  - Empty state for no sales data with "Start your first sale" link
+  - Sticky footer with "Sign Out" button (red theme, full-width)
+  - Scrollable content area to prevent overflow on small screens
+- Verified: lint passes with zero errors, dev server compiles successfully (GET / 200)
+
+Stage Summary:
+- Sales profile dialog is now premium with live session timer, quick actions, and logout
+- Login time tracked in Zustand store for session duration display
+- Quick action buttons allow sales person to jump to POS or Sales History directly from profile
+- Logout available from within the profile dialog
+- Zero lint errors, clean compilation

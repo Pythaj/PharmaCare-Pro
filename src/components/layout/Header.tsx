@@ -3,7 +3,26 @@
 import { useAppStore } from '@/stores/app-store';
 import { getPageName } from './Sidebar';
 import { cn } from '@/lib/utils';
-import { Search, Bell, Menu, LogOut, User as UserIcon, Shield, Clock, Mail, Phone, TrendingUp, Calendar, Star, Award } from 'lucide-react';
+import {
+  Search,
+  Bell,
+  Menu,
+  LogOut,
+  User as UserIcon,
+  Shield,
+  Clock,
+  Mail,
+  Phone,
+  TrendingUp,
+  Calendar,
+  Star,
+  Award,
+  ShoppingCart,
+  Receipt,
+  Timer,
+  ChevronRight,
+  Activity,
+} from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
@@ -24,19 +43,44 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useEffect, useState, type KeyboardEvent } from 'react';
+import { useEffect, useState, useCallback, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
 function formatGHS(value: number): string {
   return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
 }
 
+function formatDuration(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const hrs = Math.floor(totalSec / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (hrs > 0) {
+    return `${hrs}h ${String(mins).padStart(2, '0')}m ${String(secs).padStart(2, '0')}s`;
+  }
+  if (mins > 0) {
+    return `${mins}m ${String(secs).padStart(2, '0')}s`;
+  }
+  return `${secs}s`;
+}
+
 // Premium profile dialog for sales person
 function ProfileDialog() {
-  const { currentUser, showProfileDialog, setShowProfileDialog } = useAppStore();
+  const { currentUser, showProfileDialog, setShowProfileDialog, loginTime, logout, navigate } = useAppStore();
   const [stats, setStats] = useState<{ totalSales: number; todaySales: number; txCount: number; weekSales: number } | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sessionElapsed, setSessionElapsed] = useState(0);
 
+  // Live session timer
+  useEffect(() => {
+    if (!showProfileDialog || !loginTime) return;
+    const tick = () => setSessionElapsed(Date.now() - loginTime);
+    tick();
+    const interval = setInterval(tick, 1000);
+    return () => clearInterval(interval);
+  }, [showProfileDialog, loginTime]);
+
+  // Load stats
   useEffect(() => {
     if (!showProfileDialog || !currentUser) return;
     setLoading(true);
@@ -65,132 +109,227 @@ function ProfileDialog() {
     loadStats();
   }, [showProfileDialog, currentUser]);
 
+  const handleLogout = useCallback(() => {
+    setShowProfileDialog(false);
+    setTimeout(() => {
+      logout();
+      toast.success('Logged out successfully');
+    }, 200);
+  }, [setShowProfileDialog, logout]);
+
+  const handleQuickAction = useCallback((page: 'pos' | 'sales-history') => {
+    setShowProfileDialog(false);
+    setTimeout(() => navigate(page), 150);
+  }, [setShowProfileDialog, navigate]);
+
   if (!currentUser) return null;
 
   const initials = currentUser.name?.split(' ').map(n => n[0]).join('').toUpperCase() || 'U';
   const isAdmin = currentUser.role === 'admin';
+  const isActive = sessionElapsed > 0;
 
   return (
     <Dialog open={showProfileDialog} onOpenChange={setShowProfileDialog}>
-      <DialogContent className="sm:max-w-md p-0 overflow-hidden">
-        {/* Gradient header */}
-        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 px-6 pb-6 pt-8">
+      <DialogContent className="sm:max-w-md p-0 overflow-hidden gap-0">
+        {/* Premium gradient header */}
+        <div className="relative bg-gradient-to-br from-emerald-600 via-emerald-500 to-teal-500 px-6 pb-8 pt-8">
+          {/* Subtle pattern overlay */}
           <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxnIGZpbGw9IiNmZmZmZmYiIGZpbGwtb3BhY2l0eT0iMC4wNSI+PGNpcmNsZSBjeD0iMzAiIGN5PSIzMCIgcj0iMiIvPjwvZz48L2c+PC9zdmc+')] opacity-50" />
           <DialogHeader>
             <DialogTitle className="text-white/90 text-sm font-medium">My Profile</DialogTitle>
           </DialogHeader>
+
+          {/* User info */}
           <div className="flex items-center gap-4 mt-4">
-            <Avatar className="h-16 w-16 border-2 border-white/30 shadow-xl ring-4 ring-white/10">
-              <AvatarFallback className="bg-white/20 text-xl font-bold text-white backdrop-blur-sm">
-                {initials}
-              </AvatarFallback>
-            </Avatar>
+            <div className="relative">
+              <Avatar className="h-16 w-16 border-2 border-white/30 shadow-xl ring-4 ring-white/10">
+                <AvatarFallback className="bg-white/20 text-xl font-bold text-white backdrop-blur-sm">
+                  {initials}
+                </AvatarFallback>
+              </Avatar>
+              {/* Online indicator */}
+              <span className="absolute -bottom-0.5 -right-0.5 h-4 w-4 rounded-full border-2 border-emerald-500 bg-green-400" />
+            </div>
             <div className="flex-1 min-w-0">
               <h3 className="text-lg font-bold text-white truncate">{currentUser.name}</h3>
-              <p className="text-sm text-white/70">{currentUser.email}</p>
-              <Badge
-                variant="secondary"
-                className={cn(
-                  'mt-2 text-[10px] font-semibold px-2.5 py-0.5 h-5',
-                  isAdmin
-                    ? 'bg-amber-400/20 text-amber-100 border border-amber-400/30'
-                    : 'bg-white/20 text-white border border-white/20'
-                )}
-              >
-                {isAdmin ? '★ Administrator' : 'Sales Associate'}
-              </Badge>
+              <p className="text-sm text-white/70 truncate">{currentUser.email}</p>
+              <div className="flex items-center gap-2 mt-2">
+                <Badge
+                  variant="secondary"
+                  className={cn(
+                    'text-[10px] font-semibold px-2.5 py-0.5 h-5',
+                    isAdmin
+                      ? 'bg-amber-400/20 text-amber-100 border border-amber-400/30'
+                      : 'bg-white/20 text-white border border-white/20'
+                  )}
+                >
+                  {isAdmin ? '★ Administrator' : '◆ Sales Associate'}
+                </Badge>
+              </div>
             </div>
+          </div>
+
+          {/* Session timer pill */}
+          {isActive && (
+            <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1.5 backdrop-blur-sm border border-white/10">
+              <Activity className="h-3.5 w-3.5 text-green-300" />
+              <span className="text-xs font-medium text-white/90">Session active</span>
+              <Separator orientation="vertical" className="h-3 bg-white/30" />
+              <div className="flex items-center gap-1">
+                <Timer className="h-3 w-3 text-white/70" />
+                <span className="text-xs font-mono text-white/90 tabular-nums">{formatDuration(sessionElapsed)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Scrollable content */}
+        <div className="max-h-[65vh] overflow-y-auto">
+          <div className="p-5 space-y-4">
+            {/* Quick Actions */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => handleQuickAction('pos')}
+                className="flex items-center gap-2.5 rounded-xl bg-emerald-50 p-3 text-left transition-all hover:bg-emerald-100 hover:shadow-sm active:scale-[0.98] border border-emerald-100/80"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-emerald-500 shadow-sm">
+                  <ShoppingCart className="h-4 w-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-emerald-900">New Sale</p>
+                  <p className="text-[10px] text-emerald-600/70">Start POS</p>
+                </div>
+                <ChevronRight className="ml-auto h-3.5 w-3.5 text-emerald-400" />
+              </button>
+              <button
+                onClick={() => handleQuickAction('sales-history')}
+                className="flex items-center gap-2.5 rounded-xl bg-slate-50 p-3 text-left transition-all hover:bg-slate-100 hover:shadow-sm active:scale-[0.98] border border-slate-100/80"
+              >
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-600 shadow-sm">
+                  <Receipt className="h-4 w-4 text-white" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-800">Sales History</p>
+                  <p className="text-[10px] text-slate-500">View records</p>
+                </div>
+                <ChevronRight className="ml-auto h-3.5 w-3.5 text-slate-400" />
+              </button>
+            </div>
+
+            {/* Contact details */}
+            <Card className="border-slate-100 shadow-sm">
+              <CardContent className="p-4 space-y-3">
+                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contact Information</h4>
+                <div className="space-y-2.5">
+                  <div className="flex items-center gap-3 text-sm">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
+                      <Mail className="h-3.5 w-3.5 text-emerald-600" />
+                    </div>
+                    <span className="text-slate-700 truncate">{currentUser.email}</span>
+                  </div>
+                  {currentUser.phone && (
+                    <div className="flex items-center gap-3 text-sm">
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
+                        <Phone className="h-3.5 w-3.5 text-emerald-600" />
+                      </div>
+                      <span className="text-slate-700">{currentUser.phone}</span>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-3 text-sm">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
+                      <Shield className="h-3.5 w-3.5 text-emerald-600" />
+                    </div>
+                    <span className={cn('font-medium', currentUser.active ? 'text-emerald-700' : 'text-red-600')}>
+                      {currentUser.active ? '● Active Account' : '○ Inactive Account'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 text-sm">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-emerald-50">
+                      <Calendar className="h-3.5 w-3.5 text-emerald-600" />
+                    </div>
+                    <span className="text-slate-700">
+                      Joined {new Date(currentUser.createdAt).toLocaleDateString('en-GH', { year: 'numeric', month: 'long', day: 'numeric' })}
+                    </span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Performance stats */}
+            <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 shadow-sm">
+              <CardContent className="p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500">
+                    <TrendingUp className="h-3.5 w-3.5 text-white" />
+                  </div>
+                  <h4 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Your Performance</h4>
+                </div>
+                {loading ? (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    {[1, 2, 3, 4].map(i => (
+                      <div key={i} className="h-16 rounded-lg bg-white/60 animate-pulse" />
+                    ))}
+                  </div>
+                ) : stats ? (
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <Star className="h-3 w-3 text-amber-500" />
+                        <span className="text-[10px] font-medium text-slate-500">Transactions</span>
+                      </div>
+                      <p className="text-lg font-bold text-slate-800">{stats.txCount}</p>
+                    </div>
+                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <TrendingUp className="h-3 w-3 text-emerald-500" />
+                        <span className="text-[10px] font-medium text-slate-500">All Time</span>
+                      </div>
+                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.totalSales)}</p>
+                    </div>
+                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <Clock className="h-3 w-3 text-blue-500" />
+                        <span className="text-[10px] font-medium text-slate-500">This Week</span>
+                      </div>
+                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.weekSales)}</p>
+                    </div>
+                    <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50 shadow-sm">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <Award className="h-3 w-3 text-emerald-500" />
+                        <span className="text-[10px] font-medium text-slate-500">Today</span>
+                      </div>
+                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.todaySales)}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-2 py-4">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100">
+                      <TrendingUp className="h-5 w-5 text-emerald-500" />
+                    </div>
+                    <p className="text-sm text-slate-500">No sales data available yet.</p>
+                    <button
+                      onClick={() => handleQuickAction('pos')}
+                      className="mt-1 text-xs font-medium text-emerald-600 hover:text-emerald-700 underline underline-offset-2"
+                    >
+                      Start your first sale →
+                    </button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           </div>
         </div>
 
-        {/* Content */}
-        <div className="p-6 space-y-5">
-          {/* Contact details */}
-          <Card className="border-slate-100 shadow-sm">
-            <CardContent className="p-4 space-y-3">
-              <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Contact Information</h4>
-              <div className="space-y-2.5">
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
-                    <Mail className="h-3.5 w-3.5 text-emerald-600" />
-                  </div>
-                  <span className="text-slate-700">{currentUser.email}</span>
-                </div>
-                {currentUser.phone && (
-                  <div className="flex items-center gap-3 text-sm">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
-                      <Phone className="h-3.5 w-3.5 text-emerald-600" />
-                    </div>
-                    <span className="text-slate-700">{currentUser.phone}</span>
-                  </div>
-                )}
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
-                    <Shield className="h-3.5 w-3.5 text-emerald-600" />
-                  </div>
-                  <span className="text-slate-700">{currentUser.active ? 'Active Account' : 'Inactive Account'}</span>
-                </div>
-                <div className="flex items-center gap-3 text-sm">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-50">
-                    <Calendar className="h-3.5 w-3.5 text-emerald-600" />
-                  </div>
-                  <span className="text-slate-700">Joined {new Date(currentUser.createdAt).toLocaleDateString('en-GH', { year: 'numeric', month: 'long', day: 'numeric' })}</span>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Performance stats - premium card */}
-          <Card className="border-emerald-100 bg-gradient-to-br from-emerald-50/80 to-teal-50/50 shadow-sm">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500">
-                  <TrendingUp className="h-3.5 w-3.5 text-white" />
-                </div>
-                <h4 className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">Your Performance</h4>
-              </div>
-              {loading ? (
-                <div className="grid grid-cols-2 gap-3">
-                  {[1, 2, 3, 4].map(i => (
-                    <div key={i} className="h-14 rounded-lg bg-white/60 animate-pulse" />
-                  ))}
-                </div>
-              ) : stats ? (
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
-                    <div className="flex items-center justify-center gap-1 mb-1">
-                      <Star className="h-3 w-3 text-amber-500" />
-                      <span className="text-[10px] font-medium text-slate-500">Transactions</span>
-                    </div>
-                    <p className="text-lg font-bold text-slate-800">{stats.txCount}</p>
-                  </div>
-                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
-                    <div className="flex items-center justify-center gap-1 mb-1">
-                      <TrendingUp className="h-3 w-3 text-emerald-500" />
-                      <span className="text-[10px] font-medium text-slate-500">All Time</span>
-                    </div>
-                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.totalSales)}</p>
-                  </div>
-                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
-                    <div className="flex items-center justify-center gap-1 mb-1">
-                      <Clock className="h-3 w-3 text-blue-500" />
-                      <span className="text-[10px] font-medium text-slate-500">This Week</span>
-                    </div>
-                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.weekSales)}</p>
-                  </div>
-                  <div className="rounded-lg bg-white/80 p-3 text-center border border-emerald-100/50">
-                    <div className="flex items-center justify-center gap-1 mb-1">
-                      <Award className="h-3 w-3 text-emerald-500" />
-                      <span className="text-[10px] font-medium text-slate-500">Today</span>
-                    </div>
-                    <p className="text-lg font-bold text-slate-800">{formatGHS(stats.todaySales)}</p>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-slate-500 text-center py-3">No sales data available yet.</p>
-              )}
-            </CardContent>
-          </Card>
+        {/* Sticky footer with logout */}
+        <div className="border-t border-slate-100 bg-slate-50/80 px-5 py-3">
+          <Button
+            variant="ghost"
+            className="w-full justify-start gap-2.5 text-red-600 hover:text-red-700 hover:bg-red-50 h-10 rounded-lg font-medium"
+            onClick={handleLogout}
+          >
+            <LogOut className="h-4 w-4" />
+            Sign Out
+          </Button>
         </div>
       </DialogContent>
     </Dialog>
