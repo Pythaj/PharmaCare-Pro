@@ -1518,75 +1518,75 @@ export default function POSView() {
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-emerald-700">
-              <div className="h-8 w-8 rounded-full bg-emerald-100 flex items-center justify-center">
-                <CheckCircle className="h-4 w-4 text-emerald-600" />
-              </div>
-              Sale Completed
-            </DialogTitle>
-            <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
-          </DialogHeader>
+        <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
+          <DialogTitle className="sr-only">Sale Completed - Receipt</DialogTitle>
+          <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
           {completedSale && (
-            <div className="space-y-4">
+            <div>
               {/* Professional Receipt */}
               <div
                 id="receipt-print"
-                className="bg-white text-slate-900 rounded-xl border border-slate-200 overflow-hidden shadow-sm"
+                className="bg-white text-slate-900 overflow-hidden"
               >
                 {/* Receipt Header - Pharmacy Branding */}
-                <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-6 py-5 text-white text-center relative overflow-hidden">
+                <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-4 py-3 text-white text-center relative overflow-hidden">
                   <div className="absolute inset-0 opacity-10 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px'}} />
                   <div className="relative">
-                    <div className="flex items-center justify-center gap-2 mb-1">
-                      <Pill className="h-5 w-5 text-emerald-200" />
-                      <h3 className="text-xl font-bold tracking-wide">GreenLife Pharmacy</h3>
-                      <Pill className="h-5 w-5 text-emerald-200" />
+                    <div className="flex items-center justify-center gap-1.5 mb-0.5">
+                      <Pill className="h-4 w-4 text-emerald-200" />
+                      <h3 className="text-base font-bold tracking-wide">GreenLife Pharmacy</h3>
+                      <Pill className="h-4 w-4 text-emerald-200" />
                     </div>
-                    <p className="text-emerald-100 text-xs">123 Health Street, Accra, Ghana</p>
-                    <p className="text-emerald-100 text-xs">Tel: +233 30 123 4567</p>
+                    <p className="text-emerald-100 text-[10px]">123 Health Street, Accra, Ghana</p>
+                    <p className="text-emerald-100 text-[10px]">Tel: +233 30 123 4567</p>
+                  </div>
+                </div>
+
+                {/* Success badge */}
+                <div className="flex items-center justify-center -mt-4 relative z-10">
+                  <div className="h-8 w-8 rounded-full bg-emerald-100 border-2 border-white shadow flex items-center justify-center">
+                    <CheckCircle className="h-4 w-4 text-emerald-600" />
                   </div>
                 </div>
 
                 {/* Receipt Body */}
-                <div className="px-5 py-4 space-y-4">
+                <div className="px-4 py-3 space-y-2.5">
                   {/* Transaction Details */}
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
                     <div className="flex justify-between col-span-2">
-                      <span className="text-slate-400 font-medium uppercase text-[10px] tracking-wider">Invoice</span>
+                      <span className="text-slate-400 font-medium uppercase text-[9px] tracking-wider">Invoice</span>
                       <span className="font-bold text-slate-800 font-mono">{completedSale.invoiceNo}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Date</span>
-                      <p className="font-medium text-slate-700">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Date</span>
+                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Time</span>
-                      <p className="font-medium text-slate-700">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Time</span>
+                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
                     </div>
                     <div>
-                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Cashier</span>
-                      <p className="font-medium text-slate-700">{currentUser?.name ?? '-'}</p>
+                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Cashier</span>
+                      <p className="font-medium text-slate-700 text-[11px]">{currentUser?.name ?? '-'}</p>
                     </div>
                     {completedSale.customerName && (
                       <div>
-                        <span className="text-slate-400 text-[10px] uppercase tracking-wider">Customer</span>
-                        <p className="font-medium text-slate-700">{completedSale.customerName}</p>
+                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Customer</span>
+                        <p className="font-medium text-slate-700 text-[11px]">{completedSale.customerName}</p>
                       </div>
                     )}
                     <div>
-                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Payment</span>
-                      <p className="font-medium text-slate-700 capitalize">{completedSale.paymentMethod.replace('_', ' ')}</p>
+                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Payment</span>
+                      <p className="font-medium text-slate-700 capitalize text-[11px]">{completedSale.paymentMethod.replace('_', ' ')}</p>
                     </div>
                   </div>
 
                   {/* Dashed separator */}
-                  <div className="border-t-2 border-dashed border-slate-200" />
+                  <div className="border-t border-dashed border-slate-200" />
 
                   {/* Items Table */}
                   <div>
-                    <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider pb-1.5 border-b border-slate-200">
+                    <div className="grid grid-cols-12 gap-1.5 text-[9px] font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-200">
                       <span className="col-span-5">Item</span>
                       <span className="col-span-2 text-center">Qty</span>
                       <span className="col-span-2 text-right">Price</span>
@@ -1594,7 +1594,7 @@ export default function POSView() {
                     </div>
                     <div className="divide-y divide-dotted divide-slate-200">
                       {completedSale.items.map((item, i) => (
-                        <div key={i} className="grid grid-cols-12 gap-2 py-2 text-xs">
+                        <div key={i} className="grid grid-cols-12 gap-1.5 py-1.5 text-[11px]">
                           <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
                           <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
                           <span className="col-span-2 text-right text-slate-500 font-mono">{formatGHS(item.unitPrice)}</span>
@@ -1605,10 +1605,10 @@ export default function POSView() {
                   </div>
 
                   {/* Dashed separator */}
-                  <div className="border-t-2 border-dashed border-slate-200" />
+                  <div className="border-t border-dashed border-slate-200" />
 
                   {/* Totals */}
-                  <div className="space-y-1.5 text-xs">
+                  <div className="space-y-1 text-[11px]">
                     <div className="flex justify-between text-slate-500">
                       <span>Subtotal</span>
                       <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
@@ -1625,40 +1625,41 @@ export default function POSView() {
                     )}
 
                     {/* Total box */}
-                    <div className="bg-emerald-50 rounded-lg px-4 py-3 mt-2 -mx-1">
+                    <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-1">
                       <div className="flex justify-between items-center">
-                        <span className="font-bold text-sm text-emerald-800 uppercase tracking-wider">Total</span>
-                        <span className="font-black text-xl text-emerald-700 font-mono">{formatGHS(completedSale.totalAmount)}</span>
+                        <span className="font-bold text-xs text-emerald-800 uppercase tracking-wider">Total</span>
+                        <span className="font-black text-lg text-emerald-700 font-mono">{formatGHS(completedSale.totalAmount)}</span>
                       </div>
                     </div>
                   </div>
 
                   {/* Dashed separator */}
-                  <div className="border-t-2 border-dashed border-slate-200" />
+                  <div className="border-t border-dashed border-slate-200" />
 
                   {/* Footer */}
-                  <div className="text-center space-y-1.5 pb-1">
-                    <p className="text-[11px] text-slate-400 font-medium">Thank you for choosing GreenLife Pharmacy!</p>
-                    <p className="text-[10px] text-slate-300">Your Health, Our Priority</p>
-                    <div className="flex items-center justify-center gap-1.5 pt-1">
-                      {Array.from({ length: 32 }).map((_, i) => (
-                        <div key={i} className="w-[2px] h-4 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
+                  <div className="text-center space-y-0.5">
+                    <p className="text-[10px] text-slate-400 font-medium">Thank you for choosing GreenLife Pharmacy!</p>
+                    <p className="text-[9px] text-slate-300">Your Health, Our Priority</p>
+                    <div className="flex items-center justify-center gap-1 pt-1">
+                      {Array.from({ length: 28 }).map((_, i) => (
+                        <div key={i} className="w-[1.5px] h-3 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
                       ))}
                     </div>
                   </div>
                 </div>
               </div>
+              {/* Action buttons */}
+              <div className="flex gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/50">
+                <Button variant="outline" size="sm" className="flex-1 h-9" onClick={handleCloseReceipt}>
+                  Close
+                </Button>
+                <Button size="sm" className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
+                  <Printer className="h-3.5 w-3.5 mr-1" />
+                  Print
+                </Button>
+              </div>
             </div>
           )}
-          <div className="flex gap-2 mt-4">
-            <Button variant="outline" className="flex-1" onClick={handleCloseReceipt}>
-              Close
-            </Button>
-            <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
-              <Printer className="h-4 w-4 mr-1" />
-              Print
-            </Button>
-          </div>
         </DialogContent>
       </Dialog>
     </div>

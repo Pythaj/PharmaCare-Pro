@@ -598,3 +598,22 @@ Stage Summary:
 - Stock deducts in real-time on sale (backend transaction + frontend refresh)
 - Stock auto-detects increases from restocks (30s polling + green glow animation)
 - Available vs Reserved vs Total stock clearly shown on each product card
+
+---
+Task ID: 1
+Agent: Main Agent
+Task: Fix receipt height to fit without scrolling + fix StockImpactModal DialogTitle accessibility error
+
+Work Log:
+- Analyzed user's screenshot showing receipt bottom content was cut off
+- Read POSView.tsx receipt modal section (lines 1519-1663) and identified excessive padding/spacing
+- Read StockImpactModal section (lines 308-327) - DialogTitle with sr-only was already present
+- Compactified receipt modal: reduced DialogContent to p-0 gap-0 max-w-sm, reduced header py-5→py-3, body py-4→py-3, space-y-4→space-y-2.5, font sizes reduced, total box padding reduced, footer spacing reduced, buttons moved into receipt container with border-t
+- Replaced visible DialogHeader/DialogTitle with sr-only versions to save vertical space, added success checkmark badge overlapping header/body
+- Browser verified: single item receipt fits perfectly, 4-item receipt fits perfectly, all content visible, no scrolling needed
+- Console errors check: zero errors including no DialogTitle accessibility warning
+
+Stage Summary:
+- Receipt modal now fits entirely within viewport for both single and multi-item sales
+- StockImpactModal DialogTitle accessibility error resolved (was already fixed with sr-only, confirmed no console errors)
+- Key changes: p-0 gap-0 on DialogContent, reduced all internal spacing by ~40%, moved buttons inside receipt container
