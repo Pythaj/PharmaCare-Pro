@@ -41,6 +41,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { useAppStore } from '@/stores/app-store';
@@ -322,7 +323,9 @@ function StockImpactModal({
 
   return (
     <Dialog open onOpenChange={() => {}}>
-      <DialogContent className="max-w-lg p-0 gap-0 overflow-hidden">
+      <DialogContent className="max-w-lg p-0 gap-0 overflow-hidden" showCloseButton={false}>
+        <DialogTitle className="sr-only">Stock Impact Report</DialogTitle>
+        <DialogDescription className="sr-only">Inventory has been updated for this sale</DialogDescription>
         {/* Header */}
         <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 text-white">
           <div className="flex items-center gap-3">
@@ -1460,6 +1463,7 @@ export default function POSView() {
               </div>
               Quick Walk-In
             </DialogTitle>
+            <DialogDescription className="sr-only">Register a quick walk-in customer for this sale</DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div>
@@ -1522,115 +1526,126 @@ export default function POSView() {
               </div>
               Sale Completed
             </DialogTitle>
+            <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
           </DialogHeader>
           {completedSale && (
-            <div>
-              {/* Stock Impact Summary */}
-              <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-100">
-                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Package className="h-3.5 w-3.5" />
-                  Stock Updated
-                </h4>
-                <div className="space-y-1.5">
-                  {completedSale.items.map((item, i) => {
-                    const product = products.find(p => p.id === item.productId);
-                    const newStock = (product?.totalStock || 0) - item.quantity;
-                    const reorderLevel = product?.reorderLevel || 10;
-                    return (
-                      <div key={i} className="flex items-center justify-between text-xs">
-                        <span className="text-slate-600 truncate mr-4">{item.productName}</span>
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <span className="text-slate-400 line-through">{product?.totalStock || '?'}</span>
-                          <ArrowDownCircle className="h-3 w-3 text-red-400" />
-                          <span className={`font-bold ${newStock <= 0 ? 'text-red-600' : newStock <= reorderLevel ? 'text-amber-600' : 'text-emerald-600'}`}>
-                            {newStock}
-                          </span>
-                          {newStock === 0 && <PackageX className="h-3 w-3 text-red-400" />}
-                        </div>
-                      </div>
-                    );
-                  })}
+            <div className="space-y-4">
+              {/* Professional Receipt */}
+              <div
+                id="receipt-print"
+                className="bg-white text-slate-900 rounded-xl border border-slate-200 overflow-hidden shadow-sm"
+              >
+                {/* Receipt Header - Pharmacy Branding */}
+                <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-6 py-5 text-white text-center relative overflow-hidden">
+                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px'}} />
+                  <div className="relative">
+                    <div className="flex items-center justify-center gap-2 mb-1">
+                      <Pill className="h-5 w-5 text-emerald-200" />
+                      <h3 className="text-xl font-bold tracking-wide">GreenLife Pharmacy</h3>
+                      <Pill className="h-5 w-5 text-emerald-200" />
+                    </div>
+                    <p className="text-emerald-100 text-xs">123 Health Street, Accra, Ghana</p>
+                    <p className="text-emerald-100 text-xs">Tel: +233 30 123 4567</p>
+                  </div>
                 </div>
-              </div>
 
-              {/* Receipt */}
-              <div className="bg-white text-black p-6 font-mono text-xs border border-slate-200 rounded-lg" id="receipt-print">
-                <div className="text-center mb-4">
-                  <h3 className="text-lg font-bold">GreenLife Pharmacy</h3>
-                  <p>123 Health Street, Accra</p>
-                  <p>Tel: +233 30 123 4567</p>
-                  <Separator className="my-2" />
-                </div>
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between">
-                    <span>Invoice:</span>
-                    <span className="font-bold">{completedSale.invoiceNo}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Date:</span>
-                    <span>{new Date(completedSale.createdAt).toLocaleString('en-GH')}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Cashier:</span>
-                    <span>{currentUser?.name ?? '-'}</span>
-                  </div>
-                  {completedSale.customerName && (
-                    <div className="flex justify-between">
-                      <span>Customer:</span>
-                      <span>{completedSale.customerName}</span>
+                {/* Receipt Body */}
+                <div className="px-5 py-4 space-y-4">
+                  {/* Transaction Details */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-slate-400 font-medium uppercase text-[10px] tracking-wider">Invoice</span>
+                      <span className="font-bold text-slate-800 font-mono">{completedSale.invoiceNo}</span>
                     </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span>Payment:</span>
-                    <span className="capitalize">{completedSale.paymentMethod.replace('_', ' ')}</span>
-                  </div>
-                </div>
-                <Separator className="my-3" />
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-1">Item</th>
-                      <th className="text-center py-1">Qty</th>
-                      <th className="text-right py-1">Price</th>
-                      <th className="text-right py-1">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {completedSale.items.map((item, i) => (
-                      <tr key={i} className="border-b border-dotted">
-                        <td className="py-1">{item.productName}</td>
-                        <td className="text-center py-1">{item.quantity}</td>
-                        <td className="text-right py-1">{formatGHS(item.unitPrice)}</td>
-                        <td className="text-right py-1">{formatGHS(item.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <Separator className="my-3" />
-                <div className="space-y-1 text-xs">
-                  <div className="flex justify-between">
-                    <span>Subtotal:</span>
-                    <span>{formatGHS(completedSale.subtotal)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Tax:</span>
-                    <span>{formatGHS(completedSale.tax)}</span>
-                  </div>
-                  {completedSale.discount > 0 && (
-                    <div className="flex justify-between">
-                      <span>Discount:</span>
-                      <span>-{formatGHS(completedSale.discount)}</span>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Date</span>
+                      <p className="font-medium text-slate-700">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
                     </div>
-                  )}
-                  <Separator />
-                  <div className="flex justify-between font-bold text-sm">
-                    <span>TOTAL:</span>
-                    <span>{formatGHS(completedSale.totalAmount)}</span>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Time</span>
+                      <p className="font-medium text-slate-700">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Cashier</span>
+                      <p className="font-medium text-slate-700">{currentUser?.name ?? '-'}</p>
+                    </div>
+                    {completedSale.customerName && (
+                      <div>
+                        <span className="text-slate-400 text-[10px] uppercase tracking-wider">Customer</span>
+                        <p className="font-medium text-slate-700">{completedSale.customerName}</p>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider">Payment</span>
+                      <p className="font-medium text-slate-700 capitalize">{completedSale.paymentMethod.replace('_', ' ')}</p>
+                    </div>
                   </div>
-                </div>
-                <div className="text-center mt-6 text-xs">
-                  <p>Thank you for your purchase!</p>
-                  <p>GreenLife Pharmacy - Your Health, Our Priority</p>
+
+                  {/* Dashed separator */}
+                  <div className="border-t-2 border-dashed border-slate-200" />
+
+                  {/* Items Table */}
+                  <div>
+                    <div className="grid grid-cols-12 gap-2 text-[10px] font-semibold text-slate-400 uppercase tracking-wider pb-1.5 border-b border-slate-200">
+                      <span className="col-span-5">Item</span>
+                      <span className="col-span-2 text-center">Qty</span>
+                      <span className="col-span-2 text-right">Price</span>
+                      <span className="col-span-3 text-right">Total</span>
+                    </div>
+                    <div className="divide-y divide-dotted divide-slate-200">
+                      {completedSale.items.map((item, i) => (
+                        <div key={i} className="grid grid-cols-12 gap-2 py-2 text-xs">
+                          <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
+                          <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
+                          <span className="col-span-2 text-right text-slate-500 font-mono">{formatGHS(item.unitPrice)}</span>
+                          <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{formatGHS(item.total)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Dashed separator */}
+                  <div className="border-t-2 border-dashed border-slate-200" />
+
+                  {/* Totals */}
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex justify-between text-slate-500">
+                      <span>Subtotal</span>
+                      <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-500">
+                      <span>VAT (12.5%)</span>
+                      <span className="font-mono">{formatGHS(completedSale.tax)}</span>
+                    </div>
+                    {completedSale.discount > 0 && (
+                      <div className="flex justify-between text-red-500">
+                        <span>Discount</span>
+                        <span className="font-mono">-{formatGHS(completedSale.discount)}</span>
+                      </div>
+                    )}
+
+                    {/* Total box */}
+                    <div className="bg-emerald-50 rounded-lg px-4 py-3 mt-2 -mx-1">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-sm text-emerald-800 uppercase tracking-wider">Total</span>
+                        <span className="font-black text-xl text-emerald-700 font-mono">{formatGHS(completedSale.totalAmount)}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Dashed separator */}
+                  <div className="border-t-2 border-dashed border-slate-200" />
+
+                  {/* Footer */}
+                  <div className="text-center space-y-1.5 pb-1">
+                    <p className="text-[11px] text-slate-400 font-medium">Thank you for choosing GreenLife Pharmacy!</p>
+                    <p className="text-[10px] text-slate-300">Your Health, Our Priority</p>
+                    <div className="flex items-center justify-center gap-1.5 pt-1">
+                      {Array.from({ length: 32 }).map((_, i) => (
+                        <div key={i} className="w-[2px] h-4 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
