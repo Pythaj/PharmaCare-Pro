@@ -39,8 +39,15 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { date, userId } = body
 
-    if (!date || !userId) {
-      return NextResponse.json({ error: 'Date and userId are required' }, { status: 400 })
+    if (!date) {
+      return NextResponse.json({ error: 'Date is required' }, { status: 400 })
+    }
+
+    // Validate userId if provided
+    let validUserId: string | undefined = undefined
+    if (userId) {
+      const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
+      if (userExists) validUserId = userId
     }
 
     // Check if record already exists for this date
@@ -83,7 +90,7 @@ export async function POST(request: NextRequest) {
       data: {
         date,
         status: 'open',
-        openedBy: userId,
+        openedBy: validUserId,
         totalRevenue,
         totalProfit,
         totalDiscount,

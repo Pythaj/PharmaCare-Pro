@@ -7,6 +7,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const userId = searchParams.get('userId') || ''
 
+    // Validate userId exists in users table before using as FK
+    let validUserId: string | undefined = undefined
+    if (userId) {
+      const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
+      if (userExists) validUserId = userId
+    }
+
     // Get today's date in YYYY-MM-DD format (using system timezone)
     const now = new Date()
     const todayStr = now.getFullYear() + '-' +
@@ -46,7 +53,7 @@ export async function GET(request: NextRequest) {
         data: {
           date: todayStr,
           status: 'open',
-          openedBy: userId || undefined,
+          openedBy: validUserId,
           totalRevenue,
           totalProfit,
           totalDiscount,

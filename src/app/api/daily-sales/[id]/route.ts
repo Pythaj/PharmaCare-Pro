@@ -60,6 +60,12 @@ export async function PATCH(
       return NextResponse.json({ error: 'User ID is required' }, { status: 400 })
     }
 
+    // Validate userId exists
+    const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
+    if (!userExists) {
+      return NextResponse.json({ error: 'User not found' }, { status: 400 })
+    }
+
     const record = await db.dailySalesRecord.findUnique({ where: { id } })
 
     if (!record) {
