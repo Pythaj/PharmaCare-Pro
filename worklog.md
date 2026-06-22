@@ -553,3 +553,22 @@ Stage Summary:
 - 3 new API endpoints, 1 new Prisma model, 1 new TypeScript type
 - SalesHistoryView completely rewritten as Daily Sales Register (1247 lines)
 - All CRUD operations verified: create record, auto-refresh stats, close day with notes, reopen day, view history
+
+---
+Task ID: 1
+Agent: Main
+Task: Fix app not showing - Turbopack PostCSS timeout
+
+Work Log:
+- Investigated dev server logs - server returning 200 but curl revealed 500 error
+- Root cause: Turbopack PostCSS process timeout ("timed out waiting for the Node.js process to connect (30s timeout)")
+- The `.next` cache had stale compilation artifacts causing the timeout
+- Killed all next processes, deleted `.next` directory, restarted with `bash .zscripts/dev.sh`
+- Verified via curl: now returning 200
+- Verified via Agent Browser: Login page renders, admin login works, dashboard loads with all data
+- Verified Sales History / Daily Sales Register page: status banner, 6 stat cards, payment breakdown, transaction feed all render correctly
+
+Stage Summary:
+- App is fully operational after clearing stale `.next` cache
+- All pages verified: Login → Dashboard → Sales History (Daily Sales Register)
+- No console errors in browser
