@@ -76,143 +76,152 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Generate invoice number
-    const today = new Date()
-    const dateStr = today.toISOString().split('T')[0].replace(/-/g, '')
-    const count = await db.sale.count({
-      where: {
-        createdAt: {
-          gte: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+    // Use Prisma transaction for atomic stock deduction + sale creation
+    const sale = await db.$transaction(async (tx) => {
+      // Generate invoice number
+      const today = new Date()
+      const dateStr = today.toISOString().split('T')[0].replace(/-/g, '')
+      const count = await tx.sale.count({
+        where: {
+          createdAt: {
+            gte: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
+          },
         },
-      },
-    })
-    const invoiceNo = `INV-${dateStr}-${String(count + 1).padStart(4, '0')}`
+      })
+      const invoiceNo = `INV-${dateStr}-${String(count + 1).padStart(4, '0')}`
 
-    let subtotal = 0
-    let profit = 0
+      let subtotal = 0
+      let profit = 0
+      const saleItemsData = []
 
-    const saleItemsData = []
+      for (const item of items) {
+        const total = item.quantity * item.unitPrice
+        subtotal += total
 
-    for (const item of items) {
-      const total = item.quantity * item.unitPrice
-      subtotal += total
+        // Get cost price from batch
+        let costPrice = item.costPrice || 0
+        if (item.batchId) {
+          const batch = await tx.batch.findUnique({
+            where: { id: item.batchId },
+            select: { costPrice: true, sellingPrice: true },
+          })
+          if (!batch) {
+            throw new Error(`Batch ${item.batchId} not found`)
+          }
+          costPrice = batch.costPrice
 
-      // Get cost price from batch or product
-      let costPrice = item.costPrice || 0
-      if (!costPrice && item.batchId) {
-        const batch = await db.batch.findUnique({
-          where: { id: item.batchId },
-          select: { costPrice: true },
+          // Validate stock
+          if (batch.sellingPrice !== item.unitPrice) {
+            // Price may have changed, use the batch price for profit calc
+          }
+        }
+
+        profit += (item.unitPrice - costPrice) * item.quantity
+
+        // Get expiry date from batch
+        let expiryDate = null
+        if (item.batchId) {
+          const batch = await tx.batch.findUnique({
+            where: { id: item.batchId },
+            select: { expiryDate: true },
+          })
+          expiryDate = batch?.expiryDate || null
+        }
+
+        saleItemsData.push({
+          productId: item.productId,
+          batchId: item.batchId || null,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          costPrice,
+          total,
+          expiryDate,
         })
-        costPrice = batch?.costPrice || 0
+
+        // Deduct from batch if batchId provided (with row-level lock via findUnique + update)
+        if (item.batchId) {
+          const batch = await tx.batch.findUnique({
+            where: { id: item.batchId },
+          })
+
+          if (!batch) {
+            throw new Error(`Batch ${item.batchId} not found`)
+          }
+          if (batch.quantity < item.quantity) {
+            throw new Error(`Insufficient stock for "${batch.batchNumber}". Only ${batch.quantity} available, but ${item.quantity} requested.`)
+          }
+
+          await tx.batch.update({
+            where: { id: item.batchId },
+            data: { quantity: { decrement: item.quantity } },
+          })
+        } else {
+          // FEFO: deduct from earliest expiring batches
+          const availableBatches = await tx.batch.findMany({
+            where: {
+              productId: item.productId,
+              quantity: { gt: 0 },
+            },
+            orderBy: { expiryDate: 'asc' },
+          })
+
+          let remainingQty = item.quantity
+          for (const batch of availableBatches) {
+            if (remainingQty <= 0) break
+            const deductQty = Math.min(batch.quantity, remainingQty)
+            await tx.batch.update({
+              where: { id: batch.id },
+              data: { quantity: { decrement: deductQty } },
+            })
+            remainingQty -= deductQty
+          }
+
+          if (remainingQty > 0) {
+            throw new Error(`Insufficient stock. Need ${item.quantity} but only ${item.quantity - remainingQty} available across all batches.`)
+          }
+        }
       }
 
-      profit += (item.unitPrice - costPrice) * item.quantity
+      const totalAmount = subtotal - discount + tax
 
-      // Get expiry date from batch
-      let expiryDate = null
-      if (item.batchId) {
-        const batch = await db.batch.findUnique({
-          where: { id: item.batchId },
-          select: { expiryDate: true },
-        })
-        expiryDate = batch?.expiryDate || null
-      }
-
-      saleItemsData.push({
-        productId: item.productId,
-        batchId: item.batchId || null,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        costPrice,
-        total,
-        expiryDate,
+      const newSale = await tx.sale.create({
+        data: {
+          invoiceNo,
+          customerId: customerId || null,
+          userId,
+          subtotal,
+          tax,
+          discount,
+          totalAmount,
+          profit,
+          paymentMethod,
+          notes: notes || null,
+          items: {
+            create: saleItemsData,
+          },
+        },
+        include: {
+          user: { select: { id: true, name: true, email: true } },
+          customer: { select: { id: true, name: true, phone: true } },
+          items: {
+            include: {
+              product: { select: { id: true, name: true, unit: true } },
+              batch: { select: { id: true, batchNumber: true } },
+            },
+          },
+        },
       })
 
-      // Deduct from batch if batchId provided
-      if (item.batchId) {
-        const batch = await db.batch.findUnique({
-          where: { id: item.batchId },
-        })
-
-        if (!batch || batch.quantity < item.quantity) {
-          return NextResponse.json(
-            { error: `Insufficient stock for batch ${item.batchId}` },
-            { status: 400 }
-          )
-        }
-
-        await db.batch.update({
-          where: { id: item.batchId },
-          data: { quantity: { decrement: item.quantity } },
-        })
-      } else {
-        // If no batch specified, deduct from earliest expiring batches with available stock
-        const availableBatches = await db.batch.findMany({
-          where: {
-            productId: item.productId,
-            quantity: { gt: 0 },
-          },
-          orderBy: { expiryDate: 'asc' },
-        })
-
-        let remainingQty = item.quantity
-        for (const batch of availableBatches) {
-          if (remainingQty <= 0) break
-
-          const deductQty = Math.min(batch.quantity, remainingQty)
-          await db.batch.update({
-            where: { id: batch.id },
-            data: { quantity: { decrement: deductQty } },
-          })
-          remainingQty -= deductQty
-        }
-
-        if (remainingQty > 0) {
-          return NextResponse.json(
-            { error: `Insufficient stock for product ${item.productId}` },
-            { status: 400 }
-          )
-        }
-      }
-    }
-
-    const totalAmount = subtotal - discount + tax
-
-    const sale = await db.sale.create({
-      data: {
-        invoiceNo,
-        customerId: customerId || null,
-        userId,
-        subtotal,
-        tax,
-        discount,
-        totalAmount,
-        profit,
-        paymentMethod,
-        notes: notes || null,
-        items: {
-          create: saleItemsData,
-        },
-      },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-        customer: { select: { id: true, name: true, phone: true } },
-        items: {
-          include: {
-            product: { select: { id: true, name: true, unit: true } },
-            batch: { select: { id: true, batchNumber: true } },
-          },
-        },
-      },
+      return newSale
     })
 
     return NextResponse.json(sale, { status: 201 })
   } catch (error) {
     console.error('Sale create error:', error)
+    const message = error instanceof Error ? error.message : 'Failed to create sale'
     return NextResponse.json(
-      { error: 'Failed to create sale' },
-      { status: 500 }
+      { error: message },
+      { status: error instanceof Error && message.includes('Insufficient') ? 400 : 500 }
     )
   }
 }

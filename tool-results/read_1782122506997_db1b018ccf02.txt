@@ -1,0 +1,1099 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+     4→import {
+     5→  Search,
+     6→  Plus,
+     7→  Minus,
+     8→  Trash2,
+     9→  ShoppingCart,
+    10→  CreditCard,
+    11→  Smartphone,
+    12→  Banknote,
+    13→  X,
+    14→  Printer,
+    15→  CheckCircle,
+    16→  UserRoundPlus,
+    17→  Zap,
+    18→  Package,
+    19→  AlertTriangle,
+    20→  TrendingDown,
+    21→  ArrowDownCircle,
+    22→  PackageX,
+    23→  BarChart3,
+    24→  Clock,
+    25→} from 'lucide-react';
+    26→import { motion, AnimatePresence } from 'framer-motion';
+    27→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+    28→import { Button } from '@/components/ui/button';
+    29→import { Input } from '@/components/ui/input';
+    30→import { Badge } from '@/components/ui/badge';
+    31→import { Separator } from '@/components/ui/separator';
+    32→import { Skeleton } from '@/components/ui/skeleton';
+    33→import { ScrollArea } from '@/components/ui/scroll-area';
+    34→import {
+    35→  Dialog,
+    36→  DialogContent,
+    37→  DialogFooter,
+    38→  DialogHeader,
+    39→  DialogTitle,
+    40→} from '@/components/ui/dialog';
+    41→import { Label } from '@/components/ui/label';
+    42→import { useAppStore } from '@/stores/app-store';
+    43→import { toast } from 'sonner';
+    44→import type { Product, Batch, Customer, CartItem } from '@/types';
+    45→
+    46→function formatGHS(value: number): string {
+    47→  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
+    48→}
+    49→
+    50→interface ProductWithStock extends Product {
+    51→  batches: (Batch & { currentQty: number })[];
+    52→  totalStock: number;
+    53→  minSellingPrice: number;
+    54→  reorderLevel: number;
+    55→}
+    56→
+    57→// Track products that just had stock reduced for animation
+    58→interface StockChange {
+    59→  productId: string;
+    60→  oldStock: number;
+    61→  newStock: number;
+    62→  timestamp: number;
+    63→}
+    64→
+    65→// Animated stock counter component
+    66→function AnimatedStockNumber({ value, changed }: { value: number; changed: boolean }) {
+    67→  return (
+    68→    <motion.span
+    69→      key={value}
+    70→      initial={changed ? { scale: 1.3, color: '#dc2626' } : false}
+    71→      animate={{ scale: 1, color: 'inherit' }}
+    72→      transition={{ duration: 0.5, ease: 'easeOut' }}
+    73→      className="font-bold tabular-nums"
+    74→    >
+    75→      {value}
+    76→    </motion.span>
+    77→  );
+    78→}
+    79→
+    80→// Stock level progress bar
+    81→function StockBar({ current, reorderLevel }: { current: number; reorderLevel: number }) {
+    82→  if (current === 0) return null;
+    83→  const maxDisplay = Math.max(reorderLevel * 3, 20);
+    84→  const pct = Math.min((current / maxDisplay) * 100, 100);
+    85→  const isLow = current <= reorderLevel;
+    86→  const isCritical = current <= Math.ceil(reorderLevel * 0.3);
+    87→
+    88→  return (
+    89→    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden mt-2">
+    90→      <motion.div
+    91→        className="h-full rounded-full"
+    92→        initial={{ width: 0 }}
+    93→        animate={{ width: `${pct}%` }}
+    94→        transition={{ duration: 0.6, ease: 'easeOut' }}
+    95→        style={{
+    96→          backgroundColor: isCritical ? '#dc2626' : isLow ? '#f59e0b' : '#10b981',
+    97→        }}
+    98→      />
+    99→    </div>
+   100→  );
+   101→}
+   102→
+   103→// Stock badge with status
+   104→function StockBadge({ stock, reorderLevel }: { stock: number; reorderLevel: number }) {
+   105→  if (stock === 0) {
+   106→    return (
+   107→      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 text-red-600 text-xs font-semibold">
+   108→        <PackageX className="h-3 w-3" />
+   109→        <span>Out of Stock</span>
+   110→      </div>
+   111→    );
+   112→  }
+   113→  if (stock <= Math.ceil(reorderLevel * 0.3)) {
+   114→    return (
+   115→      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-red-50 text-red-600 text-xs font-semibold">
+   116→        <AlertTriangle className="h-3 w-3" />
+   117→        <span>Only {stock} left!</span>
+   118→      </div>
+   119→    );
+   120→  }
+   121→  if (stock <= reorderLevel) {
+   122→    return (
+   123→      <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 text-xs font-semibold">
+   124→        <TrendingDown className="h-3 w-3" />
+   125→        <span>{stock} left</span>
+   126→      </div>
+   127→    );
+   128→  }
+   129→  return (
+   130→    <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 text-xs font-semibold">
+   131→      <Package className="h-3 w-3" />
+   132→      <span>{stock} in stock</span>
+   133→    </div>
+   134→  );
+   135→}
+   136→
+   137→export default function POSView() {
+   138→  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer } = useAppStore();
+   139→  const [searchQuery, setSearchQuery] = useState('');
+   140→  const [products, setProducts] = useState<ProductWithStock[]>([]);
+   141→  const [categories, setCategories] = useState<string[]>([]);
+   142→  const [activeCategory, setActiveCategory] = useState<string>('All');
+   143→  const [customers, setCustomers] = useState<Customer[]>([]);
+   144→  const [customerSearch, setCustomerSearch] = useState('');
+   145→  const [discount, setDiscount] = useState(0);
+   146→  const [notes, setNotes] = useState('');
+   147→  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
+   148→  const [showReceipt, setShowReceipt] = useState(false);
+   149→  const [completedSale, setCompletedSale] = useState<{
+   150→    invoiceNo: string;
+   151→    customerName?: string;
+   152→    items: { productName: string; quantity: number; unitPrice: number; total: number; productId: string }[];
+   153→    subtotal: number;
+   154→    tax: number;
+   155→    discount: number;
+   156→    totalAmount: number;
+   157→    paymentMethod: string;
+   158→    createdAt: string;
+   159→  } | null>(null);
+   160→  const [submitting, setSubmitting] = useState(false);
+   161→  const [loading, setLoading] = useState(true);
+   162→  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   163→  const [stockChanges, setStockChanges] = useState<StockChange[]>([]);
+   164→  const [addedToCart, setAddedToCart] = useState<Set<string>>(new Set());
+   165→  const prevProductsRef = useRef<Map<string, number>>(new Map());
+   166→
+   167→  // Walk-in customer state
+   168→  const [showWalkInDialog, setShowWalkInDialog] = useState(false);
+   169→  const [walkInName, setWalkInName] = useState('');
+   170→  const [walkInPhone, setWalkInPhone] = useState('');
+   171→  const [addingWalkIn, setAddingWalkIn] = useState(false);
+   172→
+   173→  const fetchProducts = useCallback(async (query: string) => {
+   174→    try {
+   175→      const res = await fetch(`/api/products?search=${encodeURIComponent(query)}`);
+   176→      if (res.ok) {
+   177→        const data = await res.json();
+   178→        const newProducts: ProductWithStock[] = data.products ?? [];
+   179→
+   180→        // Detect stock changes (for animation)
+   181→        const newStockMap = new Map(newProducts.map(p => [p.id, p.totalStock]));
+   182→        const changes: StockChange[] = [];
+   183→        prevProductsRef.current.forEach((oldStock, pid) => {
+   184→          const newStock = newStockMap.get(pid);
+   185→          if (newStock !== undefined && oldStock !== newStock) {
+   186→            changes.push({ productId: pid, oldStock, newStock, timestamp: Date.now() });
+   187→          }
+   188→        });
+   189→        if (changes.length > 0) {
+   190→          setStockChanges(prev => [...prev, ...changes].slice(-20));
+   191→          // Auto-clear changes after animation
+   192→          setTimeout(() => {
+   193→            setStockChanges(prev => prev.filter(c => Date.now() - c.timestamp < 3000));
+   194→          }, 3000);
+   195→        }
+   196→
+   197→        prevProductsRef.current = newStockMap;
+   198→        setProducts(newProducts);
+   199→        const cats = [...new Set(newProducts.map((p: Product) => p.category?.name).filter(Boolean))] as string[];
+   200→        setCategories(['All', ...cats]);
+   201→      }
+   202→    } catch { /* silent */ }
+   203→  }, []);
+   204→
+   205→  useEffect(() => {
+   206→    async function init() {
+   207→      await fetchProducts('');
+   208→      try {
+   209→        const res = await fetch('/api/customers');
+   210→        if (res.ok) {
+   211→          const data = await res.json();
+   212→          setCustomers(data.customers ?? []);
+   213→        }
+   214→      } catch { /* silent */ }
+   215→      setLoading(false);
+   216→    }
+   217→    init();
+   218→  }, [fetchProducts]);
+   219→
+   220→  const handleSearch = (value: string) => {
+   221→    setSearchQuery(value);
+   222→    if (debounceRef.current) clearTimeout(debounceRef.current);
+   223→    debounceRef.current = setTimeout(() => {
+   224→      fetchProducts(value);
+   225→    }, 300);
+   226→  };
+   227→
+   228→  const handleAddToCart = (product: ProductWithStock) => {
+   229→    if (product.totalStock === 0) {
+   230→      toast.error(`${product.name} is out of stock!`, { icon: <PackageX className="h-4 w-4 text-red-500" /> });
+   231→      return;
+   232→    }
+   233→
+   234→    const bestBatch = product.batches
+   235→      .filter(b => b.quantity > 0)
+   236→      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
+   237→    if (!bestBatch) {
+   238→      toast.error('No available stock for this product');
+   239→      return;
+   240→    }
+   241→
+   242→    // Check if already in cart - if so, check combined quantity
+   243→    const existingItem = cart.find(i => i.productId === product.id && i.batchId === bestBatch.id);
+   244→    const currentInCart = existingItem?.quantity ?? 0;
+   245→    if (currentInCart + 1 > bestBatch.currentQty) {
+   246→      toast.warning(`Only ${bestBatch.currentQty} units available in this batch`, {
+   247→        icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+   248→      });
+   249→      return;
+   250→    }
+   251→
+   252→    addToCart({
+   253→      productId: product.id,
+   254→      productName: product.name,
+   255→      batchId: bestBatch.id,
+   256→      batchNumber: bestBatch.batchNumber,
+   257→      quantity: 1,
+   258→      unitPrice: bestBatch.sellingPrice,
+   259→      costPrice: bestBatch.costPrice,
+   260→      availableQty: bestBatch.currentQty,
+   261→      expiryDate: bestBatch.expiryDate,
+   262→    });
+   263→
+   264→    // Trigger add-to-cart animation
+   265→    setAddedToCart(prev => {
+   266→      const next = new Set(prev);
+   267→      next.add(product.id);
+   268→      setTimeout(() => { setAddedToCart(p => { const n = new Set(p); n.delete(product.id); return n; }); }, 600);
+   269→      return next;
+   270→    });
+   271→
+   272→    const remaining = product.totalStock - currentInCart - 1;
+   273→    if (remaining === 0) {
+   274→      toast.warning(`${product.name} is now the last unit!`, { icon: <AlertTriangle className="h-4 w-4 text-amber-500" /> });
+   275→    } else if (remaining <= (product.reorderLevel || 10)) {
+   276→      toast.info(`${product.name}: ${remaining} remaining after this`, { icon: <Package className="h-4 w-4 text-emerald-500" /> });
+   277→    } else {
+   278→      toast.success(`${product.name} added to cart`, { duration: 1500 });
+   279→    }
+   280→  };
+   281→
+   282→  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+   283→  const tax = subtotal * 0.125; // 12.5% VAT
+   284→  const total = subtotal + tax - discount;
+   285→
+   286→  const filteredProducts = activeCategory === 'All'
+   287→    ? products
+   288→    : products.filter(p => p.category?.name === activeCategory);
+   289→
+   290→  // Build a map of cart quantities per product for live stock preview
+   291→  const cartQtyMap = useMemo(() => {
+   292→    const map = new Map<string, number>();
+   293→    cart.forEach(item => {
+   294→      map.set(item.productId, (map.get(item.productId) || 0) + item.quantity);
+   295→    });
+   296→    return map;
+   297→  }, [cart]);
+   298→
+   299→  const handleCompleteSale = async () => {
+   300→    if (cart.length === 0) {
+   301→      toast.error('Cart is empty');
+   302→      return;
+   303→    }
+   304→    setSubmitting(true);
+   305→    try {
+   306→      const res = await fetch('/api/sales', {
+   307→        method: 'POST',
+   308→        headers: { 'Content-Type': 'application/json' },
+   309→        body: JSON.stringify({
+   310→          userId: currentUser?.id,
+   311→          customerId: selectedCustomerId,
+   312→          items: cart.map(item => ({
+   313→            productId: item.productId,
+   314→            batchId: item.batchId,
+   315→            quantity: item.quantity,
+   316→            unitPrice: item.unitPrice,
+   317→            costPrice: item.costPrice,
+   318→          })),
+   319→          discount,
+   320→          tax, // FIX: now sending tax to backend
+   321→          paymentMethod,
+   322→          notes: notes || undefined,
+   323→        }),
+   324→      });
+   325→      if (!res.ok) {
+   326→        const data = await res.json().catch(() => ({}));
+   327→        throw new Error(data.error || 'Failed to complete sale');
+   328→      }
+   329→      const data = await res.json();
+   330→      setCompletedSale({
+   331→        invoiceNo: data.invoiceNo,
+   332→        customerName: data.customer?.name,
+   333→        items: (data.items ?? []).map((item: any) => ({
+   334→          productName: item.product?.name ?? 'Unknown',
+   335→          quantity: item.quantity,
+   336→          unitPrice: item.unitPrice,
+   337→          total: item.total,
+   338→          productId: item.productId,
+   339→        })),
+   340→        subtotal: data.subtotal,
+   341→        tax: data.tax,
+   342→        discount: data.discount,
+   343→        totalAmount: data.totalAmount,
+   344→        paymentMethod: data.paymentMethod,
+   345→        createdAt: data.createdAt,
+   346→      });
+   347→      setShowReceipt(true);
+   348→      toast.success('Sale completed successfully!');
+   349→
+   350→      // Refresh products to show updated stock
+   351→      setTimeout(() => fetchProducts(searchQuery), 300);
+   352→    } catch (err) {
+   353→      toast.error(err instanceof Error ? err.message : 'Failed to complete sale');
+   354→    } finally {
+   355→      setSubmitting(false);
+   356→    }
+   357→  };
+   358→
+   359→  const handleCloseReceipt = () => {
+   360→    // Check which items hit low stock after this sale
+   361→    completedSale?.items.forEach(item => {
+   362→      const product = products.find(p => p.id === item.productId);
+   363→      if (product) {
+   364→        const newStock = product.totalStock - item.quantity;
+   365→        if (newStock === 0) {
+   366→          setTimeout(() => {
+   367→            toast.error(`📦 ${item.productName} is now OUT OF STOCK!`, { duration: 4000 });
+   368→          }, 500);
+   369→        } else if (newStock <= (product.reorderLevel || 10) && product.totalStock > (product.reorderLevel || 10)) {
+   370→          setTimeout(() => {
+   371→            toast.warning(`⚠️ ${item.productName} is now LOW STOCK (${newStock} remaining)`, { duration: 4000 });
+   372→          }, 500);
+   373→        }
+   374→      }
+   375→    });
+   376→
+   377→    setShowReceipt(false);
+   378→    setCompletedSale(null);
+   379→    clearCart();
+   380→    setDiscount(0);
+   381→    setNotes('');
+   382→    setPaymentMethod('cash');
+   383→  };
+   384→
+   385→  const handleAddWalkIn = async () => {
+   386→    if (!walkInName.trim()) return;
+   387→    setAddingWalkIn(true);
+   388→    try {
+   389→      const res = await fetch('/api/customers', {
+   390→        method: 'POST',
+   391→        headers: { 'Content-Type': 'application/json' },
+   392→        body: JSON.stringify({
+   393→          name: walkInName.trim(),
+   394→          phone: walkInPhone.trim() || undefined,
+   395→        }),
+   396→      });
+   397→      if (!res.ok) {
+   398→        const data = await res.json().catch(() => ({}));
+   399→        throw new Error(data.error || 'Failed to add walk-in customer');
+   400→      }
+   401→      const newCustomer = await res.json();
+   402→      setSelectedCustomer(newCustomer.id);
+   403→      setCustomerSearch(newCustomer.name);
+   404→      setCustomers(prev => [newCustomer, ...prev]);
+   405→      setShowWalkInDialog(false);
+   406→      toast.success(`${newCustomer.name} added & selected`);
+   407→    } catch (err) {
+   408→      toast.error(err instanceof Error ? err.message : 'Failed to add walk-in');
+   409→    } finally {
+   410→      setAddingWalkIn(false);
+   411→    }
+   412→  };
+   413→
+   414→  const paymentIcons = {
+   415→    cash: Banknote,
+   416→    card: CreditCard,
+   417→    mobile_money: Smartphone,
+   418→  };
+   419→
+   420→  const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
+   421→
+   422→  if (loading) {
+   423→    return (
+   424→      <div className="flex h-full gap-4 p-4">
+   425→        <div className="flex-1 space-y-4">
+   426→          <Skeleton className="h-10 w-full" />
+   427→          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+   428→            {Array.from({ length: 12 }).map((_, i) => (
+   429→              <Skeleton key={i} className="h-36 w-full rounded-xl" />
+   430→            ))}
+   431→          </div>
+   432→        </div>
+   433→        <div className="w-96 border-l p-4 space-y-4">
+   434→          <Skeleton className="h-8 w-40" />
+   435→          {Array.from({ length: 4 }).map((_, i) => (
+   436→            <Skeleton key={i} className="h-20 w-full" />
+   437→          ))}
+   438→          <Skeleton className="h-40 w-full" />
+   439→        </div>
+   440→      </div>
+   441→    );
+   442→  }
+   443→
+   444→  return (
+   445→    <div className="flex h-[calc(100vh-5rem)] gap-0">
+   446→      {/* Left Panel - Product Search & Listing */}
+   447→      <div className="flex-1 flex flex-col min-w-0 p-4 pr-2">
+   448→        {/* Search Bar */}
+   449→        <div className="relative mb-3">
+   450→          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+   451→          <Input
+   452→            placeholder="Search medicines by name, generic name, or category..."
+   453→            value={searchQuery}
+   454→            onChange={(e) => handleSearch(e.target.value)}
+   455→            className="pl-10 h-10 bg-white border-slate-200 focus-visible:ring-emerald-500/20"
+   456→          />
+   457→          {searchQuery && (
+   458→            <button
+   459→              onClick={() => { setSearchQuery(''); fetchProducts(''); }}
+   460→              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+   461→            >
+   462→              <X className="h-4 w-4" />
+   463→            </button>
+   464→          )}
+   465→        </div>
+   466→
+   467→        {/* Category Tabs */}
+   468→        <div className="flex gap-1.5 mb-3 overflow-x-auto pb-1 scrollbar-none">
+   469→          {categories.map((cat) => (
+   470→            <button
+   471→              key={cat}
+   472→              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+   473→                activeCategory === cat
+   474→                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
+   475→                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+   476→              }`}
+   477→              onClick={() => setActiveCategory(cat)}
+   478→            >
+   479→              {cat}
+   480→            </button>
+   481→          ))}
+   482→        </div>
+   483→
+   484→        {/* Stock Summary Bar */}
+   485→        <div className="flex items-center gap-4 mb-3 px-1">
+   486→          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+   487→            <BarChart3 className="h-3.5 w-3.5" />
+   488→            <span>{filteredProducts.length} products</span>
+   489→          </div>
+   490→          <div className="h-3 w-px bg-slate-200" />
+   491→          <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+   492→            <Package className="h-3.5 w-3.5" />
+   493→            <span>{filteredProducts.filter(p => p.totalStock > (p.reorderLevel || 10)).length} in stock</span>
+   494→          </div>
+   495→          <div className="flex items-center gap-1.5 text-xs text-amber-600">
+   496→            <AlertTriangle className="h-3.5 w-3.5" />
+   497→            <span>{filteredProducts.filter(p => p.totalStock > 0 && p.totalStock <= (p.reorderLevel || 10)).length} low</span>
+   498→          </div>
+   499→          <div className="flex items-center gap-1.5 text-xs text-red-500">
+   500→            <PackageX className="h-3.5 w-3.5" />
+   501→            <span>{filteredProducts.filter(p => p.totalStock === 0).length} out</span>
+   502→          </div>
+   503→        </div>
+   504→
+   505→        {/* Product Grid */}
+   506→        <ScrollArea className="flex-1 -mx-1">
+   507→          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
+   508→            {filteredProducts.length > 0 ? (
+   509→              filteredProducts.map((product) => {
+   510→                const isOutOfStock = product.totalStock === 0;
+   511→                const isLowStock = product.totalStock > 0 && product.totalStock <= (product.reorderLevel || 10);
+   512→                const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil((product.reorderLevel || 10) * 0.3);
+   513→                const isInCart = cartQtyMap.has(product.id);
+   514→                const cartCount = cartQtyMap.get(product.id) || 0;
+   515→                const justAdded = addedToCart.has(product.id);
+   516→                const stockChange = stockChanges.find(c => c.productId === product.id);
+   517→                const effectiveStock = product.totalStock - cartCount;
+   518→
+   519→                return (
+   520→                  <motion.button
+   521→                    key={product.id}
+   522→                    onClick={() => !isOutOfStock && handleAddToCart(product)}
+   523→                    disabled={isOutOfStock}
+   524→                    className={`relative text-left rounded-xl border-2 p-3.5 transition-all group overflow-hidden ${
+   525→                      isOutOfStock
+   526→                        ? 'border-slate-200 bg-slate-50/80 opacity-60 cursor-not-allowed'
+   527→                        : isCritical
+   528→                        ? 'border-red-200 bg-white hover:border-red-400 hover:shadow-lg hover:shadow-red-100/50 cursor-pointer'
+   529→                        : isLowStock
+   530→                        ? 'border-amber-200 bg-white hover:border-amber-400 hover:shadow-lg hover:shadow-amber-100/50 cursor-pointer'
+   531→                        : 'border-slate-200 bg-white hover:border-emerald-400 hover:shadow-lg hover:shadow-emerald-100/50 cursor-pointer'
+   532→                    } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
+   533→                    whileTap={!isOutOfStock ? { scale: 0.97 } : undefined}
+   534→                    layout
+   535→                  >
+   536→                    {/* Pulse effect on add to cart */}
+   537→                    <AnimatePresence>
+   538→                      {justAdded && (
+   539→                        <motion.div
+   540→                          className="absolute inset-0 bg-emerald-100/40 rounded-xl pointer-events-none"
+   541→                          initial={{ opacity: 1 }}
+   542→                          animate={{ opacity: 0 }}
+   543→                          exit={{ opacity: 0 }}
+   544→                          transition={{ duration: 0.6 }}
+   545→                        />
+   546→                      )}
+   547→                    </AnimatePresence>
+   548→
+   549→                    {/* Stock reduced flash */}
+   550→                    <AnimatePresence>
+   551→                      {stockChange && (
+   552→                        <motion.div
+   553→                          className="absolute top-1 right-1 pointer-events-none z-10"
+   554→                          initial={{ opacity: 1, y: 0 }}
+   555→                          animate={{ opacity: 0, y: -10 }}
+   556→                          exit={{ opacity: 0 }}
+   557→                          transition={{ duration: 1.5 }}
+   558→                        >
+   559→                          <div className="flex items-center gap-0.5 text-red-500 text-[10px] font-bold bg-red-50 px-1.5 py-0.5 rounded-full">
+   560→                            <ArrowDownCircle className="h-2.5 w-2.5" />
+   561→                            -{stockChange.oldStock - stockChange.newStock}
+   562→                          </div>
+   563→                        </motion.div>
+   564→                      )}
+   565→                    </AnimatePresence>
+   566→
+   567→                    {/* Out of stock overlay */}
+   568→                    {isOutOfStock && (
+   569→                      <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+   570→                        <div className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-lg">
+   571→                          <span className="text-xs font-bold text-red-500 uppercase tracking-wider">Out of Stock</span>
+   572→                        </div>
+   573→                      </div>
+   574→                    )}
+   575→
+   576→                    {/* Product Header */}
+   577→                    <div className="flex items-start justify-between gap-1.5 mb-1">
+   578→                      <h4 className="font-semibold text-sm leading-tight line-clamp-2 text-slate-800 group-hover:text-emerald-700 transition-colors">
+   579→                        {product.name}
+   580→                      </h4>
+   581→                      <Pill className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5 opacity-60 group-hover:opacity-100 transition-opacity" />
+   582→                    </div>
+   583→
+   584→                    {/* Category */}
+   585→                    <p className="text-[11px] text-slate-400 mb-2.5 truncate">
+   586→                      {product.category?.name ?? 'Uncategorized'}
+   587→                      {product.genericName && product.genericName !== product.name && (
+   588→                        <span className="ml-1 text-slate-300">· {product.genericName}</span>
+   589→                      )}
+   590→                    </p>
+   591→
+   592→                    {/* Price & Unit */}
+   593→                    <div className="flex items-baseline gap-1 mb-2">
+   594→                      <span className="text-lg font-bold text-emerald-600">
+   595→                        {formatGHS(product.minSellingPrice)}
+   596→                      </span>
+   597→                      <span className="text-[10px] text-slate-400">/ {product.unit || 'unit'}</span>
+   598→                    </div>
+   599→
+   600→                    {/* Stock Status Badge */}
+   601→                    <StockBadge stock={product.totalStock} reorderLevel={product.reorderLevel || 10} />
+   602→
+   603→                    {/* Stock Progress Bar */}
+   604→                    <StockBar current={product.totalStock} reorderLevel={product.reorderLevel || 10} />
+   605→
+   606→                    {/* In Cart Indicator */}
+   607→                    <AnimatePresence>
+   608→                      {isInCart && (
+   609→                        <motion.div
+   610→                          initial={{ opacity: 0, height: 0, marginTop: 0 }}
+   611→                          animate={{ opacity: 1, height: 'auto', marginTop: 8 }}
+   612→                          exit={{ opacity: 0, height: 0, marginTop: 0 }}
+   613→                          className="overflow-hidden"
+   614→                        >
+   615→                          <div className="flex items-center justify-between bg-emerald-50 rounded-md px-2 py-1.5">
+   616→                            <div className="flex items-center gap-1.5">
+   617→                              <ShoppingCart className="h-3 w-3 text-emerald-600" />
+   618→                              <span className="text-[11px] font-medium text-emerald-700">
+   619→                                {cartCount} in cart
+   620→                              </span>
+   621→                            </div>
+   622→                            <span className={`text-[11px] font-bold ${effectiveStock <= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+   623→                              {effectiveStock > 0 ? `${effectiveStock} left` : 'Max reached'}
+   624→                            </span>
+   625→                          </div>
+   626→                        </motion.div>
+   627→                      )}
+   628→                    </AnimatePresence>
+   629→                  </motion.button>
+   630→                );
+   631→              })
+   632→            ) : (
+   633→              <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
+   634→                <Search className="h-10 w-10 mb-3 opacity-30" />
+   635→                <p className="text-sm font-medium">No products found</p>
+   636→                <p className="text-xs mt-1">Try a different search term or category</p>
+   637→              </div>
+   638→            )}
+   639→          </div>
+   640→        </ScrollArea>
+   641→      </div>
+   642→
+   643→      {/* Right Panel - Cart & Checkout */}
+   644→      <div className="w-[380px] border-l bg-white flex flex-col shrink-0">
+   645→        {/* Cart Header */}
+   646→        <div className="px-4 py-3 border-b border-slate-100">
+   647→          <div className="flex items-center justify-between">
+   648→            <div className="flex items-center gap-2">
+   649→              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+   650→                <ShoppingCart className="h-4 w-4 text-emerald-600" />
+   651→              </div>
+   652→              <div>
+   653→                <h3 className="font-semibold text-sm text-slate-800">Cart</h3>
+   654→                <p className="text-[11px] text-slate-400">
+   655→                  {cart.length > 0
+   656→                    ? `${cart.reduce((s, i) => s + i.quantity, 0)} item${cart.reduce((s, i) => s + i.quantity, 0) !== 1 ? 's' : ''}`
+   657→                    : 'Empty'}
+   658→                </p>
+   659→              </div>
+   660→            </div>
+   661→            {cart.length > 0 && (
+   662→              <Button
+   663→                variant="ghost"
+   664→                size="sm"
+   665→                className="text-red-400 hover:text-red-600 hover:bg-red-50 h-7 text-xs"
+   666→                onClick={clearCart}
+   667→              >
+   668→                <Trash2 className="h-3 w-3 mr-1" />
+   669→                Clear All
+   670→              </Button>
+   671→            )}
+   672→          </div>
+   673→        </div>
+   674→
+   675→        {/* Cart Items */}
+   676→        <ScrollArea className="flex-1 px-4 py-2">
+   677→          {cart.length > 0 ? (
+   678→            <div className="space-y-2">
+   679→              {cart.map((item) => {
+   680→                const product = products.find(p => p.id === item.productId);
+   681→                const reorderLevel = product?.reorderLevel || 10;
+   682→                const stockAfterSale = (product?.totalStock || 0) - item.quantity;
+   683→
+   684→                return (
+   685→                  <motion.div
+   686→                    key={`${item.productId}-${item.batchId}`}
+   687→                    initial={{ opacity: 0, x: 20 }}
+   688→                    animate={{ opacity: 1, x: 0 }}
+   689→                    exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0 }}
+   690→                    className="p-3 rounded-lg border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors group"
+   691→                    layout
+   692→                  >
+   693→                    <div className="flex items-start justify-between gap-2">
+   694→                      <div className="flex-1 min-w-0">
+   695→                        <p className="font-medium text-sm text-slate-800 truncate">{item.productName}</p>
+   696→                        <div className="flex items-center gap-2 mt-0.5">
+   697→                          <p className="text-xs text-slate-400">{formatGHS(item.unitPrice)} each</p>
+   698→                          <span className="text-[10px] text-slate-300">·</span>
+   699→                          <p className={`text-[11px] font-medium ${
+   700→                            stockAfterSale <= 0 ? 'text-red-500' :
+   701→                            stockAfterSale <= reorderLevel ? 'text-amber-600' :
+   702→                            'text-emerald-600'
+   703→                          }`}>
+   704→                            {stockAfterSale > 0 ? `${stockAfterSale} left after sale` : 'Last units!'}
+   705→                          </p>
+   706→                        </div>
+   707→                        {item.batchNumber && (
+   708→                          <p className="text-[10px] text-slate-300 mt-0.5">Batch: {item.batchNumber}</p>
+   709→                        )}
+   710→                      </div>
+   711→                      <Button
+   712→                        variant="ghost"
+   713→                        size="icon"
+   714→                        className="h-7 w-7 text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
+   715→                        onClick={() => removeFromCart(item.productId, item.batchId)}
+   716→                      >
+   717→                        <Trash2 className="h-3.5 w-3.5" />
+   718→                      </Button>
+   719→                    </div>
+   720→                    <div className="flex items-center justify-between mt-2.5">
+   721→                      <div className="flex items-center gap-1.5 bg-white rounded-lg border border-slate-200 p-0.5">
+   722→                        <Button
+   723→                          variant="ghost"
+   724→                          size="icon"
+   725→                          className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+   726→                          onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
+   727→                          disabled={item.quantity <= 1}
+   728→                        >
+   729→                          <Minus className="h-3 w-3" />
+   730→                        </Button>
+   731→                        <span className="w-8 text-center font-bold text-sm tabular-nums">{item.quantity}</span>
+   732→                        <Button
+   733→                          variant="ghost"
+   734→                          size="icon"
+   735→                          className={`h-7 w-7 ${
+   736→                            item.quantity >= item.availableQty
+   737→                              ? 'text-slate-200 cursor-not-allowed'
+   738→                              : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'
+   739→                          }`}
+   740→                          onClick={() => {
+   741→                            if (item.quantity < item.availableQty) {
+   742→                              updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
+   743→                            }
+   744→                          }}
+   745→                          disabled={item.quantity >= item.availableQty}
+   746→                        >
+   747→                          <Plus className="h-3 w-3" />
+   748→                        </Button>
+   749→                      </div>
+   750→                      <span className="font-bold text-sm text-slate-800">
+   751→                        {formatGHS(item.unitPrice * item.quantity)}
+   752→                      </span>
+   753→                    </div>
+   754→                  </motion.div>
+   755→                );
+   756→              })}
+   757→            </div>
+   758→          ) : (
+   759→            <div className="text-center text-slate-300 py-16">
+   760→              <ShoppingCart className="h-14 w-14 mx-auto mb-3 opacity-20" />
+   761→              <p className="text-sm font-medium text-slate-400">Your cart is empty</p>
+   762→              <p className="text-xs text-slate-300 mt-1">Click on a product to start selling</p>
+   763→            </div>
+   764→          )}
+   765→        </ScrollArea>
+   766→
+   767→        {/* Cart Summary & Checkout */}
+   768→        <div className="border-t border-slate-100 bg-slate-50/50 p-4 space-y-3">
+   769→          {/* Customer Selection */}
+   770→          <div className="space-y-2">
+   771→            <div className="relative">
+   772→              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+   773→              <Input
+   774→                placeholder="Search customer (optional)"
+   775→                className="pl-8 h-8 text-xs bg-white border-slate-200"
+   776→                value={customerSearch}
+   777→                onChange={(e) => setCustomerSearch(e.target.value)}
+   778→              />
+   779→              {customerSearch && !selectedCustomerId && (
+   780→                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto z-50">
+   781→                  {customers
+   782→                    .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone?.includes(customerSearch))
+   783→                    .slice(0, 5)
+   784→                    .map(c => (
+   785→                      <button
+   786→                        key={c.id}
+   787→                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm transition-colors"
+   788→                        onClick={() => { setSelectedCustomer(c.id); setCustomerSearch(c.name); }}
+   789→                      >
+   790→                        <span className="font-medium">{c.name}</span>
+   791→                        <span className="text-slate-400 ml-2">{c.phone ?? '-'}</span>
+   792→                      </button>
+   793→                    ))
+   794→                  }
+   795→                </div>
+   796→              )}
+   797→              {selectedCustomer && (
+   798→                <div className="flex items-center justify-between mt-1.5 px-1">
+   799→                  <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
+   800→                    <CheckCircle className="h-3 w-3" />
+   801→                    {selectedCustomer.name}
+   802→                  </span>
+   803→                  <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }} className="text-xs text-red-400 hover:text-red-600 transition-colors">Remove</button>
+   804→                </div>
+   805→              )}
+   806→            </div>
+   807→            {!selectedCustomerId && (
+   808→              <Button
+   809→                variant="outline"
+   810→                size="sm"
+   811→                className="w-full h-8 text-xs border-dashed border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-400 transition-all bg-white"
+   812→                onClick={() => { setWalkInName('Walk-In Customer'); setWalkInPhone(''); setShowWalkInDialog(true); }}
+   813→              >
+   814→                <Zap className="h-3 w-3 mr-1" />
+   815→                Quick Walk-In
+   816→              </Button>
+   817→            )}
+   818→          </div>
+   819→
+   820→          {/* Notes */}
+   821→          <Input
+   822→            placeholder="Notes (optional)"
+   823→            value={notes}
+   824→            onChange={(e) => setNotes(e.target.value)}
+   825→            className="h-8 text-xs bg-white border-slate-200"
+   826→          />
+   827→
+   828→          {/* Price Summary */}
+   829→          <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
+   830→            <div className="flex justify-between text-sm">
+   831→              <span className="text-slate-500">Subtotal</span>
+   832→              <span className="text-slate-700 font-medium">{formatGHS(subtotal)}</span>
+   833→            </div>
+   834→            <div className="flex justify-between text-sm">
+   835→              <span className="text-slate-500">Tax (12.5%)</span>
+   836→              <span className="text-slate-700">{formatGHS(tax)}</span>
+   837→            </div>
+   838→            <div className="flex items-center justify-between text-sm">
+   839→              <span className="text-slate-500">Discount</span>
+   840→              <Input
+   841→                type="number"
+   842→                value={discount || ''}
+   843→                onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+   844→                className="w-24 h-7 text-xs text-right bg-slate-50 border-slate-200"
+   845→                placeholder="0.00"
+   846→              />
+   847→            </div>
+   848→            <Separator className="bg-slate-100" />
+   849→            <div className="flex justify-between">
+   850→              <span className="font-bold text-slate-800">Total</span>
+   851→              <span className="font-bold text-xl text-emerald-600">{formatGHS(total)}</span>
+   852→            </div>
+   853→          </div>
+   854→
+   855→          {/* Payment Method */}
+   856→          <div className="flex gap-1.5">
+   857→            {(['cash', 'card', 'mobile_money'] as const).map((method) => {
+   858→              const Icon = paymentIcons[method];
+   859→              const label = method === 'mobile_money' ? 'MoMo' : method.charAt(0).toUpperCase() + method.slice(1);
+   860→              const isActive = paymentMethod === method;
+   861→              return (
+   862→                <button
+   863→                  key={method}
+   864→                  className={`flex-1 flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all ${
+   865→                    isActive
+   866→                      ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
+   867→                      : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'
+   868→                  }`}
+   869→                  onClick={() => setPaymentMethod(method)}
+   870→                >
+   871→                  <Icon className="h-3.5 w-3.5" />
+   872→                  {label}
+   873→                </button>
+   874→              );
+   875→            })}
+   876→          </div>
+   877→
+   878→          {/* Complete Sale Button */}
+   879→          <Button
+   880→            className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-200/50 transition-all hover:shadow-xl hover:shadow-emerald-200/50 active:scale-[0.98]"
+   881→            onClick={handleCompleteSale}
+   882→            disabled={cart.length === 0 || submitting}
+   883→          >
+   884→            {submitting ? (
+   885→              <span className="flex items-center gap-2">
+   886→                <motion.div
+   887→                  className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full"
+   888→                  animate={{ rotate: 360 }}
+   889→                  transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
+   890→                />
+   891→                Processing...
+   892→              </span>
+   893→            ) : (
+   894→              <span className="flex items-center gap-2">
+   895→                <CheckCircle className="h-4 w-4" />
+   896→                Complete Sale — {formatGHS(total)}
+   897→              </span>
+   898→            )}
+   899→          </Button>
+   900→        </div>
+   901→      </div>
+   902→
+   903→      {/* Walk-In Customer Dialog */}
+   904→      <Dialog open={showWalkInDialog} onOpenChange={(open) => { if (!open) setShowWalkInDialog(false); }}>
+   905→        <DialogContent className="sm:max-w-sm">
+   906→          <DialogHeader>
+   907→            <DialogTitle className="flex items-center gap-2">
+   908→              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
+   909→                <UserRoundPlus className="h-4 w-4 text-emerald-600" />
+   910→              </div>
+   911→              Quick Walk-In
+   912→            </DialogTitle>
+   913→          </DialogHeader>
+   914→          <div className="space-y-3">
+   915→            <div>
+   916→              <Label className="text-xs text-slate-500">Customer Name</Label>
+   917→              <Input
+   918→                value={walkInName}
+   919→                onChange={(e) => setWalkInName(e.target.value)}
+   920→                placeholder="e.g. Walk-In Customer"
+   921→                className="mt-1"
+   922→                autoFocus
+   923→              />
+   924→            </div>
+   925→            <div>
+   926→              <Label className="text-xs text-slate-500">Phone <span className="text-slate-300">(optional)</span></Label>
+   927→              <Input
+   928→                value={walkInPhone}
+   929→                onChange={(e) => setWalkInPhone(e.target.value)}
+   930→                placeholder="e.g. +233 24 123 4567"
+   931→                className="mt-1"
+   932→                onKeyDown={(e) => { if (e.key === 'Enter') handleAddWalkIn(); }}
+   933→              />
+   934→            </div>
+   935→            <p className="text-xs text-slate-400 flex items-center gap-1.5">
+   936→              <Zap className="h-3 w-3" />
+   937→              Walk-in customers are quick-registered for this sale. Details are optional.
+   938→            </p>
+   939→          </div>
+   940→          <DialogFooter className="gap-2 sm:gap-0">
+   941→            <Button variant="outline" size="sm" onClick={() => setShowWalkInDialog(false)}>Cancel</Button>
+   942→            <Button
+   943→              size="sm"
+   944→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   945→              onClick={handleAddWalkIn}
+   946→              disabled={addingWalkIn || !walkInName.trim()}
+   947→            >
+   948→              <UserRoundPlus className="h-4 w-4 mr-1" />
+   949→              {addingWalkIn ? 'Adding...' : 'Add & Select'}
+   950→            </Button>
+   951→          </DialogFooter>
+   952→        </DialogContent>
+   953→      </Dialog>
+   954→
+   955→      {/* Receipt Modal */}
+   956→      <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>
+   957→        <DialogContent className="max-w-md">
+   958→          <DialogHeader>
+   959→            <DialogTitle className="flex items-center gap-2 text-emerald-700">
+   960→              <div className="h-8 w-8 rounded-full bg-emerald-100 flex items-center justify-center">
+   961→                <CheckCircle className="h-4 w-4 text-emerald-600" />
+   962→              </div>
+   963→              Sale Completed
+   964→            </DialogTitle>
+   965→          </DialogHeader>
+   966→          {completedSale && (
+   967→            <div>
+   968→              {/* Stock Impact Summary */}
+   969→              <div className="mb-4 p-3 rounded-lg bg-slate-50 border border-slate-100">
+   970→                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+   971→                  <Package className="h-3.5 w-3.5" />
+   972→                  Stock Updated
+   973→                </h4>
+   974→                <div className="space-y-1.5">
+   975→                  {completedSale.items.map((item, i) => {
+   976→                    const product = products.find(p => p.id === item.productId);
+   977→                    const newStock = (product?.totalStock || 0) - item.quantity;
+   978→                    const reorderLevel = product?.reorderLevel || 10;
+   979→                    return (
+   980→                      <div key={i} className="flex items-center justify-between text-xs">
+   981→                        <span className="text-slate-600 truncate mr-4">{item.productName}</span>
+   982→                        <div className="flex items-center gap-1.5 shrink-0">
+   983→                          <span className="text-slate-400 line-through">{product?.totalStock || '?'}</span>
+   984→                          <ArrowDownCircle className="h-3 w-3 text-red-400" />
+   985→                          <span className={`font-bold ${newStock <= 0 ? 'text-red-600' : newStock <= reorderLevel ? 'text-amber-600' : 'text-emerald-600'}`}>
+   986→                            {newStock}
+   987→                          </span>
+   988→                          {newStock === 0 && <PackageX className="h-3 w-3 text-red-400" />}
+   989→                        </div>
+   990→                      </div>
+   991→                    );
+   992→                  })}
+   993→                </div>
+   994→              </div>
+   995→
+   996→              {/* Receipt */}
+   997→              <div className="bg-white text-black p-6 font-mono text-xs border border-slate-200 rounded-lg" id="receipt-print">
+   998→                <div className="text-center mb-4">
+   999→                  <h3 className="text-lg font-bold">GreenLife Pharmacy</h3>
+  1000→                  <p>123 Health Street, Accra</p>
+  1001→                  <p>Tel: +233 30 123 4567</p>
+  1002→                  <Separator className="my-2" />
+  1003→                </div>
+  1004→                <div className="space-y-1 text-xs">
+  1005→                  <div className="flex justify-between">
+  1006→                    <span>Invoice:</span>
+  1007→                    <span className="font-bold">{completedSale.invoiceNo}</span>
+  1008→                  </div>
+  1009→                  <div className="flex justify-between">
+  1010→                    <span>Date:</span>
+  1011→                    <span>{new Date(completedSale.createdAt).toLocaleString('en-GH')}</span>
+  1012→                  </div>
+  1013→                  <div className="flex justify-between">
+  1014→                    <span>Cashier:</span>
+  1015→                    <span>{currentUser?.name ?? '-'}</span>
+  1016→                  </div>
+  1017→                  {completedSale.customerName && (
+  1018→                    <div className="flex justify-between">
+  1019→                      <span>Customer:</span>
+  1020→                      <span>{completedSale.customerName}</span>
+  1021→                    </div>
+  1022→                  )}
+  1023→                  <div className="flex justify-between">
+  1024→                    <span>Payment:</span>
+  1025→                    <span className="capitalize">{completedSale.paymentMethod.replace('_', ' ')}</span>
+  1026→                  </div>
+  1027→                </div>
+  1028→                <Separator className="my-3" />
+  1029→                <table className="w-full text-xs">
+  1030→                  <thead>
+  1031→                    <tr className="border-b">
+  1032→                      <th className="text-left py-1">Item</th>
+  1033→                      <th className="text-center py-1">Qty</th>
+  1034→                      <th className="text-right py-1">Price</th>
+  1035→                      <th className="text-right py-1">Total</th>
+  1036→                    </tr>
+  1037→                  </thead>
+  1038→                  <tbody>
+  1039→                    {completedSale.items.map((item, i) => (
+  1040→                      <tr key={i} className="border-b border-dotted">
+  1041→                        <td className="py-1">{item.productName}</td>
+  1042→                        <td className="text-center py-1">{item.quantity}</td>
+  1043→                        <td className="text-right py-1">{formatGHS(item.unitPrice)}</td>
+  1044→                        <td className="text-right py-1">{formatGHS(item.total)}</td>
+  1045→                      </tr>
+  1046→                    ))}
+  1047→                  </tbody>
+  1048→                </table>
+  1049→                <Separator className="my-3" />
+  1050→                <div className="space-y-1 text-xs">
+  1051→                  <div className="flex justify-between">
+  1052→                    <span>Subtotal:</span>
+  1053→                    <span>{formatGHS(completedSale.subtotal)}</span>
+  1054→                  </div>
+  1055→                  <div className="flex justify-between">
+  1056→                    <span>Tax:</span>
+  1057→                    <span>{formatGHS(completedSale.tax)}</span>
+  1058→                  </div>
+  1059→                  {completedSale.discount > 0 && (
+  1060→                    <div className="flex justify-between">
+  1061→                      <span>Discount:</span>
+  1062→                      <span>-{formatGHS(completedSale.discount)}</span>
+  1063→                    </div>
+  1064→                  )}
+  1065→                  <Separator />
+  1066→                  <div className="flex justify-between font-bold text-sm">
+  1067→                    <span>TOTAL:</span>
+  1068→                    <span>{formatGHS(completedSale.totalAmount)}</span>
+  1069→                  </div>
+  1070→                </div>
+  1071→                <div className="text-center mt-6 text-xs">
+  1072→                  <p>Thank you for your purchase!</p>
+  1073→                  <p>GreenLife Pharmacy - Your Health, Our Priority</p>
+  1074→                </div>
+  1075→              </div>
+  1076→            </div>
+  1077→          )}
+  1078→          <div className="flex gap-2 mt-4">
+  1079→            <Button variant="outline" className="flex-1" onClick={handleCloseReceipt}>
+  1080→              Close
+  1081→            </Button>
+  1082→            <Button className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
+  1083→              <Printer className="h-4 w-4 mr-1" />
+  1084→              Print
+  1085→            </Button>
+  1086→          </div>
+  1087→        </DialogContent>
+  1088→      </Dialog>
+  1089→    </div>
+  1090→  );
+  1091→}
+  1092→
+  1093→function Pill({ className }: { className?: string }) {
+  1094→  return (
+  1095→    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+  1096→      <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/>
+  1097→    </svg>
+  1098→  );
+  1099→}
