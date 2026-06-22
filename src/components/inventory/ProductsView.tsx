@@ -1017,10 +1017,10 @@ export default function ProductsView() {
           <div className="space-y-5">
             {/* Basic Info Section */}
             <div className="space-y-4">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <div className="h-1 w-4 rounded-full bg-slate-300" />
                 Basic Information
-              </p>
+              </div>
               <div>
                 <Label className="text-xs font-medium">Product Name <span className="text-red-500">*</span></Label>
                 <Input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} placeholder="e.g. Paracetamol 500mg" className="mt-1" />
