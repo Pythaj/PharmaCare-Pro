@@ -617,3 +617,32 @@ Stage Summary:
 - Receipt modal now fits entirely within viewport for both single and multi-item sales
 - StockImpactModal DialogTitle accessibility error resolved (was already fixed with sr-only, confirmed no console errors)
 - Key changes: p-0 gap-0 on DialogContent, reduced all internal spacing by ~40%, moved buttons inside receipt container
+
+---
+Task ID: 10
+Agent: ProductsView Price Management
+Task: Add premium price management to ProductsView component
+
+Work Log:
+- Added `defaultCostPrice` and `defaultSellingPrice` to `ProductWithStock` local interface
+- Added "Selling Price" column between "Stock Qty" and "Expiry" in products table (emerald bold when set, muted "Not set" when 0)
+- Created `calcMargin` helper function for profit margin calculation
+- Created `MarginDisplay` inline component: green+Profit for positive, red+Loss for negative, slate+— for zero
+- Enhanced Add Product Dialog with premium "Pricing" section: emerald-tinted gradient card with DollarSign icon, Cost Price & Selling Price number inputs, live profit margin calculator
+- Updated `addForm` state to include `defaultCostPrice: 0` and `defaultSellingPrice: 0`, reset on dialog close via `onOpenChange` handler
+- Added new Edit Price Dialog (regular Dialog, not AlertDialog): header with Tag icon + product name, current prices card showing cost/selling/margin, new prices inputs with live margin, "Apply to existing batches" Switch toggle (shows batch count), Cancel + emerald "Update Prices" footer
+- Edit Price calls `PUT /api/products/{id}/update-prices` with `{ defaultCostPrice, defaultSellingPrice, applyToBatches }`
+- Added Tag icon button in Actions column (next to Delete) for editing prices, gated by `canManageProducts`
+- Changed Actions column from single-cell to `w-24 text-center` with flex layout for both Edit Price and Delete buttons
+- Added note below batch detail table: "To update batch prices, use Edit Price above with 'Apply to batches' option"
+- Updated column spans for expanded rows and empty state to match new total column count
+- Added DialogDescription to Add Product Dialog for accessibility
+- All imports: added Tag, TrendingUp, DollarSign from lucide-react; Switch from ui/switch; DialogDescription from ui/dialog
+- Lint passes with zero errors
+- Dev server compiles successfully
+
+Stage Summary:
+- Complete premium price management added to ProductsView (275 lines → ~350 lines)
+- Three pricing features: table column, add dialog pricing section, edit price dialog with batch propagation
+- All gated behind `canManageProducts` permission
+- Emerald color scheme maintained throughout, no blue/indigo used

@@ -1,0 +1,818 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+     4→import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign } from 'lucide-react';
+     5→import { Card, CardContent } from '@/components/ui/card';
+     6→import { Button } from '@/components/ui/button';
+     7→import { Input } from '@/components/ui/input';
+     8→import { Badge } from '@/components/ui/badge';
+     9→import { Skeleton } from '@/components/ui/skeleton';
+    10→import { Label } from '@/components/ui/label';
+    11→import { Switch } from '@/components/ui/switch';
+    12→import {
+    13→  Table,
+    14→  TableBody,
+    15→  TableCell,
+    16→  TableHead,
+    17→  TableHeader,
+    18→  TableRow,
+    19→} from '@/components/ui/table';
+    20→import {
+    21→  Dialog,
+    22→  DialogContent,
+    23→  DialogDescription,
+    24→  DialogHeader,
+    25→  DialogTitle,
+    26→  DialogFooter,
+    27→} from '@/components/ui/dialog';
+    28→import {
+    29→  Select,
+    30→  SelectContent,
+    31→  SelectItem,
+    32→  SelectTrigger,
+    33→  SelectValue,
+    34→} from '@/components/ui/select';
+    35→import {
+    36→  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    37→  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+    38→} from '@/components/ui/alert-dialog';
+    39→import { toast } from 'sonner';
+    40→import { usePermissions } from '@/hooks/use-permissions';
+    41→import type { Product, Batch, Category } from '@/types';
+    42→
+    43→function formatGHS(value: number): string {
+    44→  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
+    45→}
+    46→
+    47→function calcMargin(cost: number, selling: number): number {
+    48→  if (!selling || selling <= 0) return 0;
+    49→  return ((selling - cost) / selling) * 100;
+    50→}
+    51→
+    52→interface ProductWithStock extends Product {
+    53→  totalStock: number;
+    54→  batches: (Batch & { currentQty: number })[];
+    55→  earliestExpiry?: string | null;
+    56→  daysToExpiry?: number | null;
+    57→  hasExpiringBatches?: boolean;
+    58→  hasExpiredBatches?: boolean;
+    59→  stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
+    60→  expiryStatus?: 'good' | 'expiring_soon' | 'expired';
+    61→}
+    62→
+    63→export default function ProductsView() {
+    64→  const { canManageProducts } = usePermissions();
+    65→  const [products, setProducts] = useState<ProductWithStock[]>([]);
+    66→  const [categories, setCategories] = useState<Category[]>([]);
+    67→  const [search, setSearch] = useState('');
+    68→  const [categoryFilter, setCategoryFilter] = useState('all');
+    69→  const [loading, setLoading] = useState(true);
+    70→  const [expandedRow, setExpandedRow] = useState<string | null>(null);
+    71→  const [showAddDialog, setShowAddDialog] = useState(false);
+    72→  const [addForm, setAddForm] = useState({
+    73→    name: '',
+    74→    genericName: '',
+    75→    categoryId: '',
+    76→    unit: 'pcs',
+    77→    reorderLevel: 10,
+    78→    defaultCostPrice: 0,
+    79→    defaultSellingPrice: 0,
+    80→  });
+    81→  const [submitting, setSubmitting] = useState(false);
+    82→  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+    83→  const [productToDelete, setProductToDelete] = useState<ProductWithStock | null>(null);
+    84→  const [deleting, setDeleting] = useState(false);
+    85→  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    86→
+    87→  // Edit Price dialog state
+    88→  const [showEditPriceDialog, setShowEditPriceDialog] = useState(false);
+    89→  const [editPriceProduct, setEditPriceProduct] = useState<ProductWithStock | null>(null);
+    90→  const [editCostPrice, setEditCostPrice] = useState(0);
+    91→  const [editSellingPrice, setEditSellingPrice] = useState(0);
+    92→  const [editApplyToBatches, setEditApplyToBatches] = useState(false);
+    93→  const [updatingPrice, setUpdatingPrice] = useState(false);
+    94→
+    95→  const fetchProducts = useCallback(async (query: string, cat: string) => {
+    96→    try {
+    97→      let url = `/api/products?search=${encodeURIComponent(query)}`;
+    98→      if (cat && cat !== 'all') url += `&categoryId=${cat}`;
+    99→      const res = await fetch(url);
+   100→      if (res.ok) {
+   101→        const data = await res.json();
+   102→        setProducts(data.products ?? []);
+   103→      }
+   104→    } catch { /* silent */ }
+   105→  }, []);
+   106→
+   107→  useEffect(() => {
+   108→    async function init() {
+   109→      try {
+   110→        const [prodRes, catRes] = await Promise.all([
+   111→          fetch('/api/products'),
+   112→          fetch('/api/categories'),
+   113→        ]);
+   114→        if (prodRes.ok) {
+   115→          const data = await prodRes.json();
+   116→          setProducts(data.products ?? []);
+   117→        }
+   118→        if (catRes.ok) {
+   119→          const data = await catRes.json();
+   120→          setCategories(data.categories ?? []);
+   121→        }
+   122→      } catch { /* silent */ }
+   123→      setLoading(false);
+   124→    }
+   125→    init();
+   126→  }, []);
+   127→
+   128→  const handleSearch = (value: string) => {
+   129→    setSearch(value);
+   130→    if (debounceRef.current) clearTimeout(debounceRef.current);
+   131→    debounceRef.current = setTimeout(() => {
+   132→      fetchProducts(value, categoryFilter);
+   133→    }, 300);
+   134→  };
+   135→
+   136→  const handleCategoryChange = (value: string) => {
+   137→    setCategoryFilter(value);
+   138→    fetchProducts(search, value);
+   139→  };
+   140→
+   141→  const getProductStatusBadges = (product: ProductWithStock) => {
+   142→    const badges: { label: string; className: string }[] = [];
+   143→
+   144→    if (product.totalStock === 0) {
+   145→      badges.push({ label: 'Out of Stock', className: 'bg-red-500 text-white hover:bg-red-500' });
+   146→    } else if (product.totalStock <= product.reorderLevel) {
+   147→      badges.push({ label: 'Low Stock', className: 'bg-amber-100 text-amber-700 hover:bg-amber-100 border-amber-300' });
+   148→    }
+   149→
+   150→    if (product.hasExpiredBatches) {
+   151→      badges.push({ label: 'Expired Batch', className: 'bg-red-100 text-red-700 hover:bg-red-100' });
+   152→    } else if (product.hasExpiringBatches) {
+   153→      badges.push({ label: 'Expiring Soon', className: 'bg-orange-100 text-orange-700 hover:bg-orange-100 border-orange-300' });
+   154→    }
+   155→
+   156→    if (badges.length === 0) {
+   157→      badges.push({ label: 'In Stock', className: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-emerald-300' });
+   158→    }
+   159→
+   160→    return badges;
+   161→  };
+   162→
+   163→  const isAlertProduct = (product: ProductWithStock) => {
+   164→    return product.stockStatus !== 'in_stock' || product.hasExpiredBatches || product.hasExpiringBatches;
+   165→  };
+   166→
+   167→  const handleAddProduct = async () => {
+   168→    if (!addForm.name.trim()) { toast.error('Product name is required'); return; }
+   169→    setSubmitting(true);
+   170→    try {
+   171→      const res = await fetch('/api/products', {
+   172→        method: 'POST',
+   173→        headers: { 'Content-Type': 'application/json' },
+   174→        body: JSON.stringify(addForm),
+   175→      });
+   176→      if (!res.ok) {
+   177→        const data = await res.json().catch(() => ({}));
+   178→        throw new Error(data.error || 'Failed to add product');
+   179→      }
+   180→      toast.success('Product added successfully');
+   181→      setShowAddDialog(false);
+   182→      setAddForm({
+   183→        name: '',
+   184→        genericName: '',
+   185→        categoryId: '',
+   186→        unit: 'pcs',
+   187→        reorderLevel: 10,
+   188→        defaultCostPrice: 0,
+   189→        defaultSellingPrice: 0,
+   190→      });
+   191→      fetchProducts(search, categoryFilter);
+   192→    } catch (err) {
+   193→      toast.error(err instanceof Error ? err.message : 'Failed to add product');
+   194→    } finally {
+   195→      setSubmitting(false);
+   196→    }
+   197→  };
+   198→
+   199→  const [batches, setBatches] = useState<(Batch & { currentQty: number })[]>([]);
+   200→  const [loadingBatches, setLoadingBatches] = useState(false);
+   201→
+   202→  const handleExpandRow = async (productId: string) => {
+   203→    if (expandedRow === productId) {
+   204→      setExpandedRow(null);
+   205→      return;
+   206→    }
+   207→    setExpandedRow(productId);
+   208→    setLoadingBatches(true);
+   209→    try {
+   210→      const res = await fetch(`/api/products/${productId}`);
+   211→      if (res.ok) {
+   212→        const data = await res.json();
+   213→        setBatches(data.batches ?? []);
+   214→      }
+   215→    } catch { /* silent */ }
+   216→    setLoadingBatches(false);
+   217→  };
+   218→
+   219→  const handleDeleteProduct = async () => {
+   220→    if (!productToDelete) return;
+   221→    setDeleting(true);
+   222→    try {
+   223→      const res = await fetch(`/api/products/${productToDelete.id}`, { method: 'DELETE' });
+   224→      if (!res.ok) {
+   225→        const data = await res.json().catch(() => ({}));
+   226→        throw new Error(data.error || 'Failed to remove product');
+   227→      }
+   228→      toast.success(`Product "${productToDelete.name}" removed successfully`);
+   229→      setShowDeleteDialog(false);
+   230→      setProductToDelete(null);
+   231→      fetchProducts(search, categoryFilter);
+   232→    } catch (err) {
+   233→      toast.error(err instanceof Error ? err.message : 'Failed to remove product');
+   234→    } finally {
+   235→      setDeleting(false);
+   236→    }
+   237→  };
+   238→
+   239→  // ---- Edit Price handlers ----
+   240→  const openEditPriceDialog = (product: ProductWithStock) => {
+   241→    setEditPriceProduct(product);
+   242→    setEditCostPrice(product.defaultCostPrice ?? 0);
+   243→    setEditSellingPrice(product.defaultSellingPrice ?? 0);
+   244→    setEditApplyToBatches(false);
+   245→    setShowEditPriceDialog(true);
+   246→  };
+   247→
+   248→  const handleUpdatePrice = async () => {
+   249→    if (!editPriceProduct) return;
+   250→    setUpdatingPrice(true);
+   251→    try {
+   252→      const res = await fetch(`/api/products/${editPriceProduct.id}/update-prices`, {
+   253→        method: 'PUT',
+   254→        headers: { 'Content-Type': 'application/json' },
+   255→        body: JSON.stringify({
+   256→          defaultCostPrice: editCostPrice,
+   257→          defaultSellingPrice: editSellingPrice,
+   258→          applyToBatches: editApplyToBatches,
+   259→        }),
+   260→      });
+   261→      if (!res.ok) {
+   262→        const data = await res.json().catch(() => ({}));
+   263→        throw new Error(data.error || 'Failed to update prices');
+   264→      }
+   265→      const data = await res.json();
+   266→      toast.success(data.message || `Prices updated for "${editPriceProduct.name}"`);
+   267→      setShowEditPriceDialog(false);
+   268→      setEditPriceProduct(null);
+   269→      fetchProducts(search, categoryFilter);
+   270→    } catch (err) {
+   271→      toast.error(err instanceof Error ? err.message : 'Failed to update prices');
+   272→    } finally {
+   273→      setUpdatingPrice(false);
+   274→    }
+   275→  };
+   276→
+   277→  // ---- Margin display helper ----
+   278→  const MarginDisplay = ({ cost, selling, size = 'sm' }: { cost: number; selling: number; size?: 'sm' | 'xs' }) => {
+   279→    const margin = calcMargin(cost, selling);
+   280→    if (cost === 0 && selling === 0) {
+   281→      return <span className={`text-slate-400 ${size === 'xs' ? 'text-xs' : 'text-sm'}`}>—</span>;
+   282→    }
+   283→    if (selling === 0) {
+   284→      return <span className={`text-slate-400 ${size === 'xs' ? 'text-xs' : 'text-sm'}`}>—</span>;
+   285→    }
+   286→    if (margin > 0) {
+   287→      return (
+   288→        <span className={`text-emerald-600 font-medium ${size === 'xs' ? 'text-xs' : 'text-sm'}`}>
+   289→          <TrendingUp className="inline h-3 w-3 mr-0.5 -mt-0.5" />
+   290→          {margin.toFixed(1)}% <span className="font-normal opacity-75">Profit</span>
+   291→        </span>
+   292→      );
+   293→    }
+   294→    if (margin < 0) {
+   295→      return (
+   296→        <span className={`text-red-600 font-medium ${size === 'xs' ? 'text-xs' : 'text-sm'}`}>
+   297→          {margin.toFixed(1)}% <span className="font-normal opacity-75">Loss</span>
+   298→        </span>
+   299→      );
+   300→    }
+   301→    return <span className={`text-slate-400 ${size === 'xs' ? 'text-xs' : 'text-sm'}`}>0% —</span>;
+   302→  };
+   303→
+   304→  // Number of columns in the main table
+   305→  const totalCols = canManageProducts ? 11 : 10;
+   306→
+   307→  return (
+   308→    <div className="space-y-4 p-6">
+   309→
+   310→      <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+   311→        <div className="relative flex-1 max-w-sm">
+   312→          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   313→          <Input placeholder="Search products..." value={search} onChange={(e) => handleSearch(e.target.value)} className="pl-10" />
+   314→        </div>
+   315→        <div className="flex gap-3 items-center">
+   316→          <Select value={categoryFilter} onValueChange={handleCategoryChange}>
+   317→            <SelectTrigger className="w-44">
+   318→              <SelectValue placeholder="All Categories" />
+   319→            </SelectTrigger>
+   320→            <SelectContent>
+   321→              <SelectItem value="all">All Categories</SelectItem>
+   322→              {categories.map((cat) => (
+   323→                <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+   324→              ))}
+   325→            </SelectContent>
+   326→          </Select>
+   327→          {canManageProducts && (
+   328→            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
+   329→              <Plus className="h-4 w-4 mr-1" />
+   330→              Add Product
+   331→            </Button>
+   332→          )}
+   333→        </div>
+   334→      </div>
+   335→
+   336→      <Card>
+   337→        <CardContent className="p-0">
+   338→          <div className="max-h-[500px] overflow-y-auto">
+   339→            <Table>
+   340→              <TableHeader>
+   341→                <TableRow>
+   342→                  <TableHead className="w-8"></TableHead>
+   343→                  <TableHead>Name</TableHead>
+   344→                  <TableHead>Generic Name</TableHead>
+   345→                  <TableHead>Category</TableHead>
+   346→                  <TableHead>Unit</TableHead>
+   347→                  <TableHead className="text-right">Stock Qty</TableHead>
+   348→                  <TableHead className="text-right">Selling Price</TableHead>
+   349→                  <TableHead>Expiry</TableHead>
+   350→                  <TableHead>Status</TableHead>
+   351→                  {canManageProducts && <TableHead className="w-24 text-center">Actions</TableHead>}
+   352→                </TableRow>
+   353→              </TableHeader>
+   354→              <TableBody>
+   355→                {loading ? (
+   356→                  Array.from({ length: 8 }).map((_, i) => (
+   357→                    <TableRow key={i}>
+   358→                      <TableCell><Skeleton className="h-4 w-4" /></TableCell>
+   359→                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+   360→                      <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+   361→                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+   362→                      <TableCell><Skeleton className="h-4 w-12" /></TableCell>
+   363→                      <TableCell><Skeleton className="h-4 w-16 ml-auto" /></TableCell>
+   364→                      <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
+   365→                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
+   366→                      <TableCell><Skeleton className="h-5 w-24" /></TableCell>
+   367→                      {canManageProducts && <TableCell><Skeleton className="h-4 w-20 mx-auto" /></TableCell>}
+   368→                    </TableRow>
+   369→                  ))
+   370→                ) : products.length > 0 ? (
+   371→                  products.map((product, index) => {
+   372→                    const badges = getProductStatusBadges(product);
+   373→                    const hasAlert = isAlertProduct(product);
+   374→                    const isExpanded = expandedRow === product.id;
+   375→                    const rowKey = product.id || `product-${index}`;
+   376→                    return (
+   377→                      <Fragment key={rowKey}>
+   378→                        <TableRow
+   379→                          className={`cursor-pointer hover:bg-muted/50 ${
+   380→                            hasAlert
+   381→                              ? product.totalStock === 0
+   382→                                ? 'bg-red-50/40'
+   383→                                : product.hasExpiredBatches
+   384→                                  ? 'bg-red-50/20'
+   385→                                  : 'bg-amber-50/20'
+   386→                              : ''
+   387→                          }`}
+   388→                          onClick={() => handleExpandRow(rowKey)}
+   389→                        >
+   390→                          <TableCell>
+   391→                            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+   392→                          </TableCell>
+   393→                          <TableCell className="font-medium">{product.name}</TableCell>
+   394→                          <TableCell className="text-muted-foreground text-sm">{product.genericName ?? '-'}</TableCell>
+   395→                          <TableCell><Badge variant="outline" className="text-xs">{product.category?.name ?? '-'}</Badge></TableCell>
+   396→                          <TableCell className="text-sm">{product.unit}</TableCell>
+   397→                          <TableCell className="text-right">
+   398→                            <span className={`font-mono font-semibold ${
+   399→                              product.totalStock === 0 ? 'text-red-600' :
+   400→                              product.totalStock <= product.reorderLevel ? 'text-amber-600' :
+   401→                              'text-slate-900'
+   402→                            }`}>
+   403→                              {product.totalStock}
+   404→                            </span>
+   405→                          </TableCell>
+   406→                          <TableCell className="text-right">
+   407→                            {product.defaultSellingPrice > 0 ? (
+   408→                              <span className="font-bold text-emerald-700">{formatGHS(product.defaultSellingPrice)}</span>
+   409→                            ) : (
+   410→                              <span className="text-muted-foreground text-sm">Not set</span>
+   411→                            )}
+   412→                          </TableCell>
+   413→                          <TableCell>
+   414→                            {product.earliestExpiry ? (
+   415→                              <div className="flex items-center gap-1">
+   416→                                <div className={`w-1.5 h-1.5 rounded-full ${
+   417→                                  product.daysToExpiry !== null && product.daysToExpiry < 0 ? 'bg-red-500' :
+   418→                                  product.daysToExpiry !== null && product.daysToExpiry < 30 ? 'bg-red-500' :
+   419→                                  product.daysToExpiry !== null && product.daysToExpiry < 90 ? 'bg-amber-500' :
+   420→                                  'bg-emerald-500'
+   421→                                }`} />
+   422→                                <span className="text-xs">{new Date(product.earliestExpiry).toLocaleDateString('en-GH')}</span>
+   423→                              </div>
+   424→                            ) : (
+   425→                              <span className="text-xs text-muted-foreground">-</span>
+   426→                            )}
+   427→                          </TableCell>
+   428→                          <TableCell>
+   429→                            <div className="flex flex-wrap gap-1">
+   430→                              {badges.map((b) => (
+   431→                                <Badge
+   432→                                  key={b.label}
+   433→                                  variant="outline"
+   434→                                  className={`text-[10px] px-1.5 py-0 h-5 ${b.className}`}
+   435→                                >
+   436→                                  {b.label}
+   437→                                </Badge>
+   438→                              ))}
+   439→                            </div>
+   440→                          </TableCell>
+   441→                          {canManageProducts && (
+   442→                            <TableCell>
+   443→                              <div className="flex items-center justify-center gap-1">
+   444→                                <Button
+   445→                                  variant="ghost"
+   446→                                  size="icon"
+   447→                                  className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+   448→                                  onClick={(e) => { e.stopPropagation(); openEditPriceDialog(product); }}
+   449→                                  title="Edit Price"
+   450→                                >
+   451→                                  <Tag className="h-4 w-4" />
+   452→                                </Button>
+   453→                                <Button
+   454→                                  variant="ghost"
+   455→                                  size="icon"
+   456→                                  className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+   457→                                  onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setShowDeleteDialog(true); }}
+   458→                                  title="Remove Product"
+   459→                                >
+   460→                                  <Trash2 className="h-4 w-4" />
+   461→                                </Button>
+   462→                              </div>
+   463→                            </TableCell>
+   464→                          )}
+   465→                        </TableRow>
+   466→                        {isExpanded && (
+   467→                          <TableRow key={`${rowKey}-batches`}>
+   468→                            <TableCell colSpan={totalCols} className="bg-muted/30 px-8 py-3">
+   469→                              {loadingBatches ? (
+   470→                                <div className="space-y-2">
+   471→                                  {Array.from({ length: 2 }).map((_, i) => (
+   472→                                    <Skeleton key={`batch-skel-${i}`} className="h-10 w-full" />
+   473→                                  ))}
+   474→                                </div>
+   475→                              ) : batches.length > 0 ? (
+   476→                                <div className="text-sm">
+   477→                                  <p className="font-medium mb-2 text-xs uppercase tracking-wider text-muted-foreground">
+   478→                                    Batches for {product.name}
+   479→                                  </p>
+   480→                                  <table className="w-full text-xs">
+   481→                                    <thead>
+   482→                                      <tr className="border-b border-dotted">
+   483→                                        <th className="text-left py-1.5 font-medium text-muted-foreground">Batch#</th>
+   484→                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Qty</th>
+   485→                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Cost Price</th>
+   486→                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Selling Price</th>
+   487→                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Expiry Date</th>
+   488→                                        <th className="text-center py-1.5 font-medium text-muted-foreground">Status</th>
+   489→                                      </tr>
+   490→                                    </thead>
+   491→                                    <tbody>
+   492→                                      {batches.map((batch) => {
+   493→                                        const now = new Date();
+   494→                                        const expiry = new Date(batch.expiryDate);
+   495→                                        const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+   496→                                        const isExpired = diffDays < 0;
+   497→                                        const isExpiringSoon = !isExpired && diffDays < 90;
+   498→                                        const isDepleted = batch.currentQty <= 0;
+   499→
+   500→                                        let statusLabel: string;
+   501→                                        let statusClass: string;
+   502→                                        let dotColor: string;
+   503→
+   504→                                        if (isDepleted) {
+   505→                                          statusLabel = 'Depleted';
+   506→                                          statusClass = 'bg-slate-100 text-slate-500';
+   507→                                          dotColor = 'bg-slate-400';
+   508→                                        } else if (isExpired) {
+   509→                                          statusLabel = 'Expired';
+   510→                                          statusClass = 'bg-red-100 text-red-700';
+   511→                                          dotColor = 'bg-red-500';
+   512→                                        } else if (isExpiringSoon) {
+   513→                                          statusLabel = diffDays < 30 ? `${diffDays}d left` : 'Expiring Soon';
+   514→                                          statusClass = diffDays < 30
+   515→                                            ? 'bg-red-100 text-red-700'
+   516→                                            : 'bg-amber-100 text-amber-700';
+   517→                                          dotColor = diffDays < 30 ? 'bg-red-500' : 'bg-amber-500';
+   518→                                        } else {
+   519→                                          statusLabel = 'Good';
+   520→                                          statusClass = 'bg-emerald-100 text-emerald-700';
+   521→                                          dotColor = 'bg-emerald-500';
+   522→                                        }
+   523→
+   524→                                        return (
+   525→                                          <tr key={batch.id || `batch-${batch.batchNumber}`} className={`border-b border-dotted ${isExpired ? 'bg-red-50/40' : ''}`}>
+   526→                                            <td className="py-1.5 font-mono">{batch.batchNumber}</td>
+   527→                                            <td className="text-right font-mono font-medium">{batch.currentQty}</td>
+   528→                                            <td className="text-right">{formatGHS(batch.costPrice)}</td>
+   529→                                            <td className="text-right">{formatGHS(batch.sellingPrice)}</td>
+   530→                                            <td className="text-right">
+   531→                                              <span className={isExpired ? 'text-red-600 font-medium' : ''}>
+   532→                                                {new Date(batch.expiryDate).toLocaleDateString('en-GH')}
+   533→                                              </span>
+   534→                                            </td>
+   535→                                            <td className="text-center">
+   536→                                              <Badge className={`text-[10px] px-1.5 py-0 h-5 ${statusClass}`}>
+   537→                                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor} mr-1`} />
+   538→                                                {statusLabel}
+   539→                                              </Badge>
+   540→                                            </td>
+   541→                                          </tr>
+   542→                                        );
+   543→                                      })}
+   544→                                    </tbody>
+   545→                                  </table>
+   546→                                  {canManageProducts && batches.length > 0 && (
+   547→                                    <p className="mt-3 text-xs text-muted-foreground flex items-center gap-1.5">
+   548→                                      <Tag className="h-3 w-3" />
+   549→                                      To update batch prices, use the <span className="font-medium text-emerald-600">Edit Price</span> button above with <span className="font-medium">&quot;Apply to batches&quot;</span> option enabled.
+   550→                                    </p>
+   551→                                  )}
+   552→                                </div>
+   553→                              ) : (
+   554→                                <p className="text-sm text-muted-foreground">No batches found</p>
+   555→                              )}
+   556→                            </TableCell>
+   557→                          </TableRow>
+   558→                        )}
+   559→                      </Fragment>
+   560→                    );
+   561→                  })
+   562→                ) : (
+   563→                  <TableRow>
+   564→                    <TableCell colSpan={totalCols} className="text-center text-muted-foreground py-12">
+   565→                      No products found
+   566→                    </TableCell>
+   567→                  </TableRow>
+   568→                )}
+   569→              </TableBody>
+   570→            </Table>
+   571→          </div>
+   572→        </CardContent>
+   573→      </Card>
+   574→
+   575→      {/* Add Product Dialog */}
+   576→      <Dialog open={showAddDialog} onOpenChange={(open) => {
+   577→        if (!open) {
+   578→          setAddForm({
+   579→            name: '',
+   580→            genericName: '',
+   581→            categoryId: '',
+   582→            unit: 'pcs',
+   583→            reorderLevel: 10,
+   584→            defaultCostPrice: 0,
+   585→            defaultSellingPrice: 0,
+   586→          });
+   587→        }
+   588→        setShowAddDialog(open);
+   589→      }}>
+   590→        <DialogContent className="sm:max-w-lg">
+   591→          <DialogHeader>
+   592→            <DialogTitle>Add New Product</DialogTitle>
+   593→            <DialogDescription>Fill in the product details below. Pricing is optional and can be set later.</DialogDescription>
+   594→          </DialogHeader>
+   595→          <div className="space-y-4">
+   596→            <div>
+   597→              <Label>Product Name *</Label>
+   598→              <Input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} placeholder="e.g. Paracetamol 500mg" />
+   599→            </div>
+   600→            <div>
+   601→              <Label>Generic Name</Label>
+   602→              <Input value={addForm.genericName} onChange={(e) => setAddForm({ ...addForm, genericName: e.target.value })} placeholder="e.g. Acetaminophen" />
+   603→            </div>
+   604→            <div>
+   605→              <Label>Category</Label>
+   606→              <Select value={addForm.categoryId} onValueChange={(v) => setAddForm({ ...addForm, categoryId: v })}>
+   607→                <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+   608→                <SelectContent>
+   609→                  {categories.map((cat) => (
+   610→                    <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+   611→                  ))}
+   612→                </SelectContent>
+   613→              </Select>
+   614→            </div>
+   615→            <div className="grid grid-cols-2 gap-4">
+   616→              <div>
+   617→                <Label>Unit</Label>
+   618→                <Select value={addForm.unit} onValueChange={(v) => setAddForm({ ...addForm, unit: v })}>
+   619→                  <SelectTrigger><SelectValue /></SelectTrigger>
+   620→                  <SelectContent>
+   621→                    <SelectItem value="pcs">Pieces</SelectItem>
+   622→                    <SelectItem value="box">Box</SelectItem>
+   623→                    <SelectItem value="strip">Strip</SelectItem>
+   624→                    <SelectItem value="bottle">Bottle</SelectItem>
+   625→                    <SelectItem value="sachet">Sachet</SelectItem>
+   626→                    <SelectItem value="tube">Tube</SelectItem>
+   627→                    <SelectItem value="pack">Pack</SelectItem>
+   628→                  </SelectContent>
+   629→                </Select>
+   630→              </div>
+   631→              <div>
+   632→                <Label>Reorder Level</Label>
+   633→                <Input type="number" value={addForm.reorderLevel} onChange={(e) => setAddForm({ ...addForm, reorderLevel: Number(e.target.value) || 0 })} />
+   634→              </div>
+   635→            </div>
+   636→
+   637→            {/* Premium Pricing Section */}
+   638→            <div className="relative rounded-lg border border-emerald-200/60 bg-emerald-50/30 p-4 space-y-4">
+   639→              <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-emerald-100/20 via-transparent to-teal-100/20 pointer-events-none" />
+   640→              <div className="relative flex items-center gap-2 mb-1">
+   641→                <div className="flex items-center justify-center h-7 w-7 rounded-md bg-emerald-600 text-white">
+   642→                  <DollarSign className="h-4 w-4" />
+   643→                </div>
+   644→                <Label className="text-sm font-semibold text-emerald-800">Pricing</Label>
+   645→                <span className="text-xs text-emerald-600/70">(Optional — can be set later)</span>
+   646→              </div>
+   647→              <div className="relative grid grid-cols-2 gap-4">
+   648→                <div>
+   649→                  <Label className="text-xs text-muted-foreground">Cost Price (GHS)</Label>
+   650→                  <Input
+   651→                    type="number"
+   652→                    step="0.01"
+   653→                    min="0"
+   654→                    placeholder="0.00"
+   655→                    value={addForm.defaultCostPrice || ''}
+   656→                    onChange={(e) => setAddForm({ ...addForm, defaultCostPrice: parseFloat(e.target.value) || 0 })}
+   657→                    className="bg-white/70 border-emerald-200/50 focus-visible:ring-emerald-300/50"
+   658→                  />
+   659→                </div>
+   660→                <div>
+   661→                  <Label className="text-xs text-muted-foreground">Selling Price (GHS)</Label>
+   662→                  <Input
+   663→                    type="number"
+   664→                    step="0.01"
+   665→                    min="0"
+   666→                    placeholder="0.00"
+   667→                    value={addForm.defaultSellingPrice || ''}
+   668→                    onChange={(e) => setAddForm({ ...addForm, defaultSellingPrice: parseFloat(e.target.value) || 0 })}
+   669→                    className="bg-white/70 border-emerald-200/50 focus-visible:ring-emerald-300/50"
+   670→                  />
+   671→                </div>
+   672→              </div>
+   673→              <div className="relative flex items-center gap-2 pt-1">
+   674→                <Label className="text-xs text-muted-foreground whitespace-nowrap">Profit Margin</Label>
+   675→                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/60 border border-emerald-100">
+   676→                  <MarginDisplay cost={addForm.defaultCostPrice} selling={addForm.defaultSellingPrice} size="sm" />
+   677→                </div>
+   678→              </div>
+   679→            </div>
+   680→          </div>
+   681→          <DialogFooter>
+   682→            <Button variant="outline" onClick={() => setShowAddDialog(false)}>Cancel</Button>
+   683→            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={handleAddProduct} disabled={submitting}>
+   684→              {submitting ? 'Adding...' : 'Add Product'}
+   685→            </Button>
+   686→          </DialogFooter>
+   687→        </DialogContent>
+   688→      </Dialog>
+   689→
+   690→      {/* Edit Price Dialog */}
+   691→      <Dialog open={showEditPriceDialog} onOpenChange={setShowEditPriceDialog}>
+   692→        <DialogContent className="sm:max-w-lg">
+   693→          <DialogHeader>
+   694→            <DialogTitle className="flex items-center gap-2">
+   695→              <Tag className="h-5 w-5 text-emerald-600" />
+   696→              Update Price — {editPriceProduct?.name}
+   697→            </DialogTitle>
+   698→            <DialogDescription>Change the default cost and selling price for this product.</DialogDescription>
+   699→          </DialogHeader>
+   700→
+   701→          {editPriceProduct && (
+   702→            <div className="space-y-4">
+   703→              {/* Current prices display */}
+   704→              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-4 space-y-3">
+   705→                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Current Prices</p>
+   706→                <div className="grid grid-cols-2 gap-4">
+   707→                  <div>
+   708→                    <p className="text-xs text-muted-foreground">Cost Price</p>
+   709→                    <p className="text-lg font-semibold font-mono">{formatGHS(editPriceProduct.defaultCostPrice ?? 0)}</p>
+   710→                  </div>
+   711→                  <div>
+   712→                    <p className="text-xs text-muted-foreground">Selling Price</p>
+   713→                    <p className="text-lg font-semibold font-mono text-emerald-700">{formatGHS(editPriceProduct.defaultSellingPrice ?? 0)}</p>
+   714→                  </div>
+   715→                </div>
+   716→                <div className="pt-1 border-t border-slate-200/60">
+   717→                  <MarginDisplay cost={editPriceProduct.defaultCostPrice ?? 0} selling={editPriceProduct.defaultSellingPrice ?? 0} size="sm" />
+   718→                </div>
+   719→              </div>
+   720→
+   721→              {/* New prices inputs */}
+   722→              <div className="rounded-lg border border-emerald-200/60 bg-emerald-50/30 p-4 space-y-4 relative">
+   723→                <div className="absolute inset-0 rounded-lg bg-gradient-to-br from-emerald-100/20 via-transparent to-teal-100/20 pointer-events-none" />
+   724→                <div className="relative">
+   725→                  <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-3">New Prices</p>
+   726→                  <div className="grid grid-cols-2 gap-4">
+   727→                    <div>
+   728→                      <Label className="text-xs text-muted-foreground">Cost Price (GHS)</Label>
+   729→                      <Input
+   730→                        type="number"
+   731→                        step="0.01"
+   732→                        min="0"
+   733→                        value={editCostPrice || ''}
+   734→                        onChange={(e) => setEditCostPrice(parseFloat(e.target.value) || 0)}
+   735→                        className="bg-white/70 border-emerald-200/50 focus-visible:ring-emerald-300/50"
+   736→                      />
+   737→                    </div>
+   738→                    <div>
+   739→                      <Label className="text-xs text-muted-foreground">Selling Price (GHS)</Label>
+   740→                      <Input
+   741→                        type="number"
+   742→                        step="0.01"
+   743→                        min="0"
+   744→                        value={editSellingPrice || ''}
+   745→                        onChange={(e) => setEditSellingPrice(parseFloat(e.target.value) || 0)}
+   746→                        className="bg-white/70 border-emerald-200/50 focus-visible:ring-emerald-300/50"
+   747→                      />
+   748→                    </div>
+   749→                  </div>
+   750→                </div>
+   751→                <div className="relative flex items-center gap-2">
+   752→                  <Label className="text-xs text-muted-foreground whitespace-nowrap">New Margin</Label>
+   753→                  <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/60 border border-emerald-100">
+   754→                    <MarginDisplay cost={editCostPrice} selling={editSellingPrice} size="sm" />
+   755→                  </div>
+   756→                </div>
+   757→              </div>
+   758→
+   759→              {/* Apply to batches toggle */}
+   760→              {(editPriceProduct._count?.batches ?? 0) > 0 && (
+   761→                <div className="flex items-start gap-3 rounded-lg border border-slate-200 p-3">
+   762→                  <Switch
+   763→                    checked={editApplyToBatches}
+   764→                    onCheckedChange={setEditApplyToBatches}
+   765→                    className="mt-0.5"
+   766→                    id="apply-to-batches"
+   767→                  />
+   768→                  <div className="space-y-0.5">
+   769→                    <Label htmlFor="apply-to-batches" className="text-sm font-medium cursor-pointer">
+   770→                      Apply to existing batches
+   771→                    </Label>
+   772→                    <p className="text-xs text-muted-foreground">
+   773→                      Also update prices for all <span className="font-semibold text-slate-700">{editPriceProduct._count?.batches ?? 0}</span> existing batches of this product.
+   774→                    </p>
+   775→                  </div>
+   776→                </div>
+   777→              )}
+   778→            </div>
+   779→          )}
+   780→
+   781→          <DialogFooter>
+   782→            <Button variant="outline" onClick={() => setShowEditPriceDialog(false)}>Cancel</Button>
+   783→            <Button
+   784→              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+   785→              onClick={handleUpdatePrice}
+   786→              disabled={updatingPrice}
+   787→            >
+   788→              {updatingPrice ? 'Updating...' : 'Update Prices'}
+   789→            </Button>
+   790→          </DialogFooter>
+   791→        </DialogContent>
+   792→      </Dialog>
+   793→
+   794→      {/* Delete Product Confirmation */}
+   795→      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+   796→        <AlertDialogContent>
+   797→          <AlertDialogHeader>
+   798→            <AlertDialogTitle>Remove Product — {productToDelete?.name}?</AlertDialogTitle>
+   799→            <AlertDialogDescription>
+   800→              This will deactivate the product and hide it from all listings. Existing sales records containing
+   801→              this product will remain unaffected.
+   802→            </AlertDialogDescription>
+   803→          </AlertDialogHeader>
+   804→          <AlertDialogFooter>
+   805→            <AlertDialogCancel>Cancel</AlertDialogCancel>
+   806→            <AlertDialogAction
+   807→              className="bg-red-600 hover:bg-red-700 text-white"
+   808→              onClick={handleDeleteProduct}
+   809→              disabled={deleting}
+   810→            >
+   811→              {deleting ? 'Removing...' : 'Remove Product'}
+   812→            </AlertDialogAction>
+   813→          </AlertDialogFooter>
+   814→        </AlertDialogContent>
+   815→      </AlertDialog>
+   816→    </div>
+   817→  );
+   818→}

@@ -58,6 +58,8 @@ export interface Product {
   description?: string;
   unit: string;
   reorderLevel: number;
+  defaultCostPrice: number;
+  defaultSellingPrice: number;
   active: boolean;
   createdAt: string;
   updatedAt: string;

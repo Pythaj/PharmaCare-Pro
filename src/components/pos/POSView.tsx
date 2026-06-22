@@ -1146,204 +1146,221 @@ export default function POSView() {
         </div>
       </div>
 
-      {/* Right Panel - Cart & Checkout */}
-      <div className="w-[380px] border-l bg-white flex flex-col shrink-0">
-        {/* Cart Header */}
-        <div className="px-4 py-3 border-b border-slate-100">
+      {/* Right Panel - Cart & Payment (payment ALWAYS pinned) */}
+      <div className="w-[340px] border-l border-slate-100 bg-white flex flex-col shrink-0 overflow-hidden">
+
+        {/* ─── Cart Header — pinned ─── */}
+        <div className="shrink-0 px-3.5 py-2.5 border-b border-slate-100/80 bg-white/90 backdrop-blur-sm">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                <ShoppingCart className="h-4 w-4 text-emerald-600" />
+            <div className="flex items-center gap-2.5">
+              <div className="relative">
+                <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-sm shadow-emerald-200/50">
+                  <ShoppingCart className="h-4 w-4 text-white" />
+                </div>
+                {cart.length > 0 && (
+                  <motion.span
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center shadow-sm"
+                  >
+                    {cart.reduce((s, i) => s + i.quantity, 0)}
+                  </motion.span>
+                )}
               </div>
               <div>
-                <h3 className="font-semibold text-sm text-slate-800">Cart</h3>
-                <p className="text-[11px] text-slate-400">
+                <h3 className="font-semibold text-[13px] text-slate-800 leading-tight">Cart</h3>
+                <p className="text-[10px] text-slate-400 leading-tight">
                   {cart.length > 0
-                    ? `${cart.reduce((s, i) => s + i.quantity, 0)} item${cart.reduce((s, i) => s + i.quantity, 0) !== 1 ? 's' : ''}`
+                    ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${formatGHS(subtotal)}`
                     : 'Empty'}
                 </p>
               </div>
             </div>
             {cart.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-red-400 hover:text-red-600 hover:bg-red-50 h-7 text-xs"
+              <motion.button
+                whileHover={{ scale: 1.05 }}
+                whileTap={{ scale: 0.95 }}
+                className="h-7 px-2.5 rounded-lg text-[10px] font-medium text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                 onClick={clearCart}
               >
-                <Trash2 className="h-3 w-3 mr-1" />
-                Clear All
-              </Button>
+                Clear all
+              </motion.button>
             )}
           </div>
         </div>
 
-        {/* Cart Items */}
-        <ScrollArea className="flex-1 px-4 py-2">
-          {cart.length > 0 ? (
-            <div className="space-y-2">
-              {cart.map((item) => {
-                const product = products.find(p => p.id === item.productId);
-                const reorderLevel = product?.reorderLevel || 10;
-                const stockAfterSale = (product?.totalStock || 0) - item.quantity;
+        {/* ─── Cart Items — premium scroll, NEVER pushes payment ─── */}
+        <div className="flex-1 min-h-0 overflow-y-auto cart-items-scroll relative">
+          {/* Top fade when scrolled */}
+          <div className="sticky top-0 z-10 h-3 bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none" />
+          <div className="px-3 pb-2">
+            <AnimatePresence mode="popLayout">
+            {cart.length > 0 ? (
+              <div className="space-y-1.5">
+                {cart.map((item) => {
+                  const product = products.find(p => p.id === item.productId);
+                  const reorderLevel = product?.reorderLevel || 10;
+                  const stockAfterSale = (product?.totalStock || 0) - item.quantity;
 
-                return (
-                  <motion.div
-                    key={`${item.productId}-${item.batchId}`}
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20, height: 0, marginBottom: 0 }}
-                    className="p-3 rounded-lg border border-slate-100 bg-slate-50/50 hover:bg-slate-50 transition-colors group"
-                    layout
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm text-slate-800 truncate">{item.productName}</p>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <p className="text-xs text-slate-400">{formatGHS(item.unitPrice)} each</p>
-                          <span className="text-[10px] text-slate-300">·</span>
-                          <p className={`text-[11px] font-medium ${
-                            stockAfterSale <= 0 ? 'text-red-500' :
-                            stockAfterSale <= reorderLevel ? 'text-amber-600' :
-                            'text-emerald-600'
-                          }`}>
-                            {stockAfterSale > 0 ? `${stockAfterSale} left after sale` : 'Last units!'}
-                          </p>
+                  return (
+                    <motion.div
+                      key={`${item.productId}-${item.batchId}`}
+                      initial={{ opacity: 0, x: 12, scale: 0.98 }}
+                      animate={{ opacity: 1, x: 0, scale: 1 }}
+                      exit={{ opacity: 0, x: -12, scale: 0.95, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
+                      transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+                      className="py-2 px-2.5 rounded-xl border border-slate-100/80 bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200 group"
+                      layout
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-semibold text-[12px] text-slate-800 truncate leading-tight">{item.productName}</p>
+                          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
                         </div>
-                        {item.batchNumber && (
-                          <p className="text-[10px] text-slate-300 mt-0.5">Batch: {item.batchNumber}</p>
-                        )}
+                        <span className="font-bold text-[12px] text-slate-800 tabular-nums shrink-0 pt-px">
+                          {formatGHS(item.unitPrice * item.quantity)}
+                        </span>
                       </div>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-slate-300 hover:text-red-500 hover:bg-red-50 opacity-0 group-hover:opacity-100 transition-all"
-                        onClick={() => removeFromCart(item.productId, item.batchId)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                    <div className="flex items-center justify-between mt-2.5">
-                      <div className="flex items-center gap-1.5 bg-white rounded-lg border border-slate-200 p-0.5">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-slate-400 hover:text-slate-700 hover:bg-slate-100"
-                          onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
-                          disabled={item.quantity <= 1}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <span className="w-8 text-center font-bold text-sm tabular-nums">{item.quantity}</span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className={`h-7 w-7 ${
-                            item.quantity >= item.availableQty
-                              ? 'text-slate-200 cursor-not-allowed'
-                              : 'text-slate-400 hover:text-emerald-600 hover:bg-emerald-50'
-                          }`}
-                          onClick={() => {
-                            if (item.quantity < item.availableQty) {
-                              updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
-                            }
-                          }}
-                          disabled={item.quantity >= item.availableQty}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
+                      <div className="flex items-center justify-between mt-1.5">
+                        <p className={`text-[9px] font-semibold tracking-wide uppercase ${
+                          stockAfterSale <= 0 ? 'text-red-500' :
+                          stockAfterSale <= reorderLevel ? 'text-amber-600' :
+                          'text-slate-300'
+                        }`}>
+                          {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
+                        </p>
+                        <div className="flex items-center gap-1">
+                          <button
+                            className="h-6 w-6 rounded-md flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+                            onClick={() => removeFromCart(item.productId, item.batchId)}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                          <div className="flex items-center bg-white rounded-lg border border-slate-200 shadow-sm">
+                            <button
+                              className="h-6 w-6 rounded-l-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors"
+                              onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
+                              disabled={item.quantity <= 1}
+                            >
+                              <Minus className="h-2.5 w-2.5" />
+                            </button>
+                            <span className="w-7 text-center text-[11px] font-bold tabular-nums text-slate-700">{item.quantity}</span>
+                            <button
+                              className={`h-6 w-6 rounded-r-lg flex items-center justify-center transition-colors ${
+                                item.quantity >= item.availableQty
+                                  ? 'text-slate-200 cursor-not-allowed'
+                                  : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600'
+                              }`}
+                              onClick={() => {
+                                if (item.quantity < item.availableQty) {
+                                  updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
+                                }
+                              }}
+                              disabled={item.quantity >= item.availableQty}
+                            >
+                              <Plus className="h-2.5 w-2.5" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
-                      <span className="font-bold text-sm text-slate-800">
-                        {formatGHS(item.unitPrice * item.quantity)}
-                      </span>
-                    </div>
-                  </motion.div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+                <div className="h-14 w-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+                  <ShoppingCart className="h-7 w-7 text-slate-200" />
+                </div>
+                <p className="text-xs font-semibold text-slate-300">No items yet</p>
+                <p className="text-[10px] text-slate-200 mt-0.5">Tap a product to begin</p>
+              </div>
+            )}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        {/* ─── Payment Section — ALWAYS pinned at bottom, never scrolls ─── */}
+        <div className="shrink-0 relative">
+          {/* Subtle shadow above payment to indicate scrollable content above */}
+          {cart.length > 2 && (
+            <div className="absolute -top-3 left-0 right-0 h-3 bg-gradient-to-t from-slate-100/60 to-transparent pointer-events-none z-10" />
+          )}
+          <div className="border-t border-slate-100 bg-gradient-to-t from-white via-slate-50/30 to-white px-3 pt-2.5 pb-3 space-y-2">
+            {/* Price Summary — compact card */}
+            <div className="rounded-xl border border-slate-100 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-3 py-2 space-y-0.5">
+              <div className="flex justify-between text-[11px]">
+                <span className="text-slate-400">Subtotal</span>
+                <span className="text-slate-600 font-medium font-mono tabular-nums">{formatGHS(subtotal)}</span>
+              </div>
+              <div className="flex justify-between text-[11px]">
+                <span className="text-slate-400">VAT (12.5%)</span>
+                <span className="text-slate-500 font-mono tabular-nums">{formatGHS(tax)}</span>
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-400">Discount</span>
+                <Input
+                  type="number"
+                  value={discount || ''}
+                  onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+                  className="w-20 h-5 text-[10px] text-right bg-slate-50/80 border-slate-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20"
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="h-px bg-slate-100 my-1" />
+              <div className="flex justify-between items-baseline">
+                <span className="font-bold text-[12px] text-slate-700 uppercase tracking-wide">Total</span>
+                <span className="font-black text-[17px] text-emerald-600 font-mono tabular-nums leading-none">{formatGHS(total)}</span>
+              </div>
+            </div>
+
+            {/* Payment Method — pill selector */}
+            <div className="flex gap-1">
+              {(['cash', 'card', 'mobile_money'] as const).map((method) => {
+                const Icon = paymentIcons[method];
+                const label = method === 'mobile_money' ? 'MoMo' : method.charAt(0).toUpperCase() + method.slice(1);
+                const isActive = paymentMethod === method;
+                return (
+                  <motion.button
+                    key={method}
+                    whileTap={{ scale: 0.95 }}
+                    className={`flex-1 flex items-center justify-center gap-1.5 h-8 rounded-xl text-[10px] font-semibold transition-all duration-200 ${
+                      isActive
+                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25'
+                        : 'bg-white border border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600 hover:shadow-sm'
+                    }`}
+                    onClick={() => setPaymentMethod(method)}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {label}
+                  </motion.button>
                 );
               })}
             </div>
-          ) : (
-            <div className="text-center text-slate-300 py-16">
-              <ShoppingCart className="h-14 w-14 mx-auto mb-3 opacity-20" />
-              <p className="text-sm font-medium text-slate-400">Your cart is empty</p>
-              <p className="text-xs text-slate-300 mt-1">Click on a product to start selling</p>
-            </div>
-          )}
-        </ScrollArea>
 
-        {/* Cart Summary & Checkout — always pinned, no scroll needed */}
-        <div className="shrink-0 border-t border-slate-100 bg-white p-3 space-y-2.5">
-          {/* Price Summary — compact */}
-          <div className="bg-slate-50/80 rounded-xl border border-slate-100 px-3 py-2.5 space-y-1.5">
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-400">Subtotal</span>
-              <span className="text-slate-600 font-medium font-mono">{formatGHS(subtotal)}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span className="text-slate-400">VAT (12.5%)</span>
-              <span className="text-slate-600 font-mono">{formatGHS(tax)}</span>
-            </div>
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">Discount</span>
-              <Input
-                type="number"
-                value={discount || ''}
-                onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-                className="w-20 h-6 text-[11px] text-right bg-white border-slate-200 px-2"
-                placeholder="0.00"
-              />
-            </div>
-            <Separator className="bg-slate-200/60" />
-            <div className="flex justify-between items-baseline pt-0.5">
-              <span className="font-bold text-sm text-slate-800">Total</span>
-              <span className="font-black text-lg text-emerald-600 font-mono">{formatGHS(total)}</span>
-            </div>
+            {/* Complete Sale — premium CTA */}
+            <Button
+              className="w-full h-10 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white font-bold text-[13px] shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:shadow-emerald-500/30 active:scale-[0.98] rounded-xl"
+              onClick={handleCompleteSale}
+              disabled={cart.length === 0 || submitting}
+            >
+              {submitting ? (
+                <span className="flex items-center gap-2">
+                  <motion.div
+                    className="h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full"
+                    animate={{ rotate: 360 }}
+                    transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
+                  />
+                  Processing...
+                </span>
+              ) : (
+                <span className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4" />
+                  Complete Sale — {formatGHS(total)}
+                </span>
+              )}
+            </Button>
           </div>
-
-          {/* Payment Method — compact row */}
-          <div className="flex gap-1.5">
-            {(['cash', 'card', 'mobile_money'] as const).map((method) => {
-              const Icon = paymentIcons[method];
-              const label = method === 'mobile_money' ? 'MoMo' : method.charAt(0).toUpperCase() + method.slice(1);
-              const isActive = paymentMethod === method;
-              return (
-                <button
-                  key={method}
-                  className={`flex-1 flex items-center justify-center gap-1 h-8 rounded-lg text-[11px] font-semibold transition-all duration-200 ${
-                    isActive
-                      ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
-                      : 'bg-slate-50 border border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600'
-                  }`}
-                  onClick={() => setPaymentMethod(method)}
-                >
-                  <Icon className="h-3 w-3" />
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Complete Sale Button */}
-          <Button
-            className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-600/20 transition-all hover:shadow-xl hover:shadow-emerald-600/30 active:scale-[0.98]"
-            onClick={handleCompleteSale}
-            disabled={cart.length === 0 || submitting}
-          >
-            {submitting ? (
-              <span className="flex items-center gap-2">
-                <motion.div
-                  className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full"
-                  animate={{ rotate: 360 }}
-                  transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
-                />
-                Processing...
-              </span>
-            ) : (
-              <span className="flex items-center gap-2">
-                <CheckCircle className="h-4 w-4" />
-                Complete Sale — {formatGHS(total)}
-              </span>
-            )}
-          </Button>
         </div>
       </div>
 

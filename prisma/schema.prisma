@@ -61,9 +61,11 @@ model Product {
   genericName String?
   categoryId  String?
   description String?
-  unit        String     @default("units") // "tablets", "capsules", "bottles", "sachets", "ml", "units"
-  reorderLevel Int       @default(10)
-  active      Boolean    @default(true)
+  unit                String     @default("units") // "tablets", "capsules", "bottles", "sachets", "ml", "units"
+  reorderLevel        Int       @default(10)
+  defaultCostPrice    Float     @default(0)
+  defaultSellingPrice Float     @default(0)
+  active              Boolean    @default(true)
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
 

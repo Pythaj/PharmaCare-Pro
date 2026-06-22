@@ -42,7 +42,9 @@ export async function GET(request: NextRequest) {
 
     const productsWithStock = products.map((p) => {
       const totalStock = p.batches.reduce((sum, b) => sum + b.quantity, 0);
-      const minSellingPrice = p.batches.length > 0 ? Math.min(...p.batches.map(b => b.sellingPrice)) : 0;
+      const minSellingPrice = p.batches.length > 0
+        ? Math.min(...p.batches.map(b => b.sellingPrice))
+        : (p.defaultSellingPrice || 0);
       const batchesWithQty = p.batches.map(b => ({ ...b, currentQty: b.quantity }));
 
       // Calculate earliest expiry
@@ -82,6 +84,8 @@ export async function GET(request: NextRequest) {
         description: p.description,
         unit: p.unit,
         reorderLevel: p.reorderLevel,
+        defaultCostPrice: p.defaultCostPrice,
+        defaultSellingPrice: p.defaultSellingPrice,
         active: p.active,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
@@ -116,7 +120,7 @@ export async function POST(request: NextRequest) {
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
-    const { name, genericName, categoryId, description, unit, reorderLevel } = body
+    const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice } = body
 
     if (!name) {
       return NextResponse.json(
@@ -133,6 +137,8 @@ export async function POST(request: NextRequest) {
         description: description || null,
         unit: unit || 'units',
         reorderLevel: reorderLevel || 10,
+        defaultCostPrice: defaultCostPrice ?? 0,
+        defaultSellingPrice: defaultSellingPrice ?? 0,
       },
       include: {
         category: { select: { id: true, name: true } },

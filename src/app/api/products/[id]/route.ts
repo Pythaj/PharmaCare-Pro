@@ -64,6 +64,8 @@ export async function PUT(
         description: body.description !== undefined ? body.description : product.description,
         unit: body.unit ?? product.unit,
         reorderLevel: body.reorderLevel ?? product.reorderLevel,
+        defaultCostPrice: body.defaultCostPrice !== undefined ? body.defaultCostPrice : product.defaultCostPrice,
+        defaultSellingPrice: body.defaultSellingPrice !== undefined ? body.defaultSellingPrice : product.defaultSellingPrice,
       },
       include: {
         category: { select: { id: true, name: true } },

@@ -1,0 +1,1525 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+     4→import {
+     5→  Search,
+     6→  Plus,
+     7→  Minus,
+     8→  Trash2,
+     9→  ShoppingCart,
+    10→  CreditCard,
+    11→  Smartphone,
+    12→  Banknote,
+    13→  X,
+    14→  Printer,
+    15→  CheckCircle,
+    16→
+    17→  Package,
+    18→  AlertTriangle,
+    19→  TrendingDown,
+    20→  ArrowDownCircle,
+    21→  PackageX,
+    22→  BarChart3,
+    23→  Clock,
+    24→  ArrowUp,
+    25→  ArrowDown,
+    26→  CircleDot,
+    27→  RefreshCw,
+    28→} from 'lucide-react';
+    29→import { motion, AnimatePresence, useMotionValue, useTransform, animate, useSpring } from 'framer-motion';
+    30→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+    31→import { Button } from '@/components/ui/button';
+    32→import { Input } from '@/components/ui/input';
+    33→import { Badge } from '@/components/ui/badge';
+    34→import { Separator } from '@/components/ui/separator';
+    35→import { Skeleton } from '@/components/ui/skeleton';
+    36→import { ScrollArea } from '@/components/ui/scroll-area';
+    37→import {
+    38→  Dialog,
+    39→  DialogContent,
+    40→  DialogFooter,
+    41→  DialogHeader,
+    42→  DialogTitle,
+    43→  DialogDescription,
+    44→} from '@/components/ui/dialog';
+    45→import { useAppStore } from '@/stores/app-store';
+    46→import { toast } from 'sonner';
+    47→import type { Product, Batch, Customer, CartItem } from '@/types';
+    48→
+    49→function formatGHS(value: number): string {
+    50→  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
+    51→}
+    52→
+    53→interface ProductWithStock extends Product {
+    54→  batches: (Batch & { currentQty: number })[];
+    55→  totalStock: number;
+    56→  minSellingPrice: number;
+    57→  reorderLevel: number;
+    58→}
+    59→
+    60→interface StockChange {
+    61→  id: string;
+    62→  productId: string;
+    63→  productName: string;
+    64→  oldStock: number;
+    65→  newStock: number;
+    66→  timestamp: number;
+    67→  type: 'sale' | 'restock';
+    68→}
+    69→
+    70→interface StockImpactItem {
+    71→  productName: string;
+    72→  productId: string;
+    73→  oldStock: number;
+    74→  newStock: number;
+    75→  quantitySold: number;
+    76→  reorderLevel: number;
+    77→  hitZero: boolean;
+    78→  hitLow: boolean;
+    79→}
+    80→
+    81→// ─────────────────────────────────────────────────────────────
+    82→// CountingNumber – animated digital counter / slot-machine number
+    83→// ─────────────────────────────────────────────────────────────
+    84→function CountingNumber({
+    85→  value,
+    86→  direction,
+    87→  className = '',
+    88→  size = 'sm',
+    89→}: {
+    90→  value: number;
+    91→  direction?: 'up' | 'down' | null;
+    92→  className?: string;
+    93→  size?: 'sm' | 'md' | 'lg' | 'xl';
+    94→}) {
+    95→  const motionVal = useMotionValue(value);
+    96→  const display = useTransform(motionVal, (v) => Math.round(v));
+    97→  const springVal = useSpring(display, { stiffness: 300, damping: 30 });
+    98→  const rounded = useTransform(springVal, (v) => Math.round(v));
+    99→
+   100→  useEffect(() => {
+   101→    const controls = animate(motionVal, value, {
+   102→      duration: 0.6,
+   103→      ease: 'easeOut',
+   104→    });
+   105→    return () => controls.stop();
+   106→  }, [value, motionVal]);
+   107→
+   108→  const sizeClasses = {
+   109→    sm: 'text-sm',
+   110→    md: 'text-lg',
+   111→    lg: 'text-2xl',
+   112→    xl: 'text-4xl',
+   113→  };
+   114→
+   115→  const colorClass = direction === 'up'
+   116→    ? 'text-emerald-500'
+   117→    : direction === 'down'
+   118→    ? 'text-red-500'
+   119→    : 'text-inherit';
+   120→
+   121→  return (
+   122→    <motion.span
+   123→      className={`font-bold tabular-nums font-mono tracking-tighter ${sizeClasses[size]} ${colorClass} ${className}`}
+   124→      key={`${value}-${direction}`}
+   125→      initial={direction ? { scale: 1.35 } : false}
+   126→      animate={{ scale: 1 }}
+   127→      transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+   128→    >
+   129→      <motion.span>{rounded}</motion.span>
+   130→    </motion.span>
+   131→  );
+   132→}
+   133→
+   134→// ─────────────────────────────────────────────────────────────
+   135→// StockGauge – circular SVG ring gauge
+   136→// ─────────────────────────────────────────────────────────────
+   137→function StockGauge({
+   138→  stock,
+   139→  reorderLevel,
+   140→  size = 40,
+   141→  strokeWidth = 3,
+   142→}: {
+   143→  stock: number;
+   144→  reorderLevel: number;
+   145→  size?: number;
+   146→  strokeWidth?: number;
+   147→}) {
+   148→  const radius = (size - strokeWidth) / 2;
+   149→  const circumference = 2 * Math.PI * radius;
+   150→  const maxDisplay = Math.max(reorderLevel * 3, 20);
+   151→  const pct = stock === 0 ? 0 : Math.min((stock / maxDisplay) * 100, 100);
+   152→  const isCritical = stock > 0 && stock <= Math.ceil(reorderLevel * 0.3);
+   153→  const isLow = stock > 0 && stock <= reorderLevel;
+   154→  const isOut = stock === 0;
+   155→
+   156→  const color = isOut ? '#ef4444' : isCritical ? '#ef4444' : isLow ? '#f59e0b' : '#10b981';
+   157→  const bgColor = isOut ? '#fecaca' : isCritical ? '#fecaca' : isLow ? '#fef3c7' : '#d1fae5';
+   158→
+   159→  const animatedOffset = useMotionValue(circumference);
+   160→  useEffect(() => {
+   161→    animate(animatedOffset, circumference - (pct / 100) * circumference, {
+   162→      duration: 0.8,
+   163→      ease: 'easeOut',
+   164→    });
+   165→  }, [pct, circumference, animatedOffset]);
+   166→
+   167→  const strokeDashoffset = useTransform(animatedOffset, (v) => v);
+   168→
+   169→  if (isOut) {
+   170→    return (
+   171→      <div className="relative" style={{ width: size, height: size }}>
+   172→        <svg width={size} height={size} className="-rotate-90">
+   173→          <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={bgColor} strokeWidth={strokeWidth} />
+   174→          <motion.circle
+   175→            cx={size / 2}
+   176→            cy={size / 2}
+   177→            r={radius}
+   178→            fill="none"
+   179→            stroke={color}
+   180→            strokeWidth={strokeWidth}
+   181→            strokeLinecap="round"
+   182→            strokeDasharray={circumference}
+   183→            style={{ strokeDashoffset }}
+   184→          />
+   185→        </svg>
+   186→        <div className="absolute inset-0 flex items-center justify-center">
+   187→          <X className="text-red-500" style={{ width: size * 0.32, height: size * 0.32 }} strokeWidth={3} />
+   188→        </div>
+   189→      </div>
+   190→    );
+   191→  }
+   192→
+   193→  return (
+   194→    <div className="relative" style={{ width: size, height: size }}>
+   195→      <svg width={size} height={size} className="-rotate-90">
+   196→        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke={bgColor} strokeWidth={strokeWidth} />
+   197→        <motion.circle
+   198→          cx={size / 2}
+   199→          cy={size / 2}
+   200→          r={radius}
+   201→          fill="none"
+   202→          stroke={color}
+   203→          strokeWidth={strokeWidth}
+   204→          strokeLinecap="round"
+   205→          strokeDasharray={circumference}
+   206→          style={{ strokeDashoffset }}
+   207→        />
+   208→        {isCritical && (
+   209→          <motion.circle
+   210→            cx={size / 2}
+   211→            cy={size / 2}
+   212→            r={radius}
+   213→            fill="none"
+   214→            stroke={color}
+   215→            strokeWidth={strokeWidth + 1}
+   216→            strokeLinecap="round"
+   217→            strokeDasharray={circumference}
+   218→            initial={{ opacity: 0.8 }}
+   219→            animate={{ opacity: [0.8, 0, 0.8] }}
+   220→            transition={{ repeat: Infinity, duration: 1.5, ease: 'easeInOut' }}
+   221→            style={{ strokeDashoffset: circumference - (pct / 100) * circumference }}
+   222→          />
+   223→        )}
+   224→      </svg>
+   225→      <div className="absolute inset-0 flex items-center justify-center">
+   226→        <span
+   227→          className="font-bold tabular-nums font-mono"
+   228→          style={{
+   229→            fontSize: size * 0.3,
+   230→            color: color,
+   231→          }}
+   232→        >
+   233→          {stock}
+   234→        </span>
+   235→      </div>
+   236→    </div>
+   237→  );
+   238→}
+   239→
+   240→// ─────────────────────────────────────────────────────────────
+   241→// StockMovementTicker – animated stock change ticker bar
+   242→// ─────────────────────────────────────────────────────────────
+   243→function StockMovementTicker({ changes }: { changes: StockChange[] }) {
+   244→  if (changes.length === 0) return null;
+   245→
+   246→  return (
+   247→    <div className="relative overflow-hidden rounded-lg bg-slate-50 border border-slate-100 mb-3">
+   248→      <div className="absolute left-0 top-0 bottom-0 w-12 bg-gradient-to-r from-slate-50 to-transparent z-10 pointer-events-none" />
+   249→      <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-slate-50 to-transparent z-10 pointer-events-none" />
+   250→      <div className="flex items-center gap-2 px-3 py-1.5 overflow-hidden">
+   251→        <div className="flex items-center gap-1 shrink-0">
+   252→          <CircleDot className="h-3 w-3 text-emerald-500" />
+   253→          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">Live Stock</span>
+   254→        </div>
+   255→        <div className="h-3 w-px bg-slate-200 shrink-0" />
+   256→        <div className="flex gap-4 overflow-hidden">
+   257→          <AnimatePresence mode="popLayout">
+   258→            {changes.slice(0, 4).map((change) => (
+   259→              <motion.div
+   260→                key={change.id}
+   261→                initial={{ opacity: 0, x: 60, scale: 0.8 }}
+   262→                animate={{ opacity: 1, x: 0, scale: 1 }}
+   263→                exit={{ opacity: 0, x: -40, scale: 0.8 }}
+   264→                transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+   265→                className="flex items-center gap-1.5 whitespace-nowrap"
+   266→              >
+   267→                <span className="text-[11px] font-medium text-slate-600 truncate max-w-[120px]">
+   268→                  {change.productName}
+   269→                </span>
+   270→                {change.type === 'restock' ? (
+   271→                  <>
+   272→                    <ArrowUp className="h-3 w-3 text-emerald-500" />
+   273→                    <span className="text-[11px] font-bold text-emerald-600 tabular-nums">
+   274→                      +{change.newStock - change.oldStock}
+   275→                    </span>
+   276→                    <span className="text-[10px] text-slate-400 tabular-nums">
+   277→                      → {change.newStock}
+   278→                    </span>
+   279→                    <Badge variant="outline" className="h-4 px-1.5 text-[9px] font-semibold text-emerald-600 border-emerald-200 bg-emerald-50">
+   280→                      Restocked
+   281→                    </Badge>
+   282→                  </>
+   283→                ) : (
+   284→                  <>
+   285→                    <ArrowDown className="h-3 w-3 text-red-500" />
+   286→                    <span className="text-[11px] font-bold text-red-500 tabular-nums">
+   287→                      -{change.oldStock - change.newStock}
+   288→                    </span>
+   289→                    <span className="text-[10px] text-slate-400 tabular-nums">
+   290→                      → {change.newStock}
+   291→                    </span>
+   292→                  </>
+   293→                )}
+   294→              </motion.div>
+   295→            ))}
+   296→          </AnimatePresence>
+   297→        </div>
+   298→      </div>
+   299→    </div>
+   300→  );
+   301→}
+   302→
+   303→// ─────────────────────────────────────────────────────────────
+   304→// Stock Impact Modal – premium stock update display after sale
+   305→// ─────────────────────────────────────────────────────────────
+   306→function StockImpactModal({
+   307→  items,
+   308→  onContinue,
+   309→}: {
+   310→  items: StockImpactItem[];
+   311→  onContinue: () => void;
+   312→}) {
+   313→  const [visibleItems, setVisibleItems] = useState<number>(0);
+   314→
+   315→  useEffect(() => {
+   316→    if (visibleItems < items.length) {
+   317→      const timer = setTimeout(() => setVisibleItems((v) => v + 1), 200);
+   318→      return () => clearTimeout(timer);
+   319→    }
+   320→  }, [visibleItems, items.length]);
+   321→
+   322→  return (
+   323→    <Dialog open onOpenChange={() => {}}>
+   324→      <DialogContent className="max-w-lg p-0 gap-0 overflow-hidden" showCloseButton={false}>
+   325→        <DialogTitle className="sr-only">Stock Impact Report</DialogTitle>
+   326→        <DialogDescription className="sr-only">Inventory has been updated for this sale</DialogDescription>
+   327→        {/* Header */}
+   328→        <div className="bg-gradient-to-r from-slate-900 to-slate-800 px-6 py-4 text-white">
+   329→          <div className="flex items-center gap-3">
+   330→            <motion.div
+   331→              className="h-10 w-10 rounded-xl bg-emerald-500/20 flex items-center justify-center"
+   332→              animate={{ rotate: [0, 10, -10, 0] }}
+   333→              transition={{ duration: 0.5, delay: 0.2 }}
+   334→            >
+   335→              <Package className="h-5 w-5 text-emerald-400" />
+   336→            </motion.div>
+   337→            <div>
+   338→              <h2 className="font-bold text-lg">Stock Impact Report</h2>
+   339→              <p className="text-xs text-slate-400">Inventory has been updated for this sale</p>
+   340→            </div>
+   341→          </div>
+   342→        </div>
+   343→
+   344→        {/* Items */}
+   345→        <div className="px-4 py-4 max-h-[60vh] overflow-y-auto space-y-3">
+   346→          {items.map((item, idx) => {
+   347→            const maxBar = Math.max(item.oldStock, item.reorderLevel * 3, 10);
+   348→            const oldPct = (item.oldStock / maxBar) * 100;
+   349→            const newPct = (item.newStock / maxBar) * 100;
+   350→            const barColor = item.hitZero ? '#ef4444' : item.hitLow ? '#f59e0b' : '#10b981';
+   351→
+   352→            return (
+   353→              <motion.div
+   354→                key={item.productId}
+   355→                initial={{ opacity: 0, y: 20 }}
+   356→                animate={visibleItems > idx ? { opacity: 1, y: 0 } : {}}
+   357→                transition={{ type: 'spring', stiffness: 300, damping: 25 }}
+   358→                className={`relative rounded-xl border-2 p-4 overflow-hidden ${
+   359→                  item.hitZero
+   360→                    ? 'border-red-200 bg-red-50/50'
+   361→                    : item.hitLow
+   362→                    ? 'border-amber-200 bg-amber-50/30'
+   363→                    : 'border-slate-100 bg-white'
+   364→                }`}
+   365→              >
+   366→                {/* OUT OF STOCK stamp */}
+   367→                <AnimatePresence>
+   368→                  {item.hitZero && visibleItems > idx && (
+   369→                    <motion.div
+   370→                      initial={{ rotate: -15, scale: 0, opacity: 0 }}
+   371→                      animate={{ rotate: -15, scale: 1, opacity: 1 }}
+   372→                      transition={{ delay: 0.4, type: 'spring', stiffness: 400, damping: 15 }}
+   373→                      className="absolute top-3 right-3 pointer-events-none"
+   374→                    >
+   375→                      <div className="border-3 border-red-400 text-red-500 px-3 py-1 rounded-md font-black text-xs uppercase tracking-widest bg-red-50/80"
+   376→                        style={{ borderWidth: '3px' }}>
+   377→                        OUT OF STOCK
+   378→                      </div>
+   379→                    </motion.div>
+   380→                  )}
+   381→                </AnimatePresence>
+   382→
+   383→                {/* LOW STOCK alert */}
+   384→                <AnimatePresence>
+   385→                  {item.hitLow && !item.hitZero && visibleItems > idx && (
+   386→                    <motion.div
+   387→                      initial={{ opacity: 0, x: 20 }}
+   388→                      animate={{ opacity: 1, x: 0 }}
+   389→                      transition={{ delay: 0.3 }}
+   390→                      className="absolute top-3 right-3"
+   391→                    >
+   392→                      <motion.div
+   393→                        animate={{ opacity: [1, 0.5, 1] }}
+   394→                        transition={{ repeat: Infinity, duration: 1.2 }}
+   395→                        className="flex items-center gap-1 text-amber-600 text-[10px] font-bold bg-amber-100 px-2 py-0.5 rounded-full"
+   396→                      >
+   397→                        <AlertTriangle className="h-3 w-3" />
+   398→                        LOW STOCK ALERT
+   399→                      </motion.div>
+   400→                    </motion.div>
+   401→                  )}
+   402→                </AnimatePresence>
+   403→
+   404→                <div className="pr-28">
+   405→                  <p className="font-semibold text-sm text-slate-800 mb-1">{item.productName}</p>
+   406→                  <p className="text-xs text-slate-400 mb-3">Sold: {item.quantitySold} unit{item.quantitySold > 1 ? 's' : ''}</p>
+   407→
+   408→                  {/* Animated counter row */}
+   409→                  <div className="flex items-center gap-3 mb-3">
+   410→                    <div className="text-center">
+   411→                      <p className="text-[10px] text-slate-400 mb-0.5">Before</p>
+   412→                      <span className="text-lg font-bold text-slate-400 tabular-nums font-mono line-through">
+   413→                        {item.oldStock}
+   414→                      </span>
+   415→                    </div>
+   416→                    <motion.div
+   417→                      initial={{ x: 0 }}
+   418→                      animate={{ x: [0, 6, 0] }}
+   419→                      transition={{ delay: 0.3, duration: 0.4 }}
+   420→                    >
+   421→                      <ArrowDown className="h-4 w-4 text-red-400" />
+   422→                    </motion.div>
+   423→                    <div className="text-center">
+   424→                      <p className="text-[10px] text-slate-400 mb-0.5">After</p>
+   425→                      <CountingNumber
+   426→                        value={item.newStock}
+   427→                        direction="down"
+   428→                        size="lg"
+   429→                        className={
+   430→                          item.hitZero
+   431→                            ? 'text-red-500'
+   432→                            : item.hitLow
+   433→                            ? 'text-amber-600'
+   434→                            : 'text-emerald-600'
+   435→                        }
+   436→                      />
+   437→                    </div>
+   438→                  </div>
+   439→
+   440→                  {/* Shrinking progress bar */}
+   441→                  <div className="relative">
+   442→                    <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+   443→                      <motion.div
+   444→                        className="h-full rounded-full"
+   445→                        initial={{ width: `${oldPct}%`, backgroundColor: '#10b981' }}
+   446→                        animate={{
+   447→                          width: `${newPct}%`,
+   448→                          backgroundColor: barColor,
+   449→                        }}
+   450→                        transition={{ duration: 0.8, ease: 'easeInOut', delay: 0.2 }}
+   451→                      />
+   452→                    </div>
+   453→                    <div className="absolute -top-0.5 left-0 h-3 w-0.5 bg-slate-300" style={{ left: `${(item.reorderLevel / maxBar) * 100}%` }} />
+   454→                  </div>
+   455→                  {item.reorderLevel > 0 && (
+   456→                    <p className="text-[10px] text-slate-400 mt-1">Reorder level: {item.reorderLevel}</p>
+   457→                  )}
+   458→                </div>
+   459→              </motion.div>
+   460→            );
+   461→          })}
+   462→        </div>
+   463→
+   464→        {/* Footer */}
+   465→        <div className="border-t px-6 py-4 bg-slate-50/50">
+   466→          <Button
+   467→            className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+   468→            onClick={onContinue}
+   469→          >
+   470→            <CheckCircle className="h-4 w-4 mr-2" />
+   471→            Continue to Receipt
+   472→          </Button>
+   473→        </div>
+   474→      </DialogContent>
+   475→    </Dialog>
+   476→  );
+   477→}
+   478→
+   479→// ─────────────────────────────────────────────────────────────
+   480→// Pill SVG
+   481→// ─────────────────────────────────────────────────────────────
+   482→function Pill({ className }: { className?: string }) {
+   483→  return (
+   484→    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+   485→      <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/>
+   486→    </svg>
+   487→  );
+   488→}
+   489→
+   490→// ─────────────────────────────────────────────────────────────
+   491→// Main POSView Component
+   492→// ─────────────────────────────────────────────────────────────
+   493→export default function POSView() {
+   494→  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer } = useAppStore();
+   495→  const [searchQuery, setSearchQuery] = useState('');
+   496→  const [products, setProducts] = useState<ProductWithStock[]>([]);
+   497→  const [categories, setCategories] = useState<string[]>([]);
+   498→  const [activeCategory, setActiveCategory] = useState<string>('All');
+   499→
+   500→  const [discount, setDiscount] = useState(0);
+   501→  const [notes, setNotes] = useState('');
+   502→  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
+   503→  const [showReceipt, setShowReceipt] = useState(false);
+   504→  const [completedSale, setCompletedSale] = useState<{
+   505→    invoiceNo: string;
+   506→    customerName?: string;
+   507→    items: { productName: string; quantity: number; unitPrice: number; total: number; productId: string }[];
+   508→    subtotal: number;
+   509→    tax: number;
+   510→    discount: number;
+   511→    totalAmount: number;
+   512→    paymentMethod: string;
+   513→    createdAt: string;
+   514→  } | null>(null);
+   515→  const [submitting, setSubmitting] = useState(false);
+   516→  const [loading, setLoading] = useState(true);
+   517→  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+   518→  const [stockChanges, setStockChanges] = useState<StockChange[]>([]);
+   519→  const [addedToCart, setAddedToCart] = useState<Set<string>>(new Set());
+   520→  const prevProductsRef = useRef<Map<string, number>>(new Map());
+   521→  const prevProductsNameRef = useRef<Map<string, string>>(new Map());
+   522→
+   523→  // Restock glow tracking
+   524→  const [restockedIds, setRestockedIds] = useState<Set<string>>(new Set());
+   525→
+   526→  // Stock Impact Modal
+   527→  const [stockImpactItems, setStockImpactItems] = useState<StockImpactItem[]>([]);
+   528→  const [showStockImpact, setShowStockImpact] = useState(false);
+   529→  const [pendingSaleData, setPendingSaleData] = useState<{
+   530→    invoiceNo: string;
+   531→    customerName?: string;
+   532→    items: { productName: string; quantity: number; unitPrice: number; total: number; productId: string }[];
+   533→    subtotal: number;
+   534→    tax: number;
+   535→    discount: number;
+   536→    totalAmount: number;
+   537→    paymentMethod: string;
+   538→    createdAt: string;
+   539→  } | null>(null);
+   540→
+   541→  // Auto-refresh interval ref
+   542→  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+   543→
+   544→  const fetchProducts = useCallback(async (query: string) => {
+   545→    try {
+   546→      const res = await fetch(`/api/products?search=${encodeURIComponent(query)}`);
+   547→      if (res.ok) {
+   548→        const data = await res.json();
+   549→        const newProducts: ProductWithStock[] = data.products ?? [];
+   550→
+   551→        // Detect stock changes (for animation)
+   552→        const newStockMap = new Map(newProducts.map(p => [p.id, p.totalStock]));
+   553→        const changes: StockChange[] = [];
+   554→        prevProductsRef.current.forEach((oldStock, pid) => {
+   555→          const newStock = newStockMap.get(pid);
+   556→          if (newStock !== undefined && oldStock !== newStock) {
+   557→            const name = prevProductsNameRef.current.get(pid) || 'Unknown';
+   558→            const diff = newStock - oldStock;
+   559→            changes.push({
+   560→              id: `${pid}-${Date.now()}`,
+   561→              productId: pid,
+   562→              productName: name,
+   563→              oldStock,
+   564→              newStock,
+   565→              timestamp: Date.now(),
+   566→              type: diff > 0 ? 'restock' : 'sale',
+   567→            });
+   568→
+   569→            // Track restocked products for green glow
+   570→            if (diff > 0) {
+   571→              setRestockedIds(prev => {
+   572→                const next = new Set(prev);
+   573→                next.add(pid);
+   574→                setTimeout(() => {
+   575→                  setRestockedIds(p => { const n = new Set(p); n.delete(pid); return n; });
+   576→                }, 2000);
+   577→                return next;
+   578→              });
+   579→            }
+   580→          }
+   581→        });
+   582→        if (changes.length > 0) {
+   583→          setStockChanges(prev => [...prev, ...changes].slice(-20));
+   584→          // Auto-clear changes after 5 seconds
+   585→          setTimeout(() => {
+   586→            setStockChanges(prev => prev.filter(c => Date.now() - c.timestamp < 5000));
+   587→          }, 5000);
+   588→        }
+   589→
+   590→        prevProductsRef.current = newStockMap;
+   591→        const nameMap = new Map(newProducts.map(p => [p.id, p.name]));
+   592→        prevProductsNameRef.current = nameMap;
+   593→        setProducts(newProducts);
+   594→        const cats = [...new Set(newProducts.map((p: Product) => p.category?.name).filter(Boolean))] as string[];
+   595→        setCategories(['All', ...cats]);
+   596→      }
+   597→    } catch { /* silent */ }
+   598→  }, []);
+   599→
+   600→  useEffect(() => {
+   601→    async function init() {
+   602→      await fetchProducts('');
+   603→      setLoading(false);
+   604→    }
+   605→    init();
+   606→
+   607→    // 30-second auto-refresh
+   608→    refreshIntervalRef.current = setInterval(() => {
+   609→      fetchProducts(searchQuery);
+   610→    }, 30000);
+   611→
+   612→    return () => {
+   613→      if (refreshIntervalRef.current) {
+   614→        clearInterval(refreshIntervalRef.current);
+   615→      }
+   616→    };
+   617→  }, [fetchProducts]); // intentionally not including searchQuery to avoid re-creating interval
+   618→
+   619→  const handleSearch = (value: string) => {
+   620→    setSearchQuery(value);
+   621→    if (debounceRef.current) clearTimeout(debounceRef.current);
+   622→    debounceRef.current = setTimeout(() => {
+   623→      fetchProducts(value);
+   624→    }, 300);
+   625→  };
+   626→
+   627→  const handleAddToCart = (product: ProductWithStock) => {
+   628→    if (product.totalStock === 0) {
+   629→      toast.error(`${product.name} is out of stock!`, { icon: <PackageX className="h-4 w-4 text-red-500" /> });
+   630→      return;
+   631→    }
+   632→
+   633→    const bestBatch = product.batches
+   634→      .filter(b => b.quantity > 0)
+   635→      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
+   636→    if (!bestBatch) {
+   637→      toast.error('No available stock for this product');
+   638→      return;
+   639→    }
+   640→
+   641→    // Check if already in cart - if so, check combined quantity
+   642→    const existingItem = cart.find(i => i.productId === product.id && i.batchId === bestBatch.id);
+   643→    const currentInCart = existingItem?.quantity ?? 0;
+   644→    if (currentInCart + 1 > bestBatch.currentQty) {
+   645→      toast.warning(`Only ${bestBatch.currentQty} units available in this batch`, {
+   646→        icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+   647→      });
+   648→      return;
+   649→    }
+   650→
+   651→    addToCart({
+   652→      productId: product.id,
+   653→      productName: product.name,
+   654→      batchId: bestBatch.id,
+   655→      batchNumber: bestBatch.batchNumber,
+   656→      quantity: 1,
+   657→      unitPrice: bestBatch.sellingPrice,
+   658→      costPrice: bestBatch.costPrice,
+   659→      availableQty: bestBatch.currentQty,
+   660→      expiryDate: bestBatch.expiryDate,
+   661→    });
+   662→
+   663→    // Trigger add-to-cart animation
+   664→    setAddedToCart(prev => {
+   665→      const next = new Set(prev);
+   666→      next.add(product.id);
+   667→      setTimeout(() => { setAddedToCart(p => { const n = new Set(p); n.delete(product.id); return n; }); }, 800);
+   668→      return next;
+   669→    });
+   670→
+   671→    const remaining = product.totalStock - currentInCart - 1;
+   672→    if (remaining === 0) {
+   673→      toast.warning(`${product.name} is now the last unit!`, { icon: <AlertTriangle className="h-4 w-4 text-amber-500" /> });
+   674→    } else if (remaining <= (product.reorderLevel || 10)) {
+   675→      toast.info(`${product.name}: ${remaining} remaining after this`, { icon: <Package className="h-4 w-4 text-emerald-500" /> });
+   676→    } else {
+   677→      toast.success(`${product.name} added to cart`, { duration: 1500 });
+   678→    }
+   679→  };
+   680→
+   681→  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+   682→  const tax = subtotal * 0.125;
+   683→  const total = subtotal + tax - discount;
+   684→
+   685→  const filteredProducts = activeCategory === 'All'
+   686→    ? products
+   687→    : products.filter(p => p.category?.name === activeCategory);
+   688→
+   689→  const cartQtyMap = useMemo(() => {
+   690→    const map = new Map<string, number>();
+   691→    cart.forEach(item => {
+   692→      map.set(item.productId, (map.get(item.productId) || 0) + item.quantity);
+   693→    });
+   694→    return map;
+   695→  }, [cart]);
+   696→
+   697→  const handleStockImpactContinue = () => {
+   698→    setShowStockImpact(false);
+   699→    setStockImpactItems([]);
+   700→    if (pendingSaleData) {
+   701→      setCompletedSale(pendingSaleData);
+   702→      setShowReceipt(true);
+   703→      setPendingSaleData(null);
+   704→    }
+   705→  };
+   706→
+   707→  const handleCompleteSale = async () => {
+   708→    if (cart.length === 0) {
+   709→      toast.error('Cart is empty');
+   710→      return;
+   711→    }
+   712→    setSubmitting(true);
+   713→    try {
+   714→      // Capture pre-sale stock for impact display
+   715→      const preSaleStock = cart.map(item => {
+   716→        const product = products.find(p => p.id === item.productId);
+   717→        return {
+   718→          productName: item.productName,
+   719→          productId: item.productId,
+   720→          oldStock: product?.totalStock ?? 0,
+   721→          newStock: (product?.totalStock ?? 0) - item.quantity,
+   722→          quantitySold: item.quantity,
+   723→          reorderLevel: product?.reorderLevel ?? 10,
+   724→          hitZero: (product?.totalStock ?? 0) - item.quantity === 0,
+   725→          hitLow: (product?.totalStock ?? 0) - item.quantity > 0 && (product?.totalStock ?? 0) - item.quantity <= (product?.reorderLevel ?? 10),
+   726→        };
+   727→      });
+   728→
+   729→      const res = await fetch('/api/sales', {
+   730→        method: 'POST',
+   731→        headers: { 'Content-Type': 'application/json' },
+   732→        body: JSON.stringify({
+   733→          userId: currentUser?.id,
+   734→          customerId: selectedCustomerId,
+   735→          items: cart.map(item => ({
+   736→            productId: item.productId,
+   737→            batchId: item.batchId,
+   738→            quantity: item.quantity,
+   739→            unitPrice: item.unitPrice,
+   740→            costPrice: item.costPrice,
+   741→          })),
+   742→          discount,
+   743→          tax,
+   744→          paymentMethod,
+   745→          notes: notes || undefined,
+   746→        }),
+   747→      });
+   748→      if (!res.ok) {
+   749→        const data = await res.json().catch(() => ({}));
+   750→        throw new Error(data.error || 'Failed to complete sale');
+   751→      }
+   752→      const data = await res.json();
+   753→
+   754→      const saleData = {
+   755→        invoiceNo: data.invoiceNo,
+   756→        customerName: data.customer?.name,
+   757→        items: (data.items ?? []).map((item: any) => ({
+   758→          productName: item.product?.name ?? 'Unknown',
+   759→          quantity: item.quantity,
+   760→          unitPrice: item.unitPrice,
+   761→          total: item.total,
+   762→          productId: item.productId,
+   763→        })),
+   764→        subtotal: data.subtotal,
+   765→        tax: data.tax,
+   766→        discount: data.discount,
+   767→        totalAmount: data.totalAmount,
+   768→        paymentMethod: data.paymentMethod,
+   769→        createdAt: data.createdAt,
+   770→      };
+   771→
+   772→      // Refresh products to show updated stock
+   773→      await fetchProducts(searchQuery);
+   774→
+   775→      toast.success('Sale completed successfully!');
+   776→
+   777→      // Show Stock Impact Modal BEFORE receipt
+   778→      setStockImpactItems(preSaleStock);
+   779→      setPendingSaleData(saleData);
+   780→      setShowStockImpact(true);
+   781→    } catch (err) {
+   782→      toast.error(err instanceof Error ? err.message : 'Failed to complete sale');
+   783→    } finally {
+   784→      setSubmitting(false);
+   785→    }
+   786→  };
+   787→
+   788→  const handleCloseReceipt = () => {
+   789→    completedSale?.items.forEach(item => {
+   790→      const product = products.find(p => p.id === item.productId);
+   791→      if (product) {
+   792→        const newStock = product.totalStock - item.quantity;
+   793→        if (newStock === 0) {
+   794→          setTimeout(() => {
+   795→            toast.error(`${item.productName} is now OUT OF STOCK!`, { duration: 4000 });
+   796→          }, 500);
+   797→        } else if (newStock <= (product.reorderLevel || 10) && product.totalStock > (product.reorderLevel || 10)) {
+   798→          setTimeout(() => {
+   799→            toast.warning(`${item.productName} is now LOW STOCK (${newStock} remaining)`, { duration: 4000 });
+   800→          }, 500);
+   801→        }
+   802→      }
+   803→    });
+   804→
+   805→    setShowReceipt(false);
+   806→    setCompletedSale(null);
+   807→    clearCart();
+   808→    setDiscount(0);
+   809→    setNotes('');
+   810→    setPaymentMethod('cash');
+   811→  };
+   812→
+   813→  const paymentIcons = {
+   814→    cash: Banknote,
+   815→    card: CreditCard,
+   816→    mobile_money: Smartphone,
+   817→  };
+   818→
+   819→  if (loading) {
+   820→    return (
+   821→      <div className="flex h-full gap-4 p-4">
+   822→        <div className="flex-1 space-y-4">
+   823→          <Skeleton className="h-10 w-full" />
+   824→          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+   825→            {Array.from({ length: 12 }).map((_, i) => (
+   826→              <Skeleton key={i} className="h-40 w-full rounded-xl" />
+   827→            ))}
+   828→          </div>
+   829→        </div>
+   830→        <div className="w-96 border-l p-4 space-y-4">
+   831→          <Skeleton className="h-8 w-40" />
+   832→          {Array.from({ length: 4 }).map((_, i) => (
+   833→            <Skeleton key={i} className="h-20 w-full" />
+   834→          ))}
+   835→          <Skeleton className="h-40 w-full" />
+   836→        </div>
+   837→      </div>
+   838→    );
+   839→  }
+   840→
+   841→  return (
+   842→    <div className="flex h-full gap-0">
+   843→      {/* Left Panel - Product Search & Listing */}
+   844→      <div className="flex-1 flex flex-col min-w-0 p-4 pr-2 overflow-hidden">
+   845→        {/* Search Bar */}
+   846→        <div className="relative mb-2">
+   847→          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+   848→          <Input
+   849→            placeholder="Search medicines by name, generic name, or category..."
+   850→            value={searchQuery}
+   851→            onChange={(e) => handleSearch(e.target.value)}
+   852→            className="pl-10 h-10 bg-white border-slate-200 focus-visible:ring-emerald-500/20"
+   853→          />
+   854→          {searchQuery && (
+   855→            <button
+   856→              onClick={() => { setSearchQuery(''); fetchProducts(''); }}
+   857→              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+   858→            >
+   859→              <X className="h-4 w-4" />
+   860→            </button>
+   861→          )}
+   862→        </div>
+   863→
+   864→        {/* Stock Movement Ticker */}
+   865→        <StockMovementTicker changes={stockChanges} />
+   866→
+   867→        {/* Category Tabs */}
+   868→        <div className="flex gap-1.5 mb-2 overflow-x-auto pb-1 scrollbar-none">
+   869→          {categories.map((cat) => (
+   870→            <button
+   871→              key={cat}
+   872→              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-all ${
+   873→                activeCategory === cat
+   874→                  ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
+   875→                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+   876→              }`}
+   877→              onClick={() => setActiveCategory(cat)}
+   878→            >
+   879→              {cat}
+   880→            </button>
+   881→          ))}
+   882→        </div>
+   883→
+   884→        {/* Stock Summary Bar */}
+   885→        <div className="flex items-center gap-4 mb-3 px-1">
+   886→          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+   887→            <BarChart3 className="h-3.5 w-3.5" />
+   888→            <span>{filteredProducts.length} products</span>
+   889→          </div>
+   890→          <div className="h-3 w-px bg-slate-200" />
+   891→          <div className="flex items-center gap-1.5 text-xs text-emerald-600">
+   892→            <Package className="h-3.5 w-3.5" />
+   893→            <span>{filteredProducts.filter(p => p.totalStock > (p.reorderLevel || 10)).length} in stock</span>
+   894→          </div>
+   895→          <div className="flex items-center gap-1.5 text-xs text-amber-600">
+   896→            <AlertTriangle className="h-3.5 w-3.5" />
+   897→            <span>{filteredProducts.filter(p => p.totalStock > 0 && p.totalStock <= (p.reorderLevel || 10)).length} low</span>
+   898→          </div>
+   899→          <div className="flex items-center gap-1.5 text-xs text-red-500">
+   900→            <PackageX className="h-3.5 w-3.5" />
+   901→            <span>{filteredProducts.filter(p => p.totalStock === 0).length} out</span>
+   902→          </div>
+   903→          <div className="ml-auto">
+   904→            <button
+   905→              onClick={() => fetchProducts(searchQuery)}
+   906→              className="flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-600 transition-colors"
+   907→              title="Refresh stock"
+   908→            >
+   909→              <RefreshCw className="h-3 w-3" />
+   910→            </button>
+   911→          </div>
+   912→        </div>
+   913→
+   914→        {/* Product Grid - Premium scroll */}
+   915→        <div className="flex-1 min-h-0 -mx-1 overflow-y-auto pos-product-scroll pr-1">
+   916→          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
+   917→            {filteredProducts.length > 0 ? (
+   918→              filteredProducts.map((product) => {
+   919→                const isOutOfStock = product.totalStock === 0;
+   920→                const isLowStock = product.totalStock > 0 && product.totalStock <= (product.reorderLevel || 10);
+   921→                const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil((product.reorderLevel || 10) * 0.3);
+   922→                const isInCart = cartQtyMap.has(product.id);
+   923→                const cartCount = cartQtyMap.get(product.id) || 0;
+   924→                const justAdded = addedToCart.has(product.id);
+   925→                const stockChange = stockChanges.find(c => c.productId === product.id);
+   926→                const effectiveStock = product.totalStock - cartCount;
+   927→                const isRestocked = restockedIds.has(product.id);
+   928→                const maxDisplay = Math.max((product.reorderLevel || 10) * 3, 20);
+   929→                const reservedPct = product.totalStock > 0 ? (cartCount / product.totalStock) * 100 : 0;
+   930→                const availablePct = product.totalStock > 0 ? (effectiveStock / product.totalStock) * 100 : 0;
+   931→
+   932→                return (
+   933→                  <motion.button
+   934→                    key={product.id}
+   935→                    onClick={() => !isOutOfStock && handleAddToCart(product)}
+   936→                    disabled={isOutOfStock}
+   937→                    className={`relative text-left rounded-xl border-2 p-3.5 transition-all group overflow-hidden ${
+   938→                      isOutOfStock
+   939→                        ? 'border-slate-200 bg-slate-50/80 opacity-60 cursor-not-allowed'
+   940→                        : isCritical
+   941→                        ? 'border-red-200 bg-white hover:border-red-400 hover:shadow-lg hover:shadow-red-100/50 cursor-pointer'
+   942→                        : isLowStock
+   943→                        ? 'border-amber-200 bg-white hover:border-amber-400 hover:shadow-lg hover:shadow-amber-100/50 cursor-pointer'
+   944→                        : 'border-slate-200 bg-white hover:border-emerald-400 hover:shadow-lg hover:shadow-emerald-100/50 cursor-pointer'
+   945→                    } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
+   946→                    whileTap={!isOutOfStock ? { scale: 0.97 } : undefined}
+   947→                    layout
+   948→                  >
+   949→                    {/* Restock green glow */}
+   950→                    <AnimatePresence>
+   951→                      {isRestocked && (
+   952→                        <motion.div
+   953→                          className="absolute inset-0 rounded-xl border-2 border-emerald-400 pointer-events-none z-20"
+   954→                          initial={{ opacity: 1, scale: 1.05 }}
+   955→                          animate={{ opacity: 0, scale: 1 }}
+   956→                          exit={{ opacity: 0 }}
+   957→                          transition={{ duration: 2, ease: 'easeOut' }}
+   958→                          style={{
+   959→                            boxShadow: '0 0 20px 4px rgba(16, 185, 129, 0.3), inset 0 0 20px 4px rgba(16, 185, 129, 0.1)',
+   960→                          }}
+   961→                        />
+   962→                      )}
+   963→                    </AnimatePresence>
+   964→
+   965→                    {/* Pulse effect on add to cart */}
+   966→                    <AnimatePresence>
+   967→                      {justAdded && (
+   968→                        <motion.div
+   969→                          className="absolute inset-0 bg-emerald-100/50 rounded-xl pointer-events-none"
+   970→                          initial={{ opacity: 1 }}
+   971→                          animate={{ opacity: 0 }}
+   972→                          exit={{ opacity: 0 }}
+   973→                          transition={{ duration: 0.8 }}
+   974→                        />
+   975→                      )}
+   976→                    </AnimatePresence>
+   977→
+   978→                    {/* "1 reserved" floating animation */}
+   979→                    <AnimatePresence>
+   980→                      {justAdded && (
+   981→                        <motion.div
+   982→                          className="absolute top-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+   983→                          initial={{ opacity: 1, y: 0 }}
+   984→                          animate={{ opacity: 0, y: -20 }}
+   985→                          exit={{ opacity: 0 }}
+   986→                          transition={{ duration: 0.8 }}
+   987→                        >
+   988→                          <div className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg">
+   989→                            1 reserved
+   990→                          </div>
+   991→                        </motion.div>
+   992→                      )}
+   993→                    </AnimatePresence>
+   994→
+   995→                    {/* Stock reduced flash */}
+   996→                    <AnimatePresence>
+   997→                      {stockChange && stockChange.type === 'sale' && (
+   998→                        <motion.div
+   999→                          className="absolute top-1 right-1 pointer-events-none z-10"
+  1000→                          initial={{ opacity: 1, y: 0 }}
+  1001→                          animate={{ opacity: 0, y: -12 }}
+  1002→                          exit={{ opacity: 0 }}
+  1003→                          transition={{ duration: 1.5 }}
+  1004→                        >
+  1005→                          <div className="flex items-center gap-0.5 text-red-500 text-[10px] font-bold bg-red-50 px-1.5 py-0.5 rounded-full">
+  1006→                            <ArrowDownCircle className="h-2.5 w-2.5" />
+  1007→                            -{stockChange.oldStock - stockChange.newStock}
+  1008→                          </div>
+  1009→                        </motion.div>
+  1010→                      )}
+  1011→                    </AnimatePresence>
+  1012→
+  1013→                    {/* Out of stock stamp overlay */}
+  1014→                    <AnimatePresence>
+  1015→                      {isOutOfStock && (
+  1016→                        <motion.div
+  1017→                          className="absolute inset-0 flex items-center justify-center pointer-events-none z-10"
+  1018→                          initial={{ opacity: 0 }}
+  1019→                          animate={{ opacity: 1 }}
+  1020→                        >
+  1021→                          <motion.div
+  1022→                            initial={{ rotate: -12, scale: 0.8 }}
+  1023→                            animate={{ rotate: -12, scale: 1 }}
+  1024→                            transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+  1025→                            className="relative"
+  1026→                          >
+  1027→                            <div className="border-2 border-red-300 text-red-400 px-3 py-1 rounded-md font-black text-[10px] uppercase tracking-widest bg-white/80"
+  1028→                              style={{ transform: 'rotate(-12deg)' }}>
+  1029→                              Out of Stock
+  1030→                            </div>
+  1031→                          </motion.div>
+  1032→                        </motion.div>
+  1033→                      )}
+  1034→                    </AnimatePresence>
+  1035→
+  1036→                    {/* Product Header with Stock Gauge */}
+  1037→                    <div className="flex items-start justify-between gap-2 mb-1">
+  1038→                      <h4 className="font-semibold text-sm leading-tight line-clamp-2 text-slate-800 group-hover:text-emerald-700 transition-colors flex-1 min-w-0">
+  1039→                        {product.name}
+  1040→                      </h4>
+  1041→                      <StockGauge
+  1042→                        stock={product.totalStock}
+  1043→                        reorderLevel={product.reorderLevel || 10}
+  1044→                        size={36}
+  1045→                        strokeWidth={2.5}
+  1046→                      />
+  1047→                    </div>
+  1048→
+  1049→                    {/* Category */}
+  1050→                    <p className="text-[11px] text-slate-400 mb-2 truncate">
+  1051→                      {product.category?.name ?? 'Uncategorized'}
+  1052→                      {product.genericName && product.genericName !== product.name && (
+  1053→                        <span className="ml-1 text-slate-300">· {product.genericName}</span>
+  1054→                      )}
+  1055→                    </p>
+  1056→
+  1057→                    {/* Price & Unit */}
+  1058→                    <div className="flex items-baseline gap-1 mb-2">
+  1059→                      <span className="text-lg font-bold text-emerald-600">
+  1060→                        {formatGHS(product.minSellingPrice)}
+  1061→                      </span>
+  1062→                      <span className="text-[10px] text-slate-400">/ {product.unit || 'unit'}</span>
+  1063→                    </div>
+  1064→
+  1065→                    {/* Available: X with counting animation */}
+  1066→                    <div className="flex items-center gap-2 mb-1.5">
+  1067→                      <span className="text-[11px] text-slate-500">Available:</span>
+  1068→                      <CountingNumber
+  1069→                        value={effectiveStock}
+  1070→                        direction={
+  1071→                          stockChange && stockChange.type === 'restock' ? 'up' :
+  1072→                          stockChange && stockChange.type === 'sale' ? 'down' : null
+  1073→                        }
+  1074→                        size="sm"
+  1075→                        className={
+  1076→                          effectiveStock <= 0
+  1077→                            ? 'text-red-500'
+  1078→                            : effectiveStock <= (product.reorderLevel || 10)
+  1079→                            ? 'text-amber-600'
+  1080→                            : 'text-emerald-600'
+  1081→                        }
+  1082→                      />
+  1083→                      {effectiveStock > 0 && (
+  1084→                        <span className="text-[10px] text-slate-400">of {product.totalStock}</span>
+  1085→                      )}
+  1086→                    </div>
+  1087→
+  1088→                    {/* Mini bar: reserved vs available */}
+  1089→                    {!isOutOfStock && (
+  1090→                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden flex">
+  1091→                        <motion.div
+  1092→                          className="h-full bg-emerald-400 rounded-l-full"
+  1093→                          initial={false}
+  1094→                          animate={{ width: `${availablePct}%` }}
+  1095→                          transition={{ duration: 0.5, ease: 'easeOut' }}
+  1096→                        />
+  1097→                        <motion.div
+  1098→                          className="h-full bg-amber-300"
+  1099→                          initial={false}
+  1100→                          animate={{ width: `${reservedPct}%` }}
+  1101→                          transition={{ duration: 0.5, ease: 'easeOut' }}
+  1102→                        />
+  1103→                      </div>
+  1104→                    )}
+  1105→
+  1106→                    {isOutOfStock && (
+  1107→                      <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+  1108→                        <div className="h-full w-full bg-red-200 rounded-full" />
+  1109→                      </div>
+  1110→                    )}
+  1111→
+  1112→                    {/* In Cart Indicator */}
+  1113→                    <AnimatePresence>
+  1114→                      {isInCart && !isOutOfStock && (
+  1115→                        <motion.div
+  1116→                          initial={{ opacity: 0, height: 0, marginTop: 0 }}
+  1117→                          animate={{ opacity: 1, height: 'auto', marginTop: 6 }}
+  1118→                          exit={{ opacity: 0, height: 0, marginTop: 0 }}
+  1119→                          className="overflow-hidden"
+  1120→                        >
+  1121→                          <div className="flex items-center justify-between bg-emerald-50 rounded-md px-2 py-1.5">
+  1122→                            <div className="flex items-center gap-1.5">
+  1123→                              <ShoppingCart className="h-3 w-3 text-emerald-600" />
+  1124→                              <span className="text-[11px] font-medium text-emerald-700">
+  1125→                                {cartCount} reserved
+  1126→                              </span>
+  1127→                            </div>
+  1128→                            <span className={`text-[11px] font-bold ${effectiveStock <= 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+  1129→                              {effectiveStock > 0 ? `${effectiveStock} left` : 'Max reached'}
+  1130→                            </span>
+  1131→                          </div>
+  1132→                        </motion.div>
+  1133→                      )}
+  1134→                    </AnimatePresence>
+  1135→                  </motion.button>
+  1136→                );
+  1137→              })
+  1138→            ) : (
+  1139→              <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
+  1140→                <Search className="h-10 w-10 mb-3 opacity-30" />
+  1141→                <p className="text-sm font-medium">No products found</p>
+  1142→                <p className="text-xs mt-1">Try a different search term or category</p>
+  1143→              </div>
+  1144→            )}
+  1145→          </div>
+  1146→        </div>
+  1147→      </div>
+  1148→
+  1149→      {/* Right Panel - Cart & Payment (payment ALWAYS pinned) */}
+  1150→      <div className="w-[340px] border-l border-slate-100 bg-white flex flex-col shrink-0 overflow-hidden">
+  1151→
+  1152→        {/* ─── Cart Header — pinned ─── */}
+  1153→        <div className="shrink-0 px-3.5 py-2.5 border-b border-slate-100/80 bg-white/90 backdrop-blur-sm">
+  1154→          <div className="flex items-center justify-between">
+  1155→            <div className="flex items-center gap-2.5">
+  1156→              <div className="relative">
+  1157→                <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-sm shadow-emerald-200/50">
+  1158→                  <ShoppingCart className="h-4 w-4 text-white" />
+  1159→                </div>
+  1160→                {cart.length > 0 && (
+  1161→                  <motion.span
+  1162→                    initial={{ scale: 0 }}
+  1163→                    animate={{ scale: 1 }}
+  1164→                    className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center shadow-sm"
+  1165→                  >
+  1166→                    {cart.reduce((s, i) => s + i.quantity, 0)}
+  1167→                  </motion.span>
+  1168→                )}
+  1169→              </div>
+  1170→              <div>
+  1171→                <h3 className="font-semibold text-[13px] text-slate-800 leading-tight">Cart</h3>
+  1172→                <p className="text-[10px] text-slate-400 leading-tight">
+  1173→                  {cart.length > 0
+  1174→                    ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${formatGHS(subtotal)}`
+  1175→                    : 'Empty'}
+  1176→                </p>
+  1177→              </div>
+  1178→            </div>
+  1179→            {cart.length > 0 && (
+  1180→              <motion.button
+  1181→                whileHover={{ scale: 1.05 }}
+  1182→                whileTap={{ scale: 0.95 }}
+  1183→                className="h-7 px-2.5 rounded-lg text-[10px] font-medium text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+  1184→                onClick={clearCart}
+  1185→              >
+  1186→                Clear all
+  1187→              </motion.button>
+  1188→            )}
+  1189→          </div>
+  1190→        </div>
+  1191→
+  1192→        {/* ─── Cart Items — premium scroll, NEVER pushes payment ─── */}
+  1193→        <div className="flex-1 min-h-0 overflow-y-auto cart-items-scroll relative">
+  1194→          {/* Top fade when scrolled */}
+  1195→          <div className="sticky top-0 z-10 h-3 bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none" />
+  1196→          <div className="px-3 pb-2">
+  1197→            <AnimatePresence mode="popLayout">
+  1198→            {cart.length > 0 ? (
+  1199→              <div className="space-y-1.5">
+  1200→                {cart.map((item) => {
+  1201→                  const product = products.find(p => p.id === item.productId);
+  1202→                  const reorderLevel = product?.reorderLevel || 10;
+  1203→                  const stockAfterSale = (product?.totalStock || 0) - item.quantity;
+  1204→
+  1205→                  return (
+  1206→                    <motion.div
+  1207→                      key={`${item.productId}-${item.batchId}`}
+  1208→                      initial={{ opacity: 0, x: 12, scale: 0.98 }}
+  1209→                      animate={{ opacity: 1, x: 0, scale: 1 }}
+  1210→                      exit={{ opacity: 0, x: -12, scale: 0.95, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
+  1211→                      transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+  1212→                      className="py-2 px-2.5 rounded-xl border border-slate-100/80 bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200 group"
+  1213→                      layout
+  1214→                    >
+  1215→                      <div className="flex items-start justify-between gap-2">
+  1216→                        <div className="flex-1 min-w-0">
+  1217→                          <p className="font-semibold text-[12px] text-slate-800 truncate leading-tight">{item.productName}</p>
+  1218→                          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
+  1219→                        </div>
+  1220→                        <span className="font-bold text-[12px] text-slate-800 tabular-nums shrink-0 pt-px">
+  1221→                          {formatGHS(item.unitPrice * item.quantity)}
+  1222→                        </span>
+  1223→                      </div>
+  1224→                      <div className="flex items-center justify-between mt-1.5">
+  1225→                        <p className={`text-[9px] font-semibold tracking-wide uppercase ${
+  1226→                          stockAfterSale <= 0 ? 'text-red-500' :
+  1227→                          stockAfterSale <= reorderLevel ? 'text-amber-600' :
+  1228→                          'text-slate-300'
+  1229→                        }`}>
+  1230→                          {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
+  1231→                        </p>
+  1232→                        <div className="flex items-center gap-1">
+  1233→                          <button
+  1234→                            className="h-6 w-6 rounded-md flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 transition-all opacity-0 group-hover:opacity-100"
+  1235→                            onClick={() => removeFromCart(item.productId, item.batchId)}
+  1236→                          >
+  1237→                            <Trash2 className="h-3 w-3" />
+  1238→                          </button>
+  1239→                          <div className="flex items-center bg-white rounded-lg border border-slate-200 shadow-sm">
+  1240→                            <button
+  1241→                              className="h-6 w-6 rounded-l-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors"
+  1242→                              onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
+  1243→                              disabled={item.quantity <= 1}
+  1244→                            >
+  1245→                              <Minus className="h-2.5 w-2.5" />
+  1246→                            </button>
+  1247→                            <span className="w-7 text-center text-[11px] font-bold tabular-nums text-slate-700">{item.quantity}</span>
+  1248→                            <button
+  1249→                              className={`h-6 w-6 rounded-r-lg flex items-center justify-center transition-colors ${
+  1250→                                item.quantity >= item.availableQty
+  1251→                                  ? 'text-slate-200 cursor-not-allowed'
+  1252→                                  : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600'
+  1253→                              }`}
+  1254→                              onClick={() => {
+  1255→                                if (item.quantity < item.availableQty) {
+  1256→                                  updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
+  1257→                                }
+  1258→                              }}
+  1259→                              disabled={item.quantity >= item.availableQty}
+  1260→                            >
+  1261→                              <Plus className="h-2.5 w-2.5" />
+  1262→                            </button>
+  1263→                          </div>
+  1264→                        </div>
+  1265→                      </div>
+  1266→                    </motion.div>
+  1267→                  );
+  1268→                })}
+  1269→              </div>
+  1270→            ) : (
+  1271→              <div className="flex flex-col items-center justify-center py-12 text-slate-300">
+  1272→                <div className="h-14 w-14 rounded-2xl bg-slate-50 flex items-center justify-center mb-3">
+  1273→                  <ShoppingCart className="h-7 w-7 text-slate-200" />
+  1274→                </div>
+  1275→                <p className="text-xs font-semibold text-slate-300">No items yet</p>
+  1276→                <p className="text-[10px] text-slate-200 mt-0.5">Tap a product to begin</p>
+  1277→              </div>
+  1278→            )}
+  1279→            </AnimatePresence>
+  1280→          </div>
+  1281→        </div>
+  1282→
+  1283→        {/* ─── Payment Section — ALWAYS pinned at bottom, never scrolls ─── */}
+  1284→        <div className="shrink-0 relative">
+  1285→          {/* Subtle shadow above payment to indicate scrollable content above */}
+  1286→          {cart.length > 2 && (
+  1287→            <div className="absolute -top-3 left-0 right-0 h-3 bg-gradient-to-t from-slate-100/60 to-transparent pointer-events-none z-10" />
+  1288→          )}
+  1289→          <div className="border-t border-slate-100 bg-gradient-to-t from-white via-slate-50/30 to-white px-3 pt-2.5 pb-3 space-y-2">
+  1290→            {/* Price Summary — compact card */}
+  1291→            <div className="rounded-xl border border-slate-100 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-3 py-2 space-y-0.5">
+  1292→              <div className="flex justify-between text-[11px]">
+  1293→                <span className="text-slate-400">Subtotal</span>
+  1294→                <span className="text-slate-600 font-medium font-mono tabular-nums">{formatGHS(subtotal)}</span>
+  1295→              </div>
+  1296→              <div className="flex justify-between text-[11px]">
+  1297→                <span className="text-slate-400">VAT (12.5%)</span>
+  1298→                <span className="text-slate-500 font-mono tabular-nums">{formatGHS(tax)}</span>
+  1299→              </div>
+  1300→              <div className="flex items-center justify-between text-[11px]">
+  1301→                <span className="text-slate-400">Discount</span>
+  1302→                <Input
+  1303→                  type="number"
+  1304→                  value={discount || ''}
+  1305→                  onChange={(e) => setDiscount(Number(e.target.value) || 0)}
+  1306→                  className="w-20 h-5 text-[10px] text-right bg-slate-50/80 border-slate-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20"
+  1307→                  placeholder="0.00"
+  1308→                />
+  1309→              </div>
+  1310→              <div className="h-px bg-slate-100 my-1" />
+  1311→              <div className="flex justify-between items-baseline">
+  1312→                <span className="font-bold text-[12px] text-slate-700 uppercase tracking-wide">Total</span>
+  1313→                <span className="font-black text-[17px] text-emerald-600 font-mono tabular-nums leading-none">{formatGHS(total)}</span>
+  1314→              </div>
+  1315→            </div>
+  1316→
+  1317→            {/* Payment Method — pill selector */}
+  1318→            <div className="flex gap-1">
+  1319→              {(['cash', 'card', 'mobile_money'] as const).map((method) => {
+  1320→                const Icon = paymentIcons[method];
+  1321→                const label = method === 'mobile_money' ? 'MoMo' : method.charAt(0).toUpperCase() + method.slice(1);
+  1322→                const isActive = paymentMethod === method;
+  1323→                return (
+  1324→                  <motion.button
+  1325→                    key={method}
+  1326→                    whileTap={{ scale: 0.95 }}
+  1327→                    className={`flex-1 flex items-center justify-center gap-1.5 h-8 rounded-xl text-[10px] font-semibold transition-all duration-200 ${
+  1328→                      isActive
+  1329→                        ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/25'
+  1330→                        : 'bg-white border border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600 hover:shadow-sm'
+  1331→                    }`}
+  1332→                    onClick={() => setPaymentMethod(method)}
+  1333→                  >
+  1334→                    <Icon className="h-3.5 w-3.5" />
+  1335→                    {label}
+  1336→                  </motion.button>
+  1337→                );
+  1338→              })}
+  1339→            </div>
+  1340→
+  1341→            {/* Complete Sale — premium CTA */}
+  1342→            <Button
+  1343→              className="w-full h-10 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white font-bold text-[13px] shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:shadow-emerald-500/30 active:scale-[0.98] rounded-xl"
+  1344→              onClick={handleCompleteSale}
+  1345→              disabled={cart.length === 0 || submitting}
+  1346→            >
+  1347→              {submitting ? (
+  1348→                <span className="flex items-center gap-2">
+  1349→                  <motion.div
+  1350→                    className="h-3.5 w-3.5 border-2 border-white/30 border-t-white rounded-full"
+  1351→                    animate={{ rotate: 360 }}
+  1352→                    transition={{ repeat: Infinity, duration: 0.8, ease: 'linear' }}
+  1353→                  />
+  1354→                  Processing...
+  1355→                </span>
+  1356→              ) : (
+  1357→                <span className="flex items-center gap-2">
+  1358→                  <CheckCircle className="h-4 w-4" />
+  1359→                  Complete Sale — {formatGHS(total)}
+  1360→                </span>
+  1361→              )}
+  1362→            </Button>
+  1363→          </div>
+  1364→        </div>
+  1365→      </div>
+  1366→
+  1367→      {/* Stock Impact Modal (shown BEFORE receipt) */}
+  1368→      <AnimatePresence>
+  1369→        {showStockImpact && stockImpactItems.length > 0 && (
+  1370→          <StockImpactModal
+  1371→            items={stockImpactItems}
+  1372→            onContinue={handleStockImpactContinue}
+  1373→          />
+  1374→        )}
+  1375→      </AnimatePresence>
+  1376→
+  1377→      {/* Receipt Modal */}
+  1378→      <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>
+  1379→        <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
+  1380→          <DialogTitle className="sr-only">Sale Completed - Receipt</DialogTitle>
+  1381→          <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
+  1382→          {completedSale && (
+  1383→            <div>
+  1384→              {/* Professional Receipt */}
+  1385→              <div
+  1386→                id="receipt-print"
+  1387→                className="bg-white text-slate-900 overflow-hidden"
+  1388→              >
+  1389→                {/* Receipt Header - Pharmacy Branding */}
+  1390→                <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-4 py-3 text-white text-center relative overflow-hidden">
+  1391→                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px'}} />
+  1392→                  <div className="relative">
+  1393→                    <div className="flex items-center justify-center gap-1.5 mb-0.5">
+  1394→                      <Pill className="h-4 w-4 text-emerald-200" />
+  1395→                      <h3 className="text-base font-bold tracking-wide">GreenLife Pharmacy</h3>
+  1396→                      <Pill className="h-4 w-4 text-emerald-200" />
+  1397→                    </div>
+  1398→                    <p className="text-emerald-100 text-[10px]">123 Health Street, Accra, Ghana</p>
+  1399→                    <p className="text-emerald-100 text-[10px]">Tel: +233 30 123 4567</p>
+  1400→                  </div>
+  1401→                </div>
+  1402→
+  1403→                {/* Success badge */}
+  1404→                <div className="flex items-center justify-center -mt-4 relative z-10">
+  1405→                  <div className="h-8 w-8 rounded-full bg-emerald-100 border-2 border-white shadow flex items-center justify-center">
+  1406→                    <CheckCircle className="h-4 w-4 text-emerald-600" />
+  1407→                  </div>
+  1408→                </div>
+  1409→
+  1410→                {/* Receipt Body */}
+  1411→                <div className="px-4 py-3 space-y-2.5">
+  1412→                  {/* Transaction Details */}
+  1413→                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+  1414→                    <div className="flex justify-between col-span-2">
+  1415→                      <span className="text-slate-400 font-medium uppercase text-[9px] tracking-wider">Invoice</span>
+  1416→                      <span className="font-bold text-slate-800 font-mono">{completedSale.invoiceNo}</span>
+  1417→                    </div>
+  1418→                    <div>
+  1419→                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Date</span>
+  1420→                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+  1421→                    </div>
+  1422→                    <div>
+  1423→                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Time</span>
+  1424→                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+  1425→                    </div>
+  1426→                    <div>
+  1427→                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Cashier</span>
+  1428→                      <p className="font-medium text-slate-700 text-[11px]">{currentUser?.name ?? '-'}</p>
+  1429→                    </div>
+  1430→                    {completedSale.customerName && (
+  1431→                      <div>
+  1432→                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Customer</span>
+  1433→                        <p className="font-medium text-slate-700 text-[11px]">{completedSale.customerName}</p>
+  1434→                      </div>
+  1435→                    )}
+  1436→                    <div>
+  1437→                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Payment</span>
+  1438→                      <p className="font-medium text-slate-700 capitalize text-[11px]">{completedSale.paymentMethod.replace('_', ' ')}</p>
+  1439→                    </div>
+  1440→                  </div>
+  1441→
+  1442→                  {/* Dashed separator */}
+  1443→                  <div className="border-t border-dashed border-slate-200" />
+  1444→
+  1445→                  {/* Items Table */}
+  1446→                  <div>
+  1447→                    <div className="grid grid-cols-12 gap-1.5 text-[9px] font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-200">
+  1448→                      <span className="col-span-5">Item</span>
+  1449→                      <span className="col-span-2 text-center">Qty</span>
+  1450→                      <span className="col-span-2 text-right">Price</span>
+  1451→                      <span className="col-span-3 text-right">Total</span>
+  1452→                    </div>
+  1453→                    <div className="divide-y divide-dotted divide-slate-200">
+  1454→                      {completedSale.items.map((item, i) => (
+  1455→                        <div key={i} className="grid grid-cols-12 gap-1.5 py-1.5 text-[11px]">
+  1456→                          <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
+  1457→                          <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
+  1458→                          <span className="col-span-2 text-right text-slate-500 font-mono">{formatGHS(item.unitPrice)}</span>
+  1459→                          <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{formatGHS(item.total)}</span>
+  1460→                        </div>
+  1461→                      ))}
+  1462→                    </div>
+  1463→                  </div>
+  1464→
+  1465→                  {/* Dashed separator */}
+  1466→                  <div className="border-t border-dashed border-slate-200" />
+  1467→
+  1468→                  {/* Totals */}
+  1469→                  <div className="space-y-1 text-[11px]">
+  1470→                    <div className="flex justify-between text-slate-500">
+  1471→                      <span>Subtotal</span>
+  1472→                      <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
+  1473→                    </div>
+  1474→                    <div className="flex justify-between text-slate-500">
+  1475→                      <span>VAT (12.5%)</span>
+  1476→                      <span className="font-mono">{formatGHS(completedSale.tax)}</span>
+  1477→                    </div>
+  1478→                    {completedSale.discount > 0 && (
+  1479→                      <div className="flex justify-between text-red-500">
+  1480→                        <span>Discount</span>
+  1481→                        <span className="font-mono">-{formatGHS(completedSale.discount)}</span>
+  1482→                      </div>
+  1483→                    )}
+  1484→
+  1485→                    {/* Total box */}
+  1486→                    <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-1">
+  1487→                      <div className="flex justify-between items-center">
+  1488→                        <span className="font-bold text-xs text-emerald-800 uppercase tracking-wider">Total</span>
+  1489→                        <span className="font-black text-lg text-emerald-700 font-mono">{formatGHS(completedSale.totalAmount)}</span>
+  1490→                      </div>
+  1491→                    </div>
+  1492→                  </div>
+  1493→
+  1494→                  {/* Dashed separator */}
+  1495→                  <div className="border-t border-dashed border-slate-200" />
+  1496→
+  1497→                  {/* Footer */}
+  1498→                  <div className="text-center space-y-0.5">
+  1499→                    <p className="text-[10px] text-slate-400 font-medium">Thank you for choosing GreenLife Pharmacy!</p>
+  1500→                    <p className="text-[9px] text-slate-300">Your Health, Our Priority</p>
+  1501→                    <div className="flex items-center justify-center gap-1 pt-1">
+  1502→                      {Array.from({ length: 28 }).map((_, i) => (
+  1503→                        <div key={i} className="w-[1.5px] h-3 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
+  1504→                      ))}
+  1505→                    </div>
+  1506→                  </div>
+  1507→                </div>
+  1508→              </div>
+  1509→              {/* Action buttons */}
+  1510→              <div className="flex gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/50">
+  1511→                <Button variant="outline" size="sm" className="flex-1 h-9" onClick={handleCloseReceipt}>
+  1512→                  Close
+  1513→                </Button>
+  1514→                <Button size="sm" className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
+  1515→                  <Printer className="h-3.5 w-3.5 mr-1" />
+  1516→                  Print
+  1517→                </Button>
+  1518→              </div>
+  1519→            </div>
+  1520→          )}
+  1521→        </DialogContent>
+  1522→      </Dialog>
+  1523→    </div>
+  1524→  );
+  1525→}

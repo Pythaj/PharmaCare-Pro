@@ -214,6 +214,37 @@ html {
   background: transparent;
 }
 
+/* ─── Premium Cart Items Scrollbar ─── */
+.cart-items-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.cart-items-scroll::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cart-items-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 0;
+}
+
+.cart-items-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.35), rgba(148, 163, 184, 0.15));
+  border-radius: 10px;
+  transition: background 0.25s ease;
+}
+
+.cart-items-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(148, 163, 184, 0.55), rgba(148, 163, 184, 0.3));
+}
+
+.cart-items-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Fade-in animation for page transitions */
 @keyframes fadeInUp {
   from {
