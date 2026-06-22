@@ -117,20 +117,26 @@ export default function Home() {
   // Sidebar width: only apply margin on desktop where sidebar is fixed
   const sidebarWidth = isDesktop ? (sidebarOpen ? 260 : 68) : 0;
 
+  // Pages that manage their own full-height layout (no page-level scroll)
+  const selfScrollingPages: Page[] = ['pos'];
+  const isSelfScrolling = selfScrollingPages.includes(resolvedPage);
+
   // App layout
   return (
-    <div className="h-screen overflow-hidden bg-slate-50/80">
+    <div className="h-screen overflow-hidden bg-slate-50/80 flex">
       <ThemeInitializer />
       <Sidebar />
       <div
-        className="flex flex-1 flex-col min-w-0 h-full transition-[margin-left] duration-300 ease-in-out"
+        className="flex flex-col min-w-0 h-full flex-1 transition-[margin-left] duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
         style={{ marginLeft: sidebarWidth }}
       >
         <Header />
-        <main className="flex-1 overflow-y-auto scroll-smooth">
-          <Suspense fallback={<PageLoader />}>
-            {ActivePage && <ActivePage key={currentPage} />}
-          </Suspense>
+        <main className="flex-1 overflow-hidden">
+          <div className={isSelfScrolling ? 'h-full' : 'h-full overflow-y-auto scroll-smooth'}>
+            <Suspense fallback={<PageLoader />}>
+              {ActivePage && <ActivePage key={currentPage} />}
+            </Suspense>
+          </div>
         </main>
       </div>
     </div>

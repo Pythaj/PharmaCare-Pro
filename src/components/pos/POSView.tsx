@@ -13,8 +13,7 @@ import {
   X,
   Printer,
   CheckCircle,
-  UserRoundPlus,
-  Zap,
+
   Package,
   AlertTriangle,
   TrendingDown,
@@ -43,7 +42,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { Label } from '@/components/ui/label';
 import { useAppStore } from '@/stores/app-store';
 import { toast } from 'sonner';
 import type { Product, Batch, Customer, CartItem } from '@/types';
@@ -498,8 +496,7 @@ export default function POSView() {
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('All');
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [customerSearch, setCustomerSearch] = useState('');
+
   const [discount, setDiscount] = useState(0);
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
@@ -543,12 +540,6 @@ export default function POSView() {
 
   // Auto-refresh interval ref
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Walk-in customer state
-  const [showWalkInDialog, setShowWalkInDialog] = useState(false);
-  const [walkInName, setWalkInName] = useState('');
-  const [walkInPhone, setWalkInPhone] = useState('');
-  const [addingWalkIn, setAddingWalkIn] = useState(false);
 
   const fetchProducts = useCallback(async (query: string) => {
     try {
@@ -609,13 +600,6 @@ export default function POSView() {
   useEffect(() => {
     async function init() {
       await fetchProducts('');
-      try {
-        const res = await fetch('/api/customers');
-        if (res.ok) {
-          const data = await res.json();
-          setCustomers(data.customers ?? []);
-        }
-      } catch { /* silent */ }
       setLoading(false);
     }
     init();
@@ -826,42 +810,11 @@ export default function POSView() {
     setPaymentMethod('cash');
   };
 
-  const handleAddWalkIn = async () => {
-    if (!walkInName.trim()) return;
-    setAddingWalkIn(true);
-    try {
-      const res = await fetch('/api/customers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: walkInName.trim(),
-          phone: walkInPhone.trim() || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to add walk-in customer');
-      }
-      const newCustomer = await res.json();
-      setSelectedCustomer(newCustomer.id);
-      setCustomerSearch(newCustomer.name);
-      setCustomers(prev => [newCustomer, ...prev]);
-      setShowWalkInDialog(false);
-      toast.success(`${newCustomer.name} added & selected`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to add walk-in');
-    } finally {
-      setAddingWalkIn(false);
-    }
-  };
-
   const paymentIcons = {
     cash: Banknote,
     card: CreditCard,
     mobile_money: Smartphone,
   };
-
-  const selectedCustomer = customers.find(c => c.id === selectedCustomerId);
 
   if (loading) {
     return (
@@ -886,9 +839,9 @@ export default function POSView() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-5rem)] gap-0">
+    <div className="flex h-full gap-0">
       {/* Left Panel - Product Search & Listing */}
-      <div className="flex-1 flex flex-col min-w-0 p-4 pr-2">
+      <div className="flex-1 flex flex-col min-w-0 p-4 pr-2 overflow-hidden">
         {/* Search Bar */}
         <div className="relative mb-2">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -958,8 +911,8 @@ export default function POSView() {
           </div>
         </div>
 
-        {/* Product Grid */}
-        <ScrollArea className="flex-1 -mx-1">
+        {/* Product Grid - Premium scroll */}
+        <div className="flex-1 min-h-0 -mx-1 overflow-y-auto pos-product-scroll pr-1">
           <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
             {filteredProducts.length > 0 ? (
               filteredProducts.map((product) => {
@@ -1190,7 +1143,7 @@ export default function POSView() {
               </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
       </div>
 
       {/* Right Panel - Cart & Checkout */}
@@ -1317,95 +1270,36 @@ export default function POSView() {
           )}
         </ScrollArea>
 
-        {/* Cart Summary & Checkout */}
-        <div className="border-t border-slate-100 bg-slate-50/50 p-4 space-y-3">
-          {/* Customer Selection */}
-          <div className="space-y-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-              <Input
-                placeholder="Search customer (optional)"
-                className="pl-8 h-8 text-xs bg-white border-slate-200"
-                value={customerSearch}
-                onChange={(e) => setCustomerSearch(e.target.value)}
-              />
-              {customerSearch && !selectedCustomerId && (
-                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-40 overflow-y-auto z-50">
-                  {customers
-                    .filter(c => c.name.toLowerCase().includes(customerSearch.toLowerCase()) || c.phone?.includes(customerSearch))
-                    .slice(0, 5)
-                    .map(c => (
-                      <button
-                        key={c.id}
-                        className="w-full text-left px-3 py-2 hover:bg-slate-50 text-sm transition-colors"
-                        onClick={() => { setSelectedCustomer(c.id); setCustomerSearch(c.name); }}
-                      >
-                        <span className="font-medium">{c.name}</span>
-                        <span className="text-slate-400 ml-2">{c.phone ?? '-'}</span>
-                      </button>
-                    ))
-                  }
-                </div>
-              )}
-              {selectedCustomer && (
-                <div className="flex items-center justify-between mt-1.5 px-1">
-                  <span className="text-xs text-emerald-600 font-medium flex items-center gap-1">
-                    <CheckCircle className="h-3 w-3" />
-                    {selectedCustomer.name}
-                  </span>
-                  <button onClick={() => { setSelectedCustomer(null); setCustomerSearch(''); }} className="text-xs text-red-400 hover:text-red-600 transition-colors">Remove</button>
-                </div>
-              )}
+        {/* Cart Summary & Checkout — always pinned, no scroll needed */}
+        <div className="shrink-0 border-t border-slate-100 bg-white p-3 space-y-2.5">
+          {/* Price Summary — compact */}
+          <div className="bg-slate-50/80 rounded-xl border border-slate-100 px-3 py-2.5 space-y-1.5">
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">Subtotal</span>
+              <span className="text-slate-600 font-medium font-mono">{formatGHS(subtotal)}</span>
             </div>
-            {!selectedCustomerId && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full h-8 text-xs border-dashed border-emerald-300 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-400 transition-all bg-white"
-                onClick={() => { setWalkInName('Walk-In Customer'); setWalkInPhone(''); setShowWalkInDialog(true); }}
-              >
-                <Zap className="h-3 w-3 mr-1" />
-                Quick Walk-In
-              </Button>
-            )}
-          </div>
-
-          {/* Notes */}
-          <Input
-            placeholder="Notes (optional)"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            className="h-8 text-xs bg-white border-slate-200"
-          />
-
-          {/* Price Summary */}
-          <div className="bg-white rounded-xl border border-slate-200 p-3 space-y-2">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-500">Subtotal</span>
-              <span className="text-slate-700 font-medium">{formatGHS(subtotal)}</span>
+            <div className="flex justify-between text-xs">
+              <span className="text-slate-400">VAT (12.5%)</span>
+              <span className="text-slate-600 font-mono">{formatGHS(tax)}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-500">Tax (12.5%)</span>
-              <span className="text-slate-700">{formatGHS(tax)}</span>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-slate-500">Discount</span>
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400">Discount</span>
               <Input
                 type="number"
                 value={discount || ''}
                 onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-                className="w-24 h-7 text-xs text-right bg-slate-50 border-slate-200"
+                className="w-20 h-6 text-[11px] text-right bg-white border-slate-200 px-2"
                 placeholder="0.00"
               />
             </div>
-            <Separator className="bg-slate-100" />
-            <div className="flex justify-between">
-              <span className="font-bold text-slate-800">Total</span>
-              <span className="font-bold text-xl text-emerald-600">{formatGHS(total)}</span>
+            <Separator className="bg-slate-200/60" />
+            <div className="flex justify-between items-baseline pt-0.5">
+              <span className="font-bold text-sm text-slate-800">Total</span>
+              <span className="font-black text-lg text-emerald-600 font-mono">{formatGHS(total)}</span>
             </div>
           </div>
 
-          {/* Payment Method */}
+          {/* Payment Method — compact row */}
           <div className="flex gap-1.5">
             {(['cash', 'card', 'mobile_money'] as const).map((method) => {
               const Icon = paymentIcons[method];
@@ -1414,14 +1308,14 @@ export default function POSView() {
               return (
                 <button
                   key={method}
-                  className={`flex-1 flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all ${
+                  className={`flex-1 flex items-center justify-center gap-1 h-8 rounded-lg text-[11px] font-semibold transition-all duration-200 ${
                     isActive
-                      ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-200'
-                      : 'bg-white border border-slate-200 text-slate-500 hover:border-slate-300 hover:text-slate-700'
+                      ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/25'
+                      : 'bg-slate-50 border border-slate-200 text-slate-400 hover:border-emerald-200 hover:text-emerald-600'
                   }`}
                   onClick={() => setPaymentMethod(method)}
                 >
-                  <Icon className="h-3.5 w-3.5" />
+                  <Icon className="h-3 w-3" />
                   {label}
                 </button>
               );
@@ -1430,7 +1324,7 @@ export default function POSView() {
 
           {/* Complete Sale Button */}
           <Button
-            className="w-full h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-200/50 transition-all hover:shadow-xl hover:shadow-emerald-200/50 active:scale-[0.98]"
+            className="w-full h-10 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-sm shadow-lg shadow-emerald-600/20 transition-all hover:shadow-xl hover:shadow-emerald-600/30 active:scale-[0.98]"
             onClick={handleCompleteSale}
             disabled={cart.length === 0 || submitting}
           >
@@ -1452,59 +1346,6 @@ export default function POSView() {
           </Button>
         </div>
       </div>
-
-      {/* Walk-In Customer Dialog */}
-      <Dialog open={showWalkInDialog} onOpenChange={(open) => { if (!open) setShowWalkInDialog(false); }}>
-        <DialogContent className="sm:max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-emerald-100 flex items-center justify-center">
-                <UserRoundPlus className="h-4 w-4 text-emerald-600" />
-              </div>
-              Quick Walk-In
-            </DialogTitle>
-            <DialogDescription className="sr-only">Register a quick walk-in customer for this sale</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs text-slate-500">Customer Name</Label>
-              <Input
-                value={walkInName}
-                onChange={(e) => setWalkInName(e.target.value)}
-                placeholder="e.g. Walk-In Customer"
-                className="mt-1"
-                autoFocus
-              />
-            </div>
-            <div>
-              <Label className="text-xs text-slate-500">Phone <span className="text-slate-300">(optional)</span></Label>
-              <Input
-                value={walkInPhone}
-                onChange={(e) => setWalkInPhone(e.target.value)}
-                placeholder="e.g. +233 24 123 4567"
-                className="mt-1"
-                onKeyDown={(e) => { if (e.key === 'Enter') handleAddWalkIn(); }}
-              />
-            </div>
-            <p className="text-xs text-slate-400 flex items-center gap-1.5">
-              <Zap className="h-3 w-3" />
-              Walk-in customers are quick-registered for this sale. Details are optional.
-            </p>
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" size="sm" onClick={() => setShowWalkInDialog(false)}>Cancel</Button>
-            <Button
-              size="sm"
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={handleAddWalkIn}
-              disabled={addingWalkIn || !walkInName.trim()}
-            >
-              <UserRoundPlus className="h-4 w-4 mr-1" />
-              {addingWalkIn ? 'Adding...' : 'Add & Select'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Stock Impact Modal (shown BEFORE receipt) */}
       <AnimatePresence>

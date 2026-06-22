@@ -183,6 +183,37 @@ html {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Premium POS product scrollbar */
+.pos-product-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 185, 129, 0.3) transparent;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+.pos-product-scroll::-webkit-scrollbar {
+  width: 5px;
+}
+
+.pos-product-scroll::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 4px 0;
+}
+
+.pos-product-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.4), rgba(16, 185, 129, 0.2));
+  border-radius: 10px;
+  transition: background 0.2s ease;
+}
+
+.pos-product-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.6), rgba(16, 185, 129, 0.35));
+}
+
+.pos-product-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Fade-in animation for page transitions */
 @keyframes fadeInUp {
   from {
