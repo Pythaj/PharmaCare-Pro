@@ -9,8 +9,6 @@ import {
   Package,
   Warehouse,
   Users,
-  Truck,
-  Building2,
   Receipt,
   RotateCcw,
   BarChart3,
@@ -55,13 +53,6 @@ const adminNavSections: NavSection[] = [
       { label: 'Products', page: 'products', icon: Package },
       { label: 'Inventory', page: 'inventory', icon: Warehouse },
       { label: 'Customers', page: 'customers', icon: Users },
-    ],
-  },
-  {
-    title: 'PROCUREMENT',
-    items: [
-      { label: 'Purchases', page: 'purchases', icon: Truck },
-      { label: 'Suppliers', page: 'suppliers', icon: Building2 },
     ],
   },
   {
@@ -114,8 +105,7 @@ const pageNameMap: Record<Page, string> = {
   'products': 'Products',
   'inventory': 'Inventory',
   'customers': 'Customers',
-  'suppliers': 'Suppliers',
-  'purchases': 'Purchases',
+
   'sales-history': 'Sales History',
   'returns': 'Returns',
   'reports': 'Reports',
