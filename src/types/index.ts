@@ -16,6 +16,12 @@ export type Page =
   | 'audit-logs'
   | 'settings';
 
+/** Pages restricted to admin role only */
+export const ADMIN_ONLY_PAGES: Page[] = [
+  'admin-dashboard', 'suppliers', 'returns', 'reports',
+  'users', 'audit-logs', 'settings', 'inventory', 'purchases',
+];
+
 export type UserRole = 'admin' | 'sales';
 
 // ===== Database Models =====

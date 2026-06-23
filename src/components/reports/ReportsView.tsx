@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useAppStore } from '@/stores/app-store';
 import {
   DollarSign,
   TrendingUp,
@@ -101,6 +102,7 @@ interface MonthlyRow {
 // ─── Component ──────────────────────────────────────────────────────
 
 export default function ReportsView() {
+  const appName = useAppStore((s) => s.appName);
   const [period, setPeriod] = useState<Period>('this_month');
   const [fromDate, setFromDate] = useState(monthStartStr());
   const [toDate, setToDate] = useState(todayStr());
@@ -268,7 +270,7 @@ export default function ReportsView() {
       totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
     };
     const lines: string[] = [];
-    lines.push('PharmaCare Pro - Sales Analytics Report');
+    lines.push(`${appName} - Sales Analytics Report`);
     lines.push(`Period,${periodLabel}`);
     lines.push(`Generated,${new Date().toLocaleString()}`);
     lines.push('');
@@ -343,7 +345,7 @@ export default function ReportsView() {
     };
     const lines: string[] = [];
 
-    lines.push('PharmaCare Pro - Sales Analytics Report');
+    lines.push(`${appName} - Sales Analytics Report`);
     lines.push(`Period:\t${periodLabel}`);
     lines.push(`Generated:\t${new Date().toLocaleString()}`);
     lines.push('');
@@ -439,7 +441,7 @@ export default function ReportsView() {
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>PharmaCare Pro - Sales Report</title>
+<title>{appName} - Sales Report</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1f2937; padding: 40px; max-width: 900px; margin: 0 auto; }
@@ -462,7 +464,7 @@ export default function ReportsView() {
 </style>
 </head>
 <body>
-  <h1>PharmaCare Pro - Sales Analytics</h1>
+  <h1>{appName} - Sales Analytics</h1>
   <p class="subtitle">Period: ${periodLabel} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</p>
 
   <div class="stats-grid">
@@ -527,7 +529,7 @@ export default function ReportsView() {
     <tbody>${productRows}</tbody>
   </table>` : ''}
 
-  <div class="footer">PharmaCare Pro &mdash; Auto-generated report</div>
+  <div class="footer">{appName} &mdash; Auto-generated report</div>
 
   <div class="no-print" style="margin-top:20px;text-align:center;">
     <button onclick="window.print()" style="padding:10px 24px;background:#047857;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">Print / Save as PDF</button>

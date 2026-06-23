@@ -423,8 +423,6 @@ export function Header() {
 
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm">
-          <span className="text-slate-400">PharmaCare Pro</span>
-          <span className="text-slate-300">/</span>
           <span className="font-medium text-slate-900">{getPageName(currentPage)}</span>
         </div>
 

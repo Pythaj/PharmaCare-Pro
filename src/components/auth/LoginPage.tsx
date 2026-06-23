@@ -24,7 +24,7 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useAppStore();
+  const { login, appName, appTagline } = useAppStore();
 
   const {
     register,
@@ -122,7 +122,7 @@ export default function LoginPage() {
             transition={{ duration: 0.6, delay: 0.1 }}
             className="mb-4 text-4xl font-bold tracking-tight text-white"
           >
-            PharmaCare Pro
+            {appName}
           </motion.h1>
 
           <motion.p
@@ -131,7 +131,7 @@ export default function LoginPage() {
             transition={{ duration: 0.6, delay: 0.2 }}
             className="mb-12 text-lg opacity-90"
           >
-            Premium Pharmacy Management System
+            {appTagline}
           </motion.p>
 
           <motion.div
@@ -173,8 +173,8 @@ export default function LoginPage() {
             <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl" style={{ backgroundColor: 'var(--accent-primary)' }}>
               <Pill className="h-7 w-7 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-slate-900">PharmaCare Pro</h1>
-            <p className="text-sm text-slate-500">Premium Pharmacy Management</p>
+            <h1 className="text-2xl font-bold text-slate-900">{appName}</h1>
+            <p className="text-sm text-slate-500">{appTagline}</p>
           </div>
 
           <Card className="border-slate-200 shadow-lg shadow-slate-200/50">

@@ -63,6 +63,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { useAccentTheme, THEME_SWATCHES, type AccentTheme } from '@/hooks/use-accent-theme';
+import { useAppStore } from '@/stores/app-store';
 
 // ─── Types ───────────────────────────────────────────────────────
 
@@ -243,6 +244,8 @@ const defaults: AllSettings = {
 export default function SettingsView() {
   // Accent theme hook — applies CSS vars and persists to localStorage
   const { theme: currentAccentTheme, setTheme: setAccentTheme } = useAccentTheme();
+  const setAppName = useAppStore((s) => s.setAppName);
+  const setAppTagline = useAppStore((s) => s.setAppTagline);
 
   const [pharmacy, setPharmacy] = useState<PharmacyInfo>(defaults.pharmacy);
   const [receipt, setReceipt] = useState<ReceiptSettings>(defaults.receipt);
@@ -338,6 +341,9 @@ export default function SettingsView() {
   const handleSave = async () => {
     setSaving(true);
     const current = gatherSettings();
+    // Instantly sync branding to store for immediate UI update
+    setAppName(current.pharmacy.appName.trim());
+    setAppTagline(current.pharmacy.tagline.trim());
     try {
       // Try to persist via API
       const res = await fetch('/api/settings', {
@@ -427,10 +433,14 @@ export default function SettingsView() {
   const handleClearSales = async () => {
     setClearing(true);
     try {
-      await fetch('/api/sales', { method: 'DELETE' });
+      const res = await fetch('/api/sales?confirm=yes', { method: 'DELETE' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to clear sales data');
+      }
       toast.success('All sales data cleared');
-    } catch {
-      toast.error('Failed to clear sales data');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to clear sales data');
     } finally {
       setClearing(false);
     }

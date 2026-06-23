@@ -8,6 +8,40 @@ import LoginPage from '@/components/auth/LoginPage';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Page } from '@/types';
+import { ADMIN_ONLY_PAGES } from '@/types';
+
+/** Loads app settings (branding) from API on mount, falls back to localStorage */
+function useLoadAppSettings() {
+  const appName = useAppStore((s) => s.appName);
+  const setAppName = useAppStore((s) => s.setAppName);
+  const setAppTagline = useAppStore((s) => s.setAppTagline);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          const data = await res.json();
+          const name = data.pharmacy?.appName?.trim();
+          const tagline = data.pharmacy?.tagline?.trim();
+          if (name) setAppName(name);
+          if (tagline) setAppTagline(tagline);
+          if (name) localStorage.setItem('pharmacare_app_name', name);
+          if (tagline) localStorage.setItem('pharmacare_app_tagline', tagline);
+          return;
+        }
+      } catch { /* fallback below */ }
+      const savedName = localStorage.getItem('pharmacare_app_name');
+      const savedTagline = localStorage.getItem('pharmacare_app_tagline');
+      if (savedName?.trim()) setAppName(savedName.trim());
+      if (savedTagline?.trim()) setAppTagline(savedTagline.trim());
+    })();
+  }, [setAppName, setAppTagline]);
+
+  useEffect(() => {
+    document.title = `${appName} - Pharmacy Management System`;
+  }, [appName]);
+}
 
 // Track viewport width reactively without lint errors
 function useIsDesktop() {
@@ -55,8 +89,8 @@ function PageLoader() {
   );
 }
 
-// Pages that are admin-only
-const adminOnlyPages: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings', 'inventory', 'purchases'];
+// Pages that are admin-only (shared with app-store navigate guard)
+const adminOnlyPages = ADMIN_ONLY_PAGES;
 
 const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<() => React.JSX.Element>> = {
   'admin-dashboard': AdminDashboard,
@@ -76,6 +110,7 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
 };
 
 export default function Home() {
+  useLoadAppSettings();
   const { currentPage, isAuthenticated, sidebarOpen, currentUser } = useAppStore();
   const isDesktop = useIsDesktop();
   const navigate = useAppStore((s) => s.navigate);

@@ -1,9 +1,14 @@
 import { create } from 'zustand';
 import type { Page, User, CartItem } from '@/types';
+import { ADMIN_ONLY_PAGES } from '@/types';
 
 export type AccentTheme = 'emerald' | 'blue' | 'violet' | 'rose' | 'amber' | 'teal';
 
 interface AppState {
+  // App Branding
+  appName: string;
+  appTagline: string;
+  
   // Auth
   currentUser: User | null;
   isAuthenticated: boolean;
@@ -23,6 +28,8 @@ interface AppState {
   accentTheme: AccentTheme;
   
   // Actions
+  setAppName: (name: string) => void;
+  setAppTagline: (tagline: string) => void;
   login: (user: User) => void;
   logout: () => void;
   navigate: (page: Page) => void;
@@ -43,6 +50,10 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  // App Branding
+  appName: 'PharmaCare Pro',
+  appTagline: 'Premium Pharmacy Management System',
+  
   // Auth
   currentUser: null,
   isAuthenticated: false,
@@ -82,7 +93,7 @@ export const useAppStore = create<AppState>((set) => ({
   
   navigate: (page) => set((state) => {
     // Prevent sales users from navigating to admin-only pages
-    const adminOnly: Page[] = ['admin-dashboard', 'suppliers', 'returns', 'reports', 'users', 'audit-logs', 'settings', 'inventory', 'purchases'];
+    const adminOnly = ADMIN_ONLY_PAGES;
     if (state.currentUser?.role !== 'admin' && adminOnly.includes(page)) {
       return {}; // No-op: don't navigate to admin pages
     }
@@ -133,4 +144,6 @@ export const useAppStore = create<AppState>((set) => ({
   setSearchQuery: (query) => set({ searchQuery: query }),
   setShowProfileDialog: (open) => set({ showProfileDialog: open }),
   setAccentTheme: (theme) => set({ accentTheme: theme }),
+  setAppName: (name) => set({ appName: name }),
+  setAppTagline: (tagline) => set({ appTagline: tagline }),
 }));

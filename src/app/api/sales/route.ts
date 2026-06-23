@@ -7,6 +7,7 @@ export async function GET(request: NextRequest) {
     const from = searchParams.get('from') || ''
     const to = searchParams.get('to') || ''
     const userId = searchParams.get('userId') || ''
+    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined
 
     const where: Record<string, unknown> = {}
 
@@ -34,6 +35,7 @@ export async function GET(request: NextRequest) {
         _count: { select: { returns: true } },
       },
       orderBy: { createdAt: 'desc' },
+      take: limit,
     })
 
     return NextResponse.json({ sales })

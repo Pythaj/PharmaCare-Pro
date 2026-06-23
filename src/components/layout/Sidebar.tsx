@@ -23,7 +23,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { motion, AnimatePresence, useMotionValue, useTransform, useSpring } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -124,7 +124,7 @@ function CollapsedSectionDot() {
 }
 
 export function Sidebar() {
-  const { currentUser, currentPage, sidebarOpen, navigate, toggleSidebar, setSidebarOpen, setShowProfileDialog } = useAppStore();
+  const { currentUser, currentPage, sidebarOpen, navigate, toggleSidebar, setSidebarOpen, setShowProfileDialog, appName } = useAppStore();
   const userRole = currentUser?.role || 'sales';
   const isAdmin = userRole === 'admin';
 
@@ -179,7 +179,7 @@ export function Sidebar() {
               transition={{ duration: 0.18, ease: [0.4, 0, 0.2, 1] }}
               className="overflow-hidden whitespace-nowrap flex-1 min-w-0"
             >
-              <h1 className="text-[15px] font-bold text-white tracking-tight">PharmaCare Pro</h1>
+              <h1 className="text-[15px] font-bold text-white tracking-tight">{appName}</h1>
               <p className="text-[10px] text-slate-500 font-medium">Pharmacy Management</p>
             </motion.div>
           )}
