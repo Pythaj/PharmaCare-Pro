@@ -8,7 +8,6 @@ import {
   ShoppingCart,
   Package,
   Warehouse,
-  Users,
   Receipt,
   RotateCcw,
   BarChart3,
@@ -52,7 +51,6 @@ const adminNavSections: NavSection[] = [
       { label: 'POS', page: 'pos', icon: ShoppingCart },
       { label: 'Products', page: 'products', icon: Package },
       { label: 'Inventory', page: 'inventory', icon: Warehouse },
-      { label: 'Customers', page: 'customers', icon: Users },
     ],
   },
   {
@@ -92,7 +90,6 @@ const salesNavSections: NavSection[] = [
     items: [
       { label: 'Products', page: 'products', icon: Package },
       { label: 'Sales History', page: 'sales-history', icon: Receipt },
-      { label: 'Customers', page: 'customers', icon: Users },
     ],
   },
 ];
@@ -104,7 +101,6 @@ const pageNameMap: Record<Page, string> = {
   'pos': 'POS',
   'products': 'Products',
   'inventory': 'Inventory',
-  'customers': 'Customers',
 
   'sales-history': 'Sales History',
   'returns': 'Returns',
