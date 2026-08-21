@@ -4,8 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "next build && powershell -Command \"Copy-Item -Recurse -Force '.next/static' '.next/standalone/.next/'; Copy-Item -Recurse -Force 'public' '.next/standalone/'\"",
-    "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
+    "build": "next build",
+    "build:netlify": "prisma generate && next build",
+    "start": "next start",
     "lint": "eslint .",
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
