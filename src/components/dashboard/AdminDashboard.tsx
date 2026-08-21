@@ -267,15 +267,17 @@ export default function AdminDashboard() {
             <CardTitle className="text-base">Daily Sales (Last 14 Days)</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={dailySalesConfig} className="h-64">
-              <BarChart data={chartData?.dailySales ?? []}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="value" fill="var(--color-sales)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ChartContainer>
+            <div className="overflow-x-auto">
+              <ChartContainer config={dailySalesConfig} className="h-64 min-w-[350px]">
+                <BarChart data={chartData?.dailySales ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} tickMargin={8} width={45} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Bar dataKey="value" fill="var(--color-sales)" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ChartContainer>
+            </div>
           </CardContent>
         </Card>
 
@@ -285,21 +287,23 @@ export default function AdminDashboard() {
             <CardTitle className="text-base">Monthly Revenue</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={monthlyRevenueConfig} className="h-64">
-              <AreaChart data={chartData?.monthlyRevenue ?? []}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <defs>
-                  <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#14b8a6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <Area type="monotone" dataKey="value" stroke="var(--color-revenue)" fill="url(#revenueGrad)" strokeWidth={2} />
-              </AreaChart>
-            </ChartContainer>
+            <div className="overflow-x-auto">
+              <ChartContainer config={monthlyRevenueConfig} className="h-64 min-w-[350px]">
+                <AreaChart data={chartData?.monthlyRevenue ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} tickMargin={8} width={45} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <defs>
+                    <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#14b8a6" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#14b8a6" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <Area type="monotone" dataKey="value" stroke="var(--color-revenue)" fill="url(#revenueGrad)" strokeWidth={2} />
+                </AreaChart>
+              </ChartContainer>
+            </div>
           </CardContent>
         </Card>
 
@@ -309,15 +313,17 @@ export default function AdminDashboard() {
             <CardTitle className="text-base">Top Selling Medicines</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={topSellingConfig} className="h-64">
-              <BarChart data={chartData?.topSelling ?? []} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                <XAxis type="number" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis type="category" dataKey="name" fontSize={11} tickLine={false} axisLine={false} width={120} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="value" fill="var(--color-amount)" radius={[0, 4, 4, 0]} />
-              </BarChart>
-            </ChartContainer>
+            <div className="overflow-x-auto">
+              <ChartContainer config={topSellingConfig} className="h-64 min-w-[350px]">
+                <BarChart data={chartData?.topSelling ?? []} layout="vertical" margin={{ top: 10, right: 20, left: 5, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                  <XAxis type="number" fontSize={12} tickLine={false} axisLine={false} tickMargin={8} />
+                  <YAxis type="category" dataKey="name" fontSize={11} tickLine={false} axisLine={false} width={100} tickMargin={8} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Bar dataKey="value" fill="var(--color-amount)" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ChartContainer>
+            </div>
           </CardContent>
         </Card>
 
@@ -327,16 +333,18 @@ export default function AdminDashboard() {
             <CardTitle className="text-base">Profit Trend</CardTitle>
           </CardHeader>
           <CardContent>
-            <ChartContainer config={profitTrendConfig} className="h-64">
-              <LineChart data={chartData?.profitTrend ?? []}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis fontSize={12} tickLine={false} axisLine={false} />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Line type="monotone" dataKey="value" stroke="var(--color-profit)" strokeWidth={2} dot={{ r: 3 }} />
-                <Line type="monotone" dataKey="value2" stroke="var(--color-revenue)" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
-              </LineChart>
-            </ChartContainer>
+            <div className="overflow-x-auto">
+              <ChartContainer config={profitTrendConfig} className="h-64 min-w-[350px]">
+                <LineChart data={chartData?.profitTrend ?? []} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="name" fontSize={12} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
+                  <YAxis fontSize={12} tickLine={false} axisLine={false} tickMargin={8} width={45} />
+                  <ChartTooltip content={<ChartTooltipContent />} />
+                  <Line type="monotone" dataKey="value" stroke="var(--color-profit)" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="value2" stroke="var(--color-revenue)" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+                </LineChart>
+              </ChartContainer>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -416,7 +424,7 @@ export default function AdminDashboard() {
                       <TableRow
                         key={purchase.id}
                         className="cursor-pointer hover:bg-muted/50"
-                        onClick={(e) => { e.stopPropagation(); navigate('purchases'); toast.success(`Viewing purchase details for ${purchase.invoiceNo}`); }}
+                        onClick={(e) => { e.stopPropagation(); navigate('products'); }}
                       >
                         <TableCell className="font-mono text-xs">{purchase.invoiceNo}</TableCell>
                         <TableCell>{purchase.supplierName ?? '-'}</TableCell>

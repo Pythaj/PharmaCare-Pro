@@ -6,9 +6,6 @@ export type Page =
   | 'pos'
   | 'products'
   | 'inventory'
-  | 'customers'
-  | 'suppliers'
-  | 'purchases'
   | 'sales-history'
   | 'returns'
   | 'reports'
@@ -18,8 +15,8 @@ export type Page =
 
 /** Pages restricted to admin role only */
 export const ADMIN_ONLY_PAGES: Page[] = [
-  'admin-dashboard', 'suppliers', 'returns', 'reports',
-  'users', 'audit-logs', 'settings', 'inventory', 'purchases',
+  'admin-dashboard', 'returns', 'reports',
+  'users', 'audit-logs', 'settings', 'inventory',
 ];
 
 export type UserRole = 'admin' | 'sales';

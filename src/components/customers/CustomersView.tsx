@@ -187,9 +187,9 @@ export default function CustomersView() {
                 <TableRow>
                   <TableHead className="w-8"></TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Email</TableHead>
+                  <TableHead className="hidden md:table-cell">Email</TableHead>
                   <TableHead>Phone</TableHead>
-                  <TableHead>Address</TableHead>
+                  <TableHead className="hidden lg:table-cell">Address</TableHead>
                   <TableHead className="text-right">Total Purchases</TableHead>
                   {isAdmin && <TableHead className="w-24">Actions</TableHead>}
                 </TableRow>
@@ -200,9 +200,9 @@ export default function CustomersView() {
                     <TableRow key={i}>
                       <TableCell><Skeleton className="h-4 w-4" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-32" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-28" /></TableCell>
+                      <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-36" /></TableCell>
+                      <TableCell className="hidden lg:table-cell"><Skeleton className="h-4 w-36" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
                       {isAdmin && <TableCell><Skeleton className="h-4 w-16" /></TableCell>}
                     </TableRow>
@@ -365,9 +365,9 @@ function CustomerRow({
           {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </TableCell>
         <TableCell className="font-medium">{customer.name}</TableCell>
-        <TableCell>{customer.email ?? '-'}</TableCell>
+        <TableCell className="hidden md:table-cell">{customer.email ?? '-'}</TableCell>
         <TableCell>{customer.phone ?? '-'}</TableCell>
-        <TableCell className="max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
+        <TableCell className="hidden lg:table-cell max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
         <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
         {showActions && (
         <TableCell>

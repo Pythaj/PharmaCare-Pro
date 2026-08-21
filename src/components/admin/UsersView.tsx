@@ -150,7 +150,7 @@ export default function UsersView() {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
-                  <TableHead>Phone</TableHead>
+                  <TableHead className="hidden md:table-cell">Phone</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -162,7 +162,7 @@ export default function UsersView() {
                       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-16" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
                     </TableRow>
@@ -186,7 +186,7 @@ export default function UsersView() {
                           {user.role}
                         </Badge>
                       </TableCell>
-                      <TableCell>{user.phone ?? '-'}</TableCell>
+                      <TableCell className="hidden md:table-cell">{user.phone ?? '-'}</TableCell>
                       <TableCell>
                         <Badge variant={user.active ? 'default' : 'destructive'} className={
                           user.active ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' : ''

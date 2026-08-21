@@ -5,6 +5,7 @@ import { useAppStore } from '@/stores/app-store';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import LoginPage from '@/components/auth/LoginPage';
+import InstallPrompt, { InstallFAB } from '@/components/InstallPrompt';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Page } from '@/types';
@@ -62,9 +63,7 @@ const SalesDashboard = lazy(() => import('@/components/pages/SalesDashboard'));
 const POSView = lazy(() => import('@/components/pages/POSView'));
 const ProductsView = lazy(() => import('@/components/pages/ProductsView'));
 const InventoryView = lazy(() => import('@/components/pages/InventoryView'));
-const CustomersView = lazy(() => import('@/components/pages/CustomersView'));
-const SuppliersView = lazy(() => import('@/components/pages/SuppliersView'));
-const PurchasesView = lazy(() => import('@/components/pages/PurchasesView'));
+
 const SalesHistoryView = lazy(() => import('@/components/pages/SalesHistoryView'));
 const ReturnsView = lazy(() => import('@/components/pages/ReturnsView'));
 const ReportsView = lazy(() => import('@/components/pages/ReportsView'));
@@ -98,9 +97,7 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
   'pos': POSView,
   'products': ProductsView,
   'inventory': InventoryView,
-  'customers': CustomersView,
-  'suppliers': SuppliersView,
-  'purchases': PurchasesView,
+
   'sales-history': SalesHistoryView,
   'returns': ReturnsView,
   'reports': ReportsView,
@@ -146,6 +143,8 @@ export default function Home() {
     return <>
       <ThemeInitializer />
       <LoginPage />
+      <InstallPrompt />
+      <InstallFAB />
     </>;
   }
 
@@ -174,6 +173,8 @@ export default function Home() {
           </div>
         </main>
       </div>
+      <InstallPrompt />
+      <InstallFAB />
     </div>
   );
 }

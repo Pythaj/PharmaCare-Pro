@@ -297,14 +297,14 @@ function InlinePriceEditor({
           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-500" />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-80 p-0 gap-0" align="start" side="bottom" sideOffset={4}>
+      <PopoverContent className="w-80 max-w-[calc(100vw-2rem)] p-0 gap-0" align="start" side="bottom" sideOffset={4}>
         <div className="px-3.5 py-2.5 border-b border-slate-100 bg-slate-50/50">
           <p className="font-semibold text-xs text-slate-800 truncate">{product.name}</p>
           <p className="text-[10px] text-slate-400">Quick Price Editor</p>
         </div>
         <div className="p-3.5 space-y-3">
           {/* Price inputs */}
-          <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             <div>
               <Label className="text-[10px] text-slate-500 uppercase tracking-wider">Cost Price</Label>
               <Input
@@ -723,10 +723,10 @@ export default function ProductsView() {
                   <TableHead>Name</TableHead>
                   <TableHead>Category</TableHead>
                   <TableHead className="text-right">Stock</TableHead>
-                  <TableHead className="text-right">Cost Price</TableHead>
+                  <TableHead className="text-right hidden md:table-cell">Cost Price</TableHead>
                   <TableHead className="text-right">Selling Price</TableHead>
-                  <TableHead className="text-center">Margin</TableHead>
-                  <TableHead>Expiry</TableHead>
+                  <TableHead className="text-center hidden md:table-cell">Margin</TableHead>
+                  <TableHead className="hidden md:table-cell">Expiry</TableHead>
                   <TableHead>Status</TableHead>
                   {canManageProducts && <TableHead className="w-20 text-center">Actions</TableHead>}
                 </TableRow>
@@ -791,7 +791,7 @@ export default function ProductsView() {
                             </span>
                             <span className="text-[10px] text-slate-400 ml-0.5">{product.unit}</span>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="text-right hidden md:table-cell">
                             {product.defaultCostPrice > 0 ? (
                               <span className="text-xs text-slate-500 font-mono">{formatGHS(product.defaultCostPrice)}</span>
                             ) : (
@@ -812,10 +812,10 @@ export default function ProductsView() {
                               )
                             )}
                           </TableCell>
-                          <TableCell className="text-center">
+                          <TableCell className="text-center hidden md:table-cell">
                             <MarginBadge cost={product.defaultCostPrice} selling={product.defaultSellingPrice} />
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="hidden md:table-cell">
                             {product.earliestExpiry ? (
                               <div className="flex items-center gap-1">
                                 <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
@@ -882,82 +882,84 @@ export default function ProductsView() {
                                   <p className="font-medium mb-2 text-xs uppercase tracking-wider text-muted-foreground">
                                     Batches for {product.name}
                                   </p>
-                                  <table className="w-full text-xs">
-                                    <thead>
-                                      <tr className="border-b border-dotted">
-                                        <th className="text-left py-1.5 font-medium text-muted-foreground">Batch#</th>
-                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Qty</th>
-                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Cost Price</th>
-                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Selling Price</th>
-                                        <th className="text-center py-1.5 font-medium text-muted-foreground">Margin</th>
-                                        <th className="text-right py-1.5 font-medium text-muted-foreground">Expiry Date</th>
-                                        <th className="text-center py-1.5 font-medium text-muted-foreground">Status</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {batches.map((batch) => {
-                                        const now = new Date();
-                                        const expiry = new Date(batch.expiryDate);
-                                        const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-                                        const isExpired = diffDays < 0;
-                                        const isExpiringSoon = !isExpired && diffDays < 90;
-                                        const isDepleted = batch.currentQty <= 0;
+                                  <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                      <thead>
+                                        <tr className="border-b border-dotted">
+                                          <th className="text-left py-1.5 font-medium text-muted-foreground">Batch#</th>
+                                          <th className="text-right py-1.5 font-medium text-muted-foreground">Qty</th>
+                                          <th className="text-right py-1.5 font-medium text-muted-foreground">Cost Price</th>
+                                          <th className="text-right py-1.5 font-medium text-muted-foreground">Selling Price</th>
+                                          <th className="text-center py-1.5 font-medium text-muted-foreground">Margin</th>
+                                          <th className="text-right py-1.5 font-medium text-muted-foreground">Expiry Date</th>
+                                          <th className="text-center py-1.5 font-medium text-muted-foreground">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {batches.map((batch) => {
+                                          const now = new Date();
+                                          const expiry = new Date(batch.expiryDate);
+                                          const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+                                          const isExpired = diffDays < 0;
+                                          const isExpiringSoon = !isExpired && diffDays < 90;
+                                          const isDepleted = batch.currentQty <= 0;
 
-                                        let statusLabel: string;
-                                        let statusClass: string;
-                                        let dotColor: string;
+                                          let statusLabel: string;
+                                          let statusClass: string;
+                                          let dotColor: string;
 
-                                        if (isDepleted) {
-                                          statusLabel = 'Depleted';
-                                          statusClass = 'bg-slate-100 text-slate-500';
-                                          dotColor = 'bg-slate-400';
-                                        } else if (isExpired) {
-                                          statusLabel = 'Expired';
-                                          statusClass = 'bg-red-100 text-red-700';
-                                          dotColor = 'bg-red-500';
-                                        } else if (isExpiringSoon) {
-                                          statusLabel = diffDays < 30 ? `${diffDays}d left` : 'Expiring Soon';
-                                          statusClass = diffDays < 30
-                                            ? 'bg-red-100 text-red-700'
-                                            : 'bg-amber-100 text-amber-700';
-                                          dotColor = diffDays < 30 ? 'bg-red-500' : 'bg-amber-500';
-                                        } else {
-                                          statusLabel = 'Good';
-                                          statusClass = 'bg-emerald-100 text-emerald-700';
-                                          dotColor = 'bg-emerald-500';
-                                        }
+                                          if (isDepleted) {
+                                            statusLabel = 'Depleted';
+                                            statusClass = 'bg-slate-100 text-slate-500';
+                                            dotColor = 'bg-slate-400';
+                                          } else if (isExpired) {
+                                            statusLabel = 'Expired';
+                                            statusClass = 'bg-red-100 text-red-700';
+                                            dotColor = 'bg-red-500';
+                                          } else if (isExpiringSoon) {
+                                            statusLabel = diffDays < 30 ? `${diffDays}d left` : 'Expiring Soon';
+                                            statusClass = diffDays < 30
+                                              ? 'bg-red-100 text-red-700'
+                                              : 'bg-amber-100 text-amber-700';
+                                            dotColor = diffDays < 30 ? 'bg-red-500' : 'bg-amber-500';
+                                          } else {
+                                            statusLabel = 'Good';
+                                            statusClass = 'bg-emerald-100 text-emerald-700';
+                                            dotColor = 'bg-emerald-500';
+                                          }
 
-                                        const batchMargin = calcMargin(batch.costPrice, batch.sellingPrice);
+                                          const batchMargin = calcMargin(batch.costPrice, batch.sellingPrice);
 
-                                        return (
-                                          <tr key={batch.id || `batch-${batch.batchNumber}`} className={`border-b border-dotted ${isExpired ? 'bg-red-50/40' : ''}`}>
-                                            <td className="py-1.5 font-mono">{batch.batchNumber}</td>
-                                            <td className="text-right font-mono font-medium">{batch.currentQty}</td>
-                                            <td className="text-right font-mono">{formatGHS(batch.costPrice)}</td>
-                                            <td className="text-right font-mono font-semibold text-emerald-700">{formatGHS(batch.sellingPrice)}</td>
-                                            <td className="text-center">
-                                              <span className={`text-[10px] font-semibold tabular-nums ${
-                                                batchMargin > 0 ? 'text-emerald-600' : batchMargin < 0 ? 'text-red-500' : 'text-slate-400'
-                                              }`}>
-                                                {batchMargin > 0 ? '+' : ''}{batchMargin.toFixed(1)}%
-                                              </span>
-                                            </td>
-                                            <td className="text-right">
-                                              <span className={isExpired ? 'text-red-600 font-medium' : ''}>
-                                                {new Date(batch.expiryDate).toLocaleDateString('en-GH')}
-                                              </span>
-                                            </td>
-                                            <td className="text-center">
-                                              <Badge className={`text-[10px] px-1.5 py-0 h-5 ${statusClass}`}>
-                                                <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor} mr-1`} />
-                                                {statusLabel}
-                                              </Badge>
-                                            </td>
-                                          </tr>
-                                        );
-                                      })}
-                                    </tbody>
-                                  </table>
+                                          return (
+                                            <tr key={batch.id || `batch-${batch.batchNumber}`} className={`border-b border-dotted ${isExpired ? 'bg-red-50/40' : ''}`}>
+                                              <td className="py-1.5 font-mono">{batch.batchNumber}</td>
+                                              <td className="text-right font-mono font-medium">{batch.currentQty}</td>
+                                              <td className="text-right font-mono">{formatGHS(batch.costPrice)}</td>
+                                              <td className="text-right font-mono font-semibold text-emerald-700">{formatGHS(batch.sellingPrice)}</td>
+                                              <td className="text-center">
+                                                <span className={`text-[10px] font-semibold tabular-nums ${
+                                                  batchMargin > 0 ? 'text-emerald-600' : batchMargin < 0 ? 'text-red-500' : 'text-slate-400'
+                                                }`}>
+                                                  {batchMargin > 0 ? '+' : ''}{batchMargin.toFixed(1)}%
+                                                </span>
+                                              </td>
+                                              <td className="text-right">
+                                                <span className={isExpired ? 'text-red-600 font-medium' : ''}>
+                                                  {new Date(batch.expiryDate).toLocaleDateString('en-GH')}
+                                                </span>
+                                              </td>
+                                              <td className="text-center">
+                                                <Badge className={`text-[10px] px-1.5 py-0 h-5 ${statusClass}`}>
+                                                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${dotColor} mr-1`} />
+                                                  {statusLabel}
+                                                </Badge>
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
                                   {canManageProducts && batches.length > 0 && (
                                     <p className="mt-3 text-xs text-muted-foreground flex items-center gap-1.5">
                                       <Tag className="h-3 w-3" />
@@ -1040,7 +1042,7 @@ export default function ProductsView() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label className="text-xs font-medium">Unit</Label>
                   <Select value={addForm.unit} onValueChange={(v) => setAddForm({ ...addForm, unit: v })}>
@@ -1087,7 +1089,7 @@ export default function ProductsView() {
                 </div>
 
                 {/* Price inputs */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-[11px] text-slate-500 font-medium uppercase tracking-wider">Cost Price (GHS)</Label>
                     <div className="relative">
@@ -1170,7 +1172,7 @@ export default function ProductsView() {
           {editPriceProduct && (
             <div className="space-y-4">
               {/* Current vs New comparison */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-2">Current Prices</p>
                   <div className="space-y-2">

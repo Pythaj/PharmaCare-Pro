@@ -1,6 +1,11 @@
 import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcryptjs';
 
 const db = new PrismaClient({ log: [] });
+
+async function hashPassword(password: string): Promise<string> {
+  return bcrypt.hash(password, 12);
+}
 
 async function seed() {
   console.log('Seeding database...');
@@ -27,20 +32,23 @@ async function seed() {
   }
 
   // Users
+  const adminPassword = await hashPassword('admin123');
+  const salesPassword = await hashPassword('sales123');
+
   const admin = await db.user.upsert({
     where: { email: 'admin@pharmacy.com' },
     update: {},
-    create: { name: 'Dr. Kwame Owusu', email: 'admin@pharmacy.com', password: 'admin123', role: 'admin', phone: '+233-20-000-0001' },
+    create: { name: 'Dr. Kwame Owusu', email: 'admin@pharmacy.com', password: adminPassword, role: 'admin', phone: '+233-20-000-0001' },
   });
   const sales1 = await db.user.upsert({
     where: { email: 'cashier@pharmacy.com' },
     update: {},
-    create: { name: 'Ama Adjei', email: 'cashier@pharmacy.com', password: 'sales123', role: 'sales', phone: '+233-20-000-0002' },
+    create: { name: 'Ama Adjei', email: 'cashier@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0002' },
   });
   const sales2 = await db.user.upsert({
     where: { email: 'attendant@pharmacy.com' },
     update: {},
-    create: { name: 'Kofi Boateng', email: 'attendant@pharmacy.com', password: 'sales123', role: 'sales', phone: '+233-20-000-0003' },
+    create: { name: 'Kofi Boateng', email: 'attendant@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0003' },
   });
 
   // Products

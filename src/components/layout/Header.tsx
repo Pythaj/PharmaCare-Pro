@@ -43,7 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { useEffect, useState, useCallback, type KeyboardEvent } from 'react';
+import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
 function formatGHS(value: number): string {
@@ -340,6 +340,8 @@ export function Header() {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [alertCount, setAlertCount] = useState(0);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const isAdmin = currentUser?.role === 'admin';
 
@@ -429,10 +431,10 @@ export function Header() {
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Search */}
-        <div className="hidden w-full max-w-sm items-center gap-2 md:flex">
+        {/* Search - Desktop */}
+        <div className="hidden md:flex w-full max-w-sm items-center gap-2">
           <div className="relative w-full">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 cursor-pointer" onClick={handleSearchAction} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 cursor-pointer" onClick={handleSearchAction} />
             <Input
               placeholder="Search products..."
               value={searchQuery}
@@ -443,9 +445,46 @@ export function Header() {
           </div>
         </div>
 
+        {/* Search - Mobile */}
+        <div className="md:hidden">
+          {mobileSearchOpen ? (
+            <div className="fixed inset-x-0 top-0 z-50 bg-white border-b border-slate-200 p-3 safe-area-top">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                  <Input
+                    ref={searchInputRef}
+                    placeholder="Search products..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSearchAction();
+                    }}
+                    className="h-11 w-full pl-9 pr-4 border-slate-200 bg-slate-50 text-sm focus-visible:border-[var(--accent-primary)]"
+                    autoFocus
+                  />
+                </div>
+                <button
+                  onClick={() => { setMobileSearchOpen(false); setSearchQuery(''); }}
+                  className="h-11 px-3 text-sm font-medium text-slate-500 hover:text-slate-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button
+              onClick={() => setMobileSearchOpen(true)}
+              className="h-9 w-9 flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-900 rounded-lg transition-colors"
+            >
+              <Search className="h-4.5 w-4.5" />
+            </button>
+          )}
+        </div>
+
         {/* Date/time */}
-        <div className="hidden items-center gap-2 text-sm text-slate-500 lg:flex">
-          <span>{currentDate}</span>
+        <div className="hidden items-center gap-2 text-sm text-slate-500 md:flex">
+          <span className="hidden md:inline">{currentDate}</span>
           <Separator orientation="vertical" className="h-4 bg-slate-200" />
           <span className="font-medium text-slate-700">{currentTime}</span>
         </div>

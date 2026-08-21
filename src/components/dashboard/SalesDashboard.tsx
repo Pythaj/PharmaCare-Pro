@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import {
   ShoppingCart,
   Search,
-  Users,
   DollarSign,
   Receipt,
   Pill,
@@ -71,7 +70,7 @@ export default function SalesDashboard() {
   const quickActions = [
     { label: 'New Sale', icon: ShoppingCart, page: 'pos' as const, color: 'bg-emerald-500 hover:bg-emerald-600' },
     { label: 'View Products', icon: Search, page: 'products' as const, color: 'bg-green-500 hover:bg-green-600' },
-    { label: 'View Customers', icon: Users, page: 'customers' as const, color: 'bg-emerald-600 hover:bg-emerald-700' },
+
   ];
 
   const statCards = [

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Page, User, CartItem } from '@/types';
 import { ADMIN_ONLY_PAGES } from '@/types';
 
@@ -49,7 +50,9 @@ interface AppState {
   setAccentTheme: (theme: AccentTheme) => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
   // App Branding
   appName: 'PharmaCare Pro',
   appTagline: 'Premium Pharmacy Management System',
@@ -80,16 +83,23 @@ export const useAppStore = create<AppState>((set) => ({
     currentPage: user.role === 'admin' ? 'admin-dashboard' : 'sales-dashboard',
   }),
   
-  logout: () => set({
-    currentUser: null,
-    isAuthenticated: false,
-    loginTime: 0,
-    currentPage: 'login',
-    cart: [],
-    selectedCustomerId: null,
-    searchQuery: '',
-    showProfileDialog: false,
-  }),
+  logout: async () => {
+    try {
+      await fetch('/api/auth', { method: 'DELETE' });
+    } catch {
+      // Ignore network errors during logout
+    }
+    set({
+      currentUser: null,
+      isAuthenticated: false,
+      loginTime: 0,
+      currentPage: 'login',
+      cart: [],
+      selectedCustomerId: null,
+      searchQuery: '',
+      showProfileDialog: false,
+    });
+  },
   
   navigate: (page) => set((state) => {
     // Prevent sales users from navigating to admin-only pages
@@ -146,4 +156,19 @@ export const useAppStore = create<AppState>((set) => ({
   setAccentTheme: (theme) => set({ accentTheme: theme }),
   setAppName: (name) => set({ appName: name }),
   setAppTagline: (tagline) => set({ appTagline: tagline }),
-}));
+}),
+    {
+      name: 'pharmacare-auth',
+      partialize: (state) => ({
+        currentUser: state.currentUser,
+        isAuthenticated: state.isAuthenticated,
+        loginTime: state.loginTime,
+        currentPage: state.currentPage,
+        sidebarOpen: state.sidebarOpen,
+        accentTheme: state.accentTheme,
+        appName: state.appName,
+        appTagline: state.appTagline,
+      }),
+    },
+  ),
+);

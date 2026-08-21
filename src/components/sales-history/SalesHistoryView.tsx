@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
 import {
   CalendarDays,
   DollarSign,
@@ -29,6 +29,8 @@ import {
   RefreshCw,
   Save,
   CalendarCheck,
+  Search,
+  Download,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -126,8 +128,15 @@ export default function DailySalesRegister() {
 
   // Close day dialog
   const [showCloseDialog, setShowCloseDialog] = useState(false);
+  const [closeStep, setCloseStep] = useState(1);
   const [closingNotes, setClosingNotes] = useState('');
+  const [cashCounted, setCashCounted] = useState('');
   const [closing, setClosing] = useState(false);
+
+  // Closing report
+  const [showReportDialog, setShowReportDialog] = useState(false);
+  const [closedRecord, setClosedRecord] = useState<DailySalesRecord | null>(null);
+  const [previousDayStats, setPreviousDayStats] = useState<{ revenue: number; profit: number } | null>(null);
 
   // Reopen dialog
   const [showReopenDialog, setShowReopenDialog] = useState(false);
@@ -189,22 +198,34 @@ export default function DailySalesRegister() {
     };
   }, [activeTab, todayRecord?.status, fetchToday]);
 
-  // Handle close day
+  // Handle close day — final step from multi-step dialog
   const handleCloseDay = async () => {
     if (!todayRecord || !currentUser) return;
     setClosing(true);
     try {
+      const notes = [
+        closingNotes,
+        cashCounted ? `Cash counted: GHS ${parseFloat(cashCounted).toFixed(2)}` : '',
+        cashCounted && todayRecord ? `Expected cash: GHS ${todayRecord.cashTotal.toFixed(2)}` : '',
+        cashCounted && todayRecord
+          ? `Cash difference: GHS ${(parseFloat(cashCounted) - todayRecord.cashTotal).toFixed(2)}`
+          : '',
+      ].filter(Boolean).join(' | ');
+
       const res = await fetch(`/api/daily-sales/${todayRecord.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'close', userId: currentUser.id, notes: closingNotes }),
+        body: JSON.stringify({ action: 'close', userId: currentUser.id, notes }),
       });
       if (res.ok) {
         const data = await res.json();
-        toast.success('Day closed successfully! Sales record saved.', { duration: 4000 });
-        setTodayRecord(data);
+        setClosedRecord(data);
         setShowCloseDialog(false);
+        setShowReportDialog(true);
+        setTodayRecord(data);
         setClosingNotes('');
+        setCashCounted('');
+        setCloseStep(1);
         fetchPastRecords();
       } else {
         const data = await res.json().catch(() => ({}));
@@ -216,6 +237,25 @@ export default function DailySalesRegister() {
       setClosing(false);
     }
   };
+
+  // Fetch previous day stats for comparison
+  useEffect(() => {
+    if (!todayRecord) return;
+    (async () => {
+      try {
+        const todayDate = new Date(todayRecord.date + 'T00:00:00');
+        todayDate.setDate(todayDate.getDate() - 1);
+        const prevDate = todayDate.toISOString().split('T')[0];
+        const res = await fetch(`/api/daily-sales?limit=1`);
+        if (res.ok) {
+          const data = await res.json();
+          const records: DailySalesRecord[] = data.records ?? [];
+          const prev = records.find(r => r.date === prevDate);
+          if (prev) setPreviousDayStats({ revenue: prev.totalRevenue, profit: prev.totalProfit });
+        }
+      } catch { /* silent */ }
+    })();
+  }, [todayRecord]);
 
   // Handle reopen day
   const handleReopenDay = async () => {
@@ -584,10 +624,10 @@ export default function DailySalesRegister() {
                               <TableHead>Customer</TableHead>
                               <TableHead className="text-center">Items</TableHead>
                               <TableHead className="text-right">Total</TableHead>
-                              <TableHead className="text-right">Profit</TableHead>
-                              <TableHead>Payment</TableHead>
-                              <TableHead>Cashier</TableHead>
-                              <TableHead className="w-28">Actions</TableHead>
+                              <TableHead className="text-right hidden md:table-cell">Profit</TableHead>
+                              <TableHead className="hidden sm:table-cell">Payment</TableHead>
+                              <TableHead className="hidden lg:table-cell">Cashier</TableHead>
+                              <TableHead className="w-28 hidden sm:table-cell">Actions</TableHead>
                             </TableRow>
                           </TableHeader>
                           <TableBody>
@@ -701,95 +741,514 @@ export default function DailySalesRegister() {
         </TabsContent>
       </Tabs>
 
-      {/* Close Day Dialog */}
-      <Dialog open={showCloseDialog} onOpenChange={setShowCloseDialog}>
-        <DialogContent className="sm:max-w-md">
+      {/* Close Day Dialog — Multi-step */}
+      <Dialog open={showCloseDialog} onOpenChange={(open) => { if (!open) { setCloseStep(1); setClosingNotes(''); setCashCounted(''); } setShowCloseDialog(open); }}>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CalendarCheck className="h-5 w-5 text-emerald-600" />
               Save &amp; Close Day
             </DialogTitle>
-            <DialogDescription>
-              This will finalize today&apos;s sales record. The register will be prepared fresh for the next day.
-            </DialogDescription>
           </DialogHeader>
 
+          {/* Step indicator */}
+          <div className="flex items-center justify-center gap-2 py-2">
+            {[1, 2, 3].map((step) => (
+              <div key={step} className="flex items-center gap-2">
+                <div className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+                  closeStep === step
+                    ? 'bg-emerald-600 text-white'
+                    : closeStep > step
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-slate-100 text-slate-400'
+                }`}>
+                  {closeStep > step ? <CheckCircle2 className="h-4 w-4" /> : step}
+                </div>
+                {step < 3 && <div className={`h-px w-8 transition-colors ${closeStep > step ? 'bg-emerald-400' : 'bg-slate-200'}`} />}
+              </div>
+            ))}
+          </div>
+
           {todayRecord && (
-            <div className="space-y-4 py-2">
-              {/* Summary before close */}
-              <div className="rounded-lg bg-muted/50 p-4 space-y-3">
-                <h4 className="text-sm font-semibold">Day Summary</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Transactions:</span>
-                    <span className="font-medium">{todayRecord.totalTransactions}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Items Sold:</span>
-                    <span className="font-medium">{todayRecord.totalItemsSold}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Revenue:</span>
-                    <span className="font-bold text-emerald-600">{formatGHS(todayRecord.totalRevenue)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Profit:</span>
-                    <span className="font-bold text-teal-600">{formatGHS(todayRecord.totalProfit)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Cash:</span>
-                    <span className="font-medium">{formatGHS(todayRecord.cashTotal)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Card:</span>
-                    <span className="font-medium">{formatGHS(todayRecord.cardTotal)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Mobile Money:</span>
-                    <span className="font-medium">{formatGHS(todayRecord.mobileMoneyTotal)}</span>
-                  </div>
-                  {todayRecord.totalDiscount > 0 && (
-                    <div className="flex justify-between col-span-2">
-                      <span className="text-muted-foreground">Total Discounts:</span>
+            <AnimatePresence mode="wait">
+              {closeStep === 1 && (
+                <motion.div
+                  key="step1"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4 py-2"
+                >
+                  <p className="text-sm text-muted-foreground">Review today&apos;s final numbers before closing the register.</p>
+
+                  <div className="rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-semibold">Day Summary</h4>
+                      <Badge variant="outline" className="text-xs">{todayRecord.totalTransactions} transactions</Badge>
+                    </div>
+                    <Separator />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Total Revenue</p>
+                        <p className="text-lg font-bold text-emerald-600">{formatGHS(todayRecord.totalRevenue)}</p>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-xs text-muted-foreground">Total Profit</p>
+                        <p className="text-lg font-bold text-teal-600">{formatGHS(todayRecord.totalProfit)}</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                      <div className="rounded-md bg-green-50 p-2 text-center">
+                        <p className="text-green-700 font-semibold">{formatGHS(todayRecord.cashTotal)}</p>
+                        <p className="text-green-600">Cash</p>
+                      </div>
+                      <div className="rounded-md bg-blue-50 p-2 text-center">
+                        <p className="text-blue-700 font-semibold">{formatGHS(todayRecord.cardTotal)}</p>
+                        <p className="text-blue-600">Card</p>
+                      </div>
+                      <div className="rounded-md bg-purple-50 p-2 text-center">
+                        <p className="text-purple-700 font-semibold">{formatGHS(todayRecord.mobileMoneyTotal)}</p>
+                        <p className="text-purple-600">MoMo</p>
+                      </div>
+                    </div>
+                    <Separator />
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Items Sold</span>
+                      <span className="font-medium">{todayRecord.totalItemsSold}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Discounts Given</span>
                       <span className="font-medium text-amber-600">{formatGHS(todayRecord.totalDiscount)}</span>
                     </div>
-                  )}
+                    <div className="flex justify-between text-xs">
+                      <span className="text-muted-foreground">Average Sale</span>
+                      <span className="font-medium">{formatGHS(todayRecord.totalTransactions > 0 ? todayRecord.totalRevenue / todayRecord.totalTransactions : 0)}</span>
+                    </div>
+                    {previousDayStats && (
+                      <>
+                        <Separator />
+                        <p className="text-xs font-medium text-muted-foreground">vs Previous Day</p>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-muted-foreground">Revenue</span>
+                          <span className={`font-medium ${todayRecord.totalRevenue >= previousDayStats.revenue ? 'text-emerald-600' : 'text-red-500'}`}>
+                            {formatGHS(todayRecord.totalRevenue - previousDayStats.revenue)}
+                            <span className="text-[10px] ml-1">
+                              ({todayRecord.totalRevenue > 0 ? (((todayRecord.totalRevenue - previousDayStats.revenue) / previousDayStats.revenue) * 100).toFixed(1) : '0'}%)
+                            </span>
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              {closeStep === 2 && (
+                <motion.div
+                  key="step2"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4 py-2"
+                >
+                  <p className="text-sm text-muted-foreground">Count the cash in the drawer and enter the amount below for reconciliation.</p>
+
+                  <div className="rounded-lg border bg-card p-4 space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="cash-counted">Actual Cash Counted (GHS)</Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">GHS</span>
+                        <Input
+                          id="cash-counted"
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          placeholder="0.00"
+                          className="pl-12 text-lg font-semibold h-12"
+                          value={cashCounted}
+                          onChange={(e) => setCashCounted(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    {cashCounted && parseFloat(cashCounted) >= 0 && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className={`rounded-lg p-3 text-sm ${
+                          Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01
+                            ? 'bg-emerald-50 border border-emerald-200'
+                            : parseFloat(cashCounted) > todayRecord.cashTotal
+                            ? 'bg-amber-50 border border-amber-200'
+                            : 'bg-red-50 border border-red-200'
+                        }`}
+                      >
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Expected Cash</span>
+                          <span className="font-semibold">{formatGHS(todayRecord.cashTotal)}</span>
+                        </div>
+                        <div className="flex justify-between items-center mt-1">
+                          <span className="font-medium">Counted Cash</span>
+                          <span className="font-semibold">{formatGHS(parseFloat(cashCounted))}</span>
+                        </div>
+                        <Separator className="my-2" />
+                        <div className="flex justify-between items-center">
+                          <span className="font-medium">Difference</span>
+                          <span className={`font-bold text-base ${
+                            Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01
+                              ? 'text-emerald-600'
+                              : parseFloat(cashCounted) > todayRecord.cashTotal
+                              ? 'text-amber-600'
+                              : 'text-red-600'
+                          }`}>
+                            {parseFloat(cashCounted) - todayRecord.cashTotal >= 0 ? '+' : ''}
+                            {formatGHS(parseFloat(cashCounted) - todayRecord.cashTotal)}
+                            {Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01 && ' ✓'}
+                          </span>
+                        </div>
+                      </motion.div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+
+              {closeStep === 3 && (
+                <motion.div
+                  key="step3"
+                  initial={{ opacity: 0, x: 20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ duration: 0.2 }}
+                  className="space-y-4 py-2"
+                >
+                  <p className="text-sm text-muted-foreground">Add any final notes and confirm closing.</p>
+
+                  <div className="rounded-lg border bg-card p-4 space-y-3">
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      <span>All sales have been recorded and reconciled</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                      <span>Day totals verified</span>
+                    </div>
+                    {cashCounted && (
+                      <div className="flex items-center gap-2 text-sm">
+                        <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                        <span>Cash counted: <strong>{formatGHS(parseFloat(cashCounted))}</strong></span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="closing-notes">Closing Notes (optional)</Label>
+                    <Textarea
+                      id="closing-notes"
+                      placeholder="Any notes about today's operations..."
+                      value={closingNotes}
+                      onChange={(e) => setClosingNotes(e.target.value)}
+                      rows={3}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          )}
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            {closeStep > 1 ? (
+              <Button
+                variant="outline"
+                onClick={() => setCloseStep(closeStep - 1)}
+                disabled={closing}
+              >
+                Back
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => { setShowCloseDialog(false); setCloseStep(1); }}>
+                Cancel
+              </Button>
+            )}
+
+            {closeStep < 3 ? (
+              <Button
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                onClick={() => setCloseStep(closeStep + 1)}
+              >
+                Continue
+              </Button>
+            ) : (
+              <Button
+                className="bg-emerald-600 hover:bg-emerald-700 text-white min-w-[160px]"
+                onClick={handleCloseDay}
+                disabled={closing}
+              >
+                {closing ? (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-1.5 animate-spin" />
+                    Finalizing...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="h-4 w-4 mr-1.5" />
+                    Finalize &amp; Close
+                  </>
+                )}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Closing Report Dialog */}
+      <Dialog open={showReportDialog} onOpenChange={setShowReportDialog}>
+        <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-emerald-700">
+              <CheckCircle2 className="h-5 w-5" />
+              Day Closed Successfully
+            </DialogTitle>
+          </DialogHeader>
+
+          {closedRecord && (
+            <div className="space-y-4" id="closing-report">
+              {/* Report Header */}
+              <div className="text-center border-b pb-4">
+                <h2 className="text-xl font-bold">PharmaCare Pro</h2>
+                <p className="text-sm text-muted-foreground">Day-End Closing Report</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {(() => {
+                    const d = new Date(closedRecord.date + 'T12:00:00');
+                    return d.toLocaleDateString('en-GH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+                  })()}
+                </p>
+              </div>
+
+              {/* Times */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg bg-emerald-50 p-3 text-center">
+                  <p className="text-[10px] text-emerald-600 uppercase tracking-wider font-semibold">Opened</p>
+                  <p className="font-semibold">{new Date(closedRecord.openedAt).toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' })}</p>
+                  <p className="text-xs text-muted-foreground">{closedRecord.opener?.name ?? 'System'}</p>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-3 text-center">
+                  <p className="text-[10px] text-slate-600 uppercase tracking-wider font-semibold">Closed</p>
+                  <p className="font-semibold">{closedRecord.closedAt ? new Date(closedRecord.closedAt).toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' }) : '-'}</p>
+                  <p className="text-xs text-muted-foreground">{closedRecord.closer?.name ?? 'System'}</p>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="closing-notes">Closing Notes (optional)</Label>
-                <Textarea
-                  id="closing-notes"
-                  placeholder="Any notes about today's sales..."
-                  value={closingNotes}
-                  onChange={(e) => setClosingNotes(e.target.value)}
-                  rows={3}
-                />
+              {/* Revenue Highlights */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Total Revenue</p>
+                  <p className="text-xl font-bold text-emerald-600">{formatGHS(closedRecord.totalRevenue)}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">Total Profit</p>
+                  <p className="text-xl font-bold text-teal-600">{formatGHS(closedRecord.totalProfit)}</p>
+                </div>
+              </div>
+
+              {/* Payment Breakdown */}
+              <div className="rounded-lg border p-4 space-y-2">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment Breakdown</p>
+                <div className="flex justify-between text-sm">
+                  <span className="flex items-center gap-1.5">
+                    <Banknote className="h-3.5 w-3.5 text-green-600" /> Cash
+                  </span>
+                  <span className="font-semibold">{formatGHS(closedRecord.cashTotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="flex items-center gap-1.5">
+                    <CreditCard className="h-3.5 w-3.5 text-blue-600" /> Card
+                  </span>
+                  <span className="font-semibold">{formatGHS(closedRecord.cardTotal)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="flex items-center gap-1.5">
+                    <Smartphone className="h-3.5 w-3.5 text-purple-600" /> Mobile Money
+                  </span>
+                  <span className="font-semibold">{formatGHS(closedRecord.mobileMoneyTotal)}</span>
+                </div>
+                <Separator />
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Total Transactions</span>
+                  <span className="font-semibold">{closedRecord.totalTransactions}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Items Sold</span>
+                  <span className="font-semibold">{closedRecord.totalItemsSold}</span>
+                </div>
+                {closedRecord.totalDiscount > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Discounts Given</span>
+                    <span className="font-semibold text-amber-600">{formatGHS(closedRecord.totalDiscount)}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Profit Margin */}
+              {closedRecord.totalRevenue > 0 && (
+                <div className="rounded-lg border p-3">
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs text-muted-foreground">Profit Margin</span>
+                    <span className="text-sm font-bold text-emerald-600">
+                      {((closedRecord.totalProfit / closedRecord.totalRevenue) * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <Progress
+                    value={(closedRecord.totalProfit / closedRecord.totalRevenue) * 100}
+                    className="h-2"
+                  />
+                </div>
+              )}
+
+              {/* Cash Reconciliation */}
+              {cashCounted && (
+                <div className="rounded-lg border p-3 space-y-1.5">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash Reconciliation</p>
+                  <div className="flex justify-between text-sm">
+                    <span>Expected Cash</span>
+                    <span>{formatGHS(closedRecord.cashTotal)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span>Counted Cash</span>
+                    <span>{formatGHS(parseFloat(cashCounted))}</span>
+                  </div>
+                  <Separator />
+                  <div className={`flex justify-between text-sm font-bold ${
+                    Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01
+                      ? 'text-emerald-600'
+                      : parseFloat(cashCounted) > closedRecord.cashTotal
+                      ? 'text-amber-600'
+                      : 'text-red-600'
+                  }`}>
+                    <span>Difference</span>
+                    <span>{parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}{formatGHS(parseFloat(cashCounted) - closedRecord.cashTotal)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Notes */}
+              {closingNotes && (
+                <div className="rounded-lg bg-muted/50 p-3">
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Closing Notes</p>
+                  <p className="text-sm">{closingNotes}</p>
+                </div>
+              )}
+
+              {/* Footer */}
+              <div className="text-center text-[10px] text-muted-foreground border-t pt-3">
+                <p>Report generated on {new Date().toLocaleString('en-GH')}</p>
               </div>
             </div>
           )}
 
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setShowCloseDialog(false)}>
-              Cancel
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                const content = document.getElementById('closing-report');
+                if (!content) return;
+                const win = window.open('', '_blank', 'width=500,height=700');
+                if (win) {
+                  win.document.write(`
+<!DOCTYPE html>
+<html><head><title>Day-End Report</title>
+<style>
+  body { font-family: 'Segoe UI', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; color: #1e293b; }
+  h1 { font-size: 22px; margin: 0; }
+  .text-center { text-align: center; }
+  .text-muted { color: #64748b; font-size: 13px; }
+  .border-b { border-bottom: 1px solid #e2e8f0; padding-bottom: 12px; margin-bottom: 12px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+  .card-sm { border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; }
+  .flex { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 14px; }
+  .label { color: #64748b; font-size: 12px; }
+  .value { font-weight: 600; }
+  .value-green { font-weight: 700; color: #059669; }
+  .value-teal { font-weight: 700; color: #0d9488; }
+  .value-amber { font-weight: 600; color: #d97706; }
+  .value-red { font-weight: 600; color: #dc2626; }
+  .title-sm { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+  .sep { border-top: 1px solid #e2e8f0; margin: 8px 0; }
+  .badge { background: #f1f5f9; border-radius: 4px; padding: 1px 6px; font-size: 11px; }
+  .text-lg { font-size: 20px; }
+  @media print { body { padding: 0; } }
+</style></head><body>
+  <div class="text-center border-b">
+    <h1>PharmaCare Pro</h1>
+    <p class="text-muted" style="margin:4px 0">Day-End Closing Report</p>
+    <p class="text-muted" style="font-size:12px;margin:2px 0">${new Date(closedRecord.date + 'T12:00:00').toLocaleDateString('en-GH', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+  </div>
+  <div class="grid-2" style="margin-top:12px">
+    <div class="card-sm" style="text-align:center;background:#ecfdf5">
+      <p class="text-muted" style="font-size:10px;text-transform:uppercase;font-weight:600;margin:2px 0">Opened</p>
+      <p style="font-weight:600;margin:2px 0">${new Date(closedRecord.openedAt).toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' })}</p>
+      <p class="text-muted" style="font-size:12px;margin:2px 0">${closedRecord.opener?.name ?? 'System'}</p>
+    </div>
+    <div class="card-sm" style="text-align:center;background:#f8fafc">
+      <p class="text-muted" style="font-size:10px;text-transform:uppercase;font-weight:600;margin:2px 0">Closed</p>
+      <p style="font-weight:600;margin:2px 0">${closedRecord.closedAt ? new Date(closedRecord.closedAt).toLocaleTimeString('en-GH', { hour: '2-digit', minute: '2-digit' }) : '-'}</p>
+      <p class="text-muted" style="font-size:12px;margin:2px 0">${closedRecord.closer?.name ?? 'System'}</p>
+    </div>
+  </div>
+  <div class="grid-2">
+    <div class="card">
+      <p class="label">Total Revenue</p>
+      <p class="value-green text-lg">${formatGHS(closedRecord.totalRevenue)}</p>
+    </div>
+    <div class="card">
+      <p class="label">Total Profit</p>
+      <p class="value-teal text-lg">${formatGHS(closedRecord.totalProfit)}</p>
+    </div>
+  </div>
+  <div class="card">
+    <p class="title-sm">Payment Breakdown</p>
+    <div class="flex"><span>&#x1f4b5; Cash</span><span>${formatGHS(closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>&#x1f0cf; Card</span><span>${formatGHS(closedRecord.cardTotal)}</span></div>
+    <div class="flex"><span>&#x1f4f1; Mobile Money</span><span>${formatGHS(closedRecord.mobileMoneyTotal)}</span></div>
+    <div class="sep"></div>
+    <div class="flex"><span class="label">Transactions</span><span>${closedRecord.totalTransactions}</span></div>
+    <div class="flex"><span class="label">Items Sold</span><span>${closedRecord.totalItemsSold}</span></div>
+    ${closedRecord.totalDiscount > 0 ? `<div class="flex"><span class="label">Discounts</span><span class="value-amber">${formatGHS(closedRecord.totalDiscount)}</span></div>` : ''}
+  </div>
+  ${closedRecord.totalRevenue > 0 ? `
+  <div class="card">
+    <div class="flex"><span class="label">Profit Margin</span><span class="value-green">${((closedRecord.totalProfit / closedRecord.totalRevenue) * 100).toFixed(1)}%</span></div>
+  </div>` : ''}
+  ${cashCounted ? `
+  <div class="card">
+    <p class="title-sm">Cash Reconciliation</p>
+    <div class="flex"><span>Expected Cash</span><span>${formatGHS(closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>Counted Cash</span><span>${formatGHS(parseFloat(cashCounted))}</span></div>
+    <div class="sep"></div>
+    <div class="flex"><span>Difference</span><span class="${Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01 ? 'value-green' : parseFloat(cashCounted) > closedRecord.cashTotal ? 'value-amber' : 'value-red'}">${parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}${formatGHS(parseFloat(cashCounted) - closedRecord.cashTotal)}</span></div>
+  </div>` : ''}
+  ${closingNotes ? `<div class="card"><p class="title-sm">Notes</p><p style="font-size:13px">${closingNotes}</p></div>` : ''}
+  <div class="text-center" style="margin-top:20px">
+    <button onclick="window.print()" style="padding:10px 32px;background:#059669;color:white;border:none;border-radius:8px;cursor:pointer;font-size:14px">&#x1f5a8; Print Report</button>
+  </div>
+  <p class="text-muted" style="text-align:center;font-size:10px;margin-top:12px">Report generated on ${new Date().toLocaleString('en-GH')}</p>
+</body></html>
+`);
+                  win.document.close();
+                }
+              }}
+            >
+              <Printer className="h-4 w-4 mr-1.5" />
+              Print Report
             </Button>
             <Button
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={handleCloseDay}
-              disabled={closing}
+              onClick={() => { setShowReportDialog(false); setClosedRecord(null); setPreviousDayStats(null); }}
             >
-              {closing ? (
-                <>
-                  <RefreshCw className="h-4 w-4 mr-1.5 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <CheckCircle2 className="h-4 w-4 mr-1.5" />
-                  Save &amp; Close Day
-                </>
-              )}
+              <CheckCircle2 className="h-4 w-4 mr-1.5" />
+              Done
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -925,12 +1384,12 @@ function SaleRow({
           <Badge variant="outline" className="text-xs">{sale.items?.length ?? 0}</Badge>
         </TableCell>
         <TableCell className="text-right font-semibold">{formatGHS(sale.totalAmount)}</TableCell>
-        <TableCell className="text-right text-emerald-600 font-medium">{formatGHS(sale.profit)}</TableCell>
-        <TableCell>
+        <TableCell className="text-right text-emerald-600 font-medium hidden md:table-cell">{formatGHS(sale.profit)}</TableCell>
+        <TableCell className="hidden sm:table-cell">
           <PaymentBadge method={sale.paymentMethod} />
         </TableCell>
-        <TableCell className="text-xs">{sale.user?.name ?? '-'}</TableCell>
-        <TableCell>
+        <TableCell className="text-xs hidden lg:table-cell">{sale.user?.name ?? '-'}</TableCell>
+        <TableCell className="hidden sm:table-cell">
           <div className="flex items-center gap-0.5">
             <Button
               variant="ghost"
@@ -1044,6 +1503,110 @@ function PastDayCard({
 }) {
   const isClosed = record.status === 'closed';
   const profitMargin = record.totalRevenue > 0 ? (record.totalProfit / record.totalRevenue) * 100 : 0;
+  const [itemTab, setItemTab] = useState<'sales' | 'items' | 'summary'>('sales');
+  const [itemSearch, setItemSearch] = useState('');
+
+  // Flatten all items from all sales, sorted by time
+  const allItems = useMemo(() => {
+    if (!expandedSales.length) return [];
+    const items: {
+      id: string;
+      time: string;
+      invoiceNo: string;
+      productName: string;
+      productUnit: string;
+      batchNumber: string;
+      quantity: number;
+      unitPrice: number;
+      total: number;
+      costPrice: number;
+      paymentMethod: string;
+      cashierName: string;
+      customerName: string;
+    }[] = [];
+    for (const sale of expandedSales) {
+      for (const item of sale.items ?? []) {
+        items.push({
+          id: item.id,
+          time: formatTime(sale.createdAt),
+          invoiceNo: sale.invoiceNo,
+          productName: item.product?.name ?? 'Unknown',
+          productUnit: item.product?.unit ?? '',
+          batchNumber: item.batch?.batchNumber ?? '-',
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          total: item.total,
+          costPrice: item.costPrice,
+          paymentMethod: sale.paymentMethod,
+          cashierName: sale.user?.name ?? '-',
+          customerName: sale.customer?.name ?? 'Walk-in',
+        });
+      }
+    }
+    items.sort((a, b) => {
+      const tA = expandedSales.find(s => s.invoiceNo === a.invoiceNo)?.createdAt ?? '';
+      const tB = expandedSales.find(s => s.invoiceNo === b.invoiceNo)?.createdAt ?? '';
+      return tA.localeCompare(tB);
+    });
+    return items;
+  }, [expandedSales]);
+
+  // Product summary
+  const productSummary = useMemo(() => {
+    const map = new Map<string, { name: string; unit: string; totalQty: number; totalRevenue: number; totalProfit: number; avgPrice: number; count: number }>();
+    for (const item of allItems) {
+      const key = item.productName;
+      const existing = map.get(key);
+      const profit = item.total - item.costPrice * item.quantity;
+      if (existing) {
+        existing.totalQty += item.quantity;
+        existing.totalRevenue += item.total;
+        existing.totalProfit += profit;
+        existing.count += 1;
+        existing.avgPrice = existing.totalRevenue / existing.totalQty;
+      } else {
+        map.set(key, { name: item.productName, unit: item.productUnit, totalQty: item.quantity, totalRevenue: item.total, totalProfit: profit, avgPrice: item.unitPrice, count: 1 });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalRevenue - a.totalRevenue);
+  }, [allItems]);
+
+  // Filtered items
+  const filteredItems = useMemo(() => {
+    if (!itemSearch.trim()) return allItems;
+    const q = itemSearch.toLowerCase();
+    return allItems.filter(i =>
+      i.productName.toLowerCase().includes(q) ||
+      i.invoiceNo.toLowerCase().includes(q) ||
+      i.cashierName.toLowerCase().includes(q) ||
+      i.customerName.toLowerCase().includes(q)
+    );
+  }, [allItems, itemSearch]);
+
+  // Filtered product summary
+  const filteredSummary = useMemo(() => {
+    if (!itemSearch.trim()) return productSummary;
+    const q = itemSearch.toLowerCase();
+    return productSummary.filter(p => p.name.toLowerCase().includes(q));
+  }, [productSummary, itemSearch]);
+
+  // Export items to CSV
+  const exportCSV = useCallback(() => {
+    const headers = ['Time', 'Invoice#', 'Product', 'Batch', 'Qty', 'Unit Price', 'Total', 'Payment', 'Cashier', 'Customer'];
+    const rows = filteredItems.map(i => [
+      i.time, i.invoiceNo, i.productName, i.batchNumber,
+      i.quantity.toString(), fmtGHS(i.unitPrice), fmtGHS(i.total),
+      i.paymentMethod, i.cashierName, i.customerName,
+    ]);
+    const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sales-items-${record.date}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [filteredItems, record.date]);
 
   return (
     <AnimatePresence>
@@ -1148,56 +1711,208 @@ function PastDayCard({
                       ))}
                     </div>
                   ) : expandedSales.length > 0 ? (
-                    <ScrollArea className="max-h-80">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-6" />
-                            <TableHead>Time</TableHead>
-                            <TableHead>Invoice#</TableHead>
-                            <TableHead>Customer</TableHead>
-                            <TableHead className="text-right">Total</TableHead>
-                            <TableHead>Payment</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {expandedSales.map((sale) => (
-                            <Fragment key={sale.id}>
-                            <TableRow
-                              className="cursor-pointer hover:bg-muted/50"
-                              onClick={() => onExpandSale(sale.id, sale.items)}
-                            >
-                              <TableCell className="w-6">
-                                {expandedSaleId === sale.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                              </TableCell>
-                              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(sale.createdAt)}</TableCell>
-                              <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
-                              <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
-                              <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
-                              <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
-                            </TableRow>
-                            {expandedSaleId === sale.id && (
-                              <TableRow className="bg-muted/30">
-                                <TableCell colSpan={6} className="px-8 py-2">
-                                  <table className="w-full text-xs">
-                                    <tbody>
-                                      {(sale.items ?? []).map((item) => (
-                                        <tr key={item.id} className="border-b border-dotted">
-                                          <td className="py-1">{item.product?.name ?? 'Product'}</td>
-                                          <td className="text-center py-1">{item.quantity}</td>
-                                          <td className="text-right py-1">{fmtGHS(item.total)}</td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </TableCell>
-                              </TableRow>
+                    <div className="space-y-3">
+                      {/* Sub-tabs for admin: Sales | All Items | Product Summary */}
+                      <div className="flex items-center justify-between" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-1 bg-muted/60 rounded-lg p-0.5">
+                          <button
+                            onClick={() => setItemTab('sales')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${itemTab === 'sales' ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            <Receipt className="h-3.5 w-3.5 inline mr-1" />
+                            Sales
+                          </button>
+                          <button
+                            onClick={() => setItemTab('items')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${itemTab === 'items' ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            <Package className="h-3.5 w-3.5 inline mr-1" />
+                            All Items
+                            <span className="ml-1 text-[10px] text-muted-foreground">({allItems.length})</span>
+                          </button>
+                          <button
+                            onClick={() => setItemTab('summary')}
+                            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${itemTab === 'summary' ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            <BarChart3 className="h-3.5 w-3.5 inline mr-1" />
+                            Summary
+                          </button>
+                        </div>
+                        {(itemTab === 'items' || itemTab === 'summary') && (
+                          <div className="flex items-center gap-2">
+                            <div className="relative">
+                              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                              <Input
+                                placeholder="Search products..."
+                                value={itemSearch}
+                                onChange={(e) => setItemSearch(e.target.value)}
+                                className="h-8 w-44 pl-7 text-xs"
+                              />
+                            </div>
+                            {itemTab === 'items' && filteredItems.length > 0 && (
+                              <Button variant="outline" size="sm" className="h-8 text-xs" onClick={(e) => { e.stopPropagation(); exportCSV(); }}>
+                                <Download className="h-3.5 w-3.5 mr-1" />
+                                CSV
+                              </Button>
                             )}
-                            </Fragment>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </ScrollArea>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Sales Tab */}
+                      {itemTab === 'sales' && (
+                        <ScrollArea className="max-h-80">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead className="w-6" />
+                                <TableHead>Time</TableHead>
+                                <TableHead>Invoice#</TableHead>
+                                <TableHead>Customer</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
+                                <TableHead>Payment</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {expandedSales.map((sale) => (
+                                <Fragment key={sale.id}>
+                                <TableRow
+                                  className="cursor-pointer hover:bg-muted/50"
+                                  onClick={() => onExpandSale(sale.id, sale.items)}
+                                >
+                                  <TableCell className="w-6">
+                                    {expandedSaleId === sale.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(sale.createdAt)}</TableCell>
+                                  <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
+                                  <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
+                                  <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
+                                  <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
+                                </TableRow>
+                                {expandedSaleId === sale.id && (
+                                  <TableRow className="bg-muted/30">
+                                    <TableCell colSpan={6} className="px-8 py-2">
+                                      <table className="w-full text-xs">
+                                        <tbody>
+                                          {(sale.items ?? []).map((item) => (
+                                            <tr key={item.id} className="border-b border-dotted">
+                                              <td className="py-1">{item.product?.name ?? 'Product'}</td>
+                                              <td className="text-center py-1">{item.quantity}</td>
+                                              <td className="text-right py-1">{fmtGHS(item.total)}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </TableCell>
+                                  </TableRow>
+                                )}
+                                </Fragment>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </ScrollArea>
+                      )}
+
+                      {/* All Items Tab */}
+                      {itemTab === 'items' && (
+                        <ScrollArea className="max-h-96">
+                          {filteredItems.length > 0 ? (
+                            <Table>
+                              <TableHeader>
+                                <TableRow>
+                                  <TableHead className="text-[10px]">Time</TableHead>
+                                  <TableHead className="text-[10px]">Product</TableHead>
+                                  <TableHead className="text-[10px]">Batch</TableHead>
+                                  <TableHead className="text-[10px] text-center">Qty</TableHead>
+                                  <TableHead className="text-[10px] text-right">Unit Price</TableHead>
+                                  <TableHead className="text-[10px] text-right">Total</TableHead>
+                                  <TableHead className="text-[10px]">Payment</TableHead>
+                                  <TableHead className="text-[10px]">Cashier</TableHead>
+                                  <TableHead className="text-[10px]">Invoice</TableHead>
+                                </TableRow>
+                              </TableHeader>
+                              <TableBody>
+                                {filteredItems.map((item, idx) => (
+                                  <TableRow key={item.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-muted/20'}>
+                                    <TableCell className="text-[11px] text-muted-foreground whitespace-nowrap">{item.time}</TableCell>
+                                    <TableCell className="text-xs font-medium">{item.productName}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground font-mono">{item.batchNumber}</TableCell>
+                                    <TableCell className="text-xs text-center">{item.quantity} {item.productUnit}</TableCell>
+                                    <TableCell className="text-xs text-right">{fmtGHS(item.unitPrice)}</TableCell>
+                                    <TableCell className="text-xs text-right font-semibold">{fmtGHS(item.total)}</TableCell>
+                                    <TableCell><PaymentBadge method={item.paymentMethod} /></TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">{item.cashierName}</TableCell>
+                                    <TableCell className="text-[11px] font-mono text-muted-foreground">{item.invoiceNo}</TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          ) : (
+                            <p className="text-center text-sm text-muted-foreground py-6">No items match your search</p>
+                          )}
+                        </ScrollArea>
+                      )}
+
+                      {/* Product Summary Tab */}
+                      {itemTab === 'summary' && (
+                        <ScrollArea className="max-h-96">
+                          {filteredSummary.length > 0 ? (
+                            <div className="space-y-2">
+                              {/* Top-level stats */}
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 mb-3">
+                                <div className="rounded-lg bg-emerald-50 p-2 text-center">
+                                  <p className="text-[10px] text-emerald-600 font-medium">Total Products</p>
+                                  <p className="text-lg font-bold text-emerald-700">{productSummary.length}</p>
+                                </div>
+                                <div className="rounded-lg bg-blue-50 p-2 text-center">
+                                  <p className="text-[10px] text-blue-600 font-medium">Total Items Sold</p>
+                                  <p className="text-lg font-bold text-blue-700">{allItems.reduce((s, i) => s + i.quantity, 0)}</p>
+                                </div>
+                                <div className="rounded-lg bg-purple-50 p-2 text-center">
+                                  <p className="text-[10px] text-purple-600 font-medium">Top Product</p>
+                                  <p className="text-sm font-bold text-purple-700 truncate">{productSummary[0]?.name ?? '-'}</p>
+                                </div>
+                              </div>
+
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead className="text-[10px]">#</TableHead>
+                                    <TableHead className="text-[10px]">Product</TableHead>
+                                    <TableHead className="text-[10px] text-center">Qty Sold</TableHead>
+                                    <TableHead className="text-[10px] text-right">Avg Price</TableHead>
+                                    <TableHead className="text-[10px] text-right">Revenue</TableHead>
+                                    <TableHead className="text-[10px] text-right">Profit</TableHead>
+                                    <TableHead className="text-[10px] text-right w-24">Margin</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {filteredSummary.map((p, idx) => (
+                                    <TableRow key={p.name} className={idx % 2 === 0 ? 'bg-white' : 'bg-muted/20'}>
+                                      <TableCell className="text-[11px] text-muted-foreground">{idx + 1}</TableCell>
+                                      <TableCell className="text-xs font-medium">{p.name}</TableCell>
+                                      <TableCell className="text-xs text-center">
+                                        <Badge variant="secondary" className="text-[10px] font-mono">{p.totalQty}</Badge>
+                                      </TableCell>
+                                      <TableCell className="text-xs text-right">{fmtGHS(p.avgPrice)}</TableCell>
+                                      <TableCell className="text-xs text-right font-semibold">{fmtGHS(p.totalRevenue)}</TableCell>
+                                      <TableCell className="text-xs text-right text-emerald-600 font-medium">{fmtGHS(p.totalProfit)}</TableCell>
+                                      <TableCell className="text-xs text-right">
+                                        <span className={`font-medium ${p.totalRevenue > 0 ? (p.totalProfit / p.totalRevenue) * 100 > 30 ? 'text-emerald-600' : (p.totalProfit / p.totalRevenue) * 100 > 15 ? 'text-amber-600' : 'text-red-500' : ''}`}>
+                                          {p.totalRevenue > 0 ? ((p.totalProfit / p.totalRevenue) * 100).toFixed(1) + '%' : '-'}
+                                        </span>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          ) : (
+                            <p className="text-center text-sm text-muted-foreground py-6">No products match your search</p>
+                          )}
+                        </ScrollArea>
+                      )}
+                    </div>
                   ) : (
                     <p className="text-center text-sm text-muted-foreground py-8">No sales recorded for this day</p>
                   )}

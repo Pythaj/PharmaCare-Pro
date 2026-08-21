@@ -175,7 +175,7 @@ export default function PurchasesView() {
                   <TableHead className="text-center">Items</TableHead>
                   <TableHead className="text-right">Total Amount</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead>Recorded By</TableHead>
+                  <TableHead className="hidden md:table-cell">Recorded By</TableHead>
                   {canManagePurchases && <TableHead className="w-20">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
@@ -188,7 +188,7 @@ export default function PurchasesView() {
                       <TableCell><Skeleton className="h-4 w-8 mx-auto" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-24" /></TableCell>
+                      <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-24" /></TableCell>
                       {canManagePurchases && <TableCell><Skeleton className="h-4 w-8" /></TableCell>}
                     </TableRow>
                   ))
@@ -204,7 +204,7 @@ export default function PurchasesView() {
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(purchase.createdAt).toLocaleDateString('en-GH')}
                       </TableCell>
-                      <TableCell className="text-sm">{purchase.user?.name ?? '-'}</TableCell>
+                      <TableCell className="hidden md:table-cell text-sm">{purchase.user?.name ?? '-'}</TableCell>
                       {canManagePurchases && (
                         <TableCell>
                           <Button
@@ -261,7 +261,7 @@ export default function PurchasesView() {
             <DialogTitle>Record New Purchase</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <Label>Supplier *</Label>
                 <Select value={form.supplierId} onValueChange={(v) => setForm({ ...form, supplierId: v })}>

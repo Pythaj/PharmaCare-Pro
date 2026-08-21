@@ -182,7 +182,7 @@ export default function ReturnsView() {
                   <TableHead>Return ID</TableHead>
                   <TableHead>Sale Invoice</TableHead>
                   <TableHead>Customer</TableHead>
-                  <TableHead>Reason</TableHead>
+                  <TableHead className="hidden md:table-cell">Reason</TableHead>
                   <TableHead className="text-right">Refund Amount</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Date</TableHead>
@@ -196,7 +196,7 @@ export default function ReturnsView() {
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
-                      <TableCell><Skeleton className="h-4 w-32" /></TableCell>
+                      <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-32" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
@@ -209,7 +209,7 @@ export default function ReturnsView() {
                       <TableCell className="font-mono text-xs">RET-{ret.id.slice(0, 8)}</TableCell>
                       <TableCell className="font-mono text-xs">{ret.sale?.invoiceNo ?? '-'}</TableCell>
                       <TableCell>{ret.sale?.customer?.name ?? 'Walk-in'}</TableCell>
-                      <TableCell className="max-w-[200px] truncate">{ret.reason}</TableCell>
+                      <TableCell className="hidden md:table-cell max-w-[200px] truncate">{ret.reason}</TableCell>
                       <TableCell className="text-right font-medium">{formatGHS(ret.totalRefund)}</TableCell>
                       <TableCell>{getStatusBadge(ret.status)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">

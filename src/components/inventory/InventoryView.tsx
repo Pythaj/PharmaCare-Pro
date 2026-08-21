@@ -652,7 +652,7 @@ export default function InventoryView() {
           {canManageInventory && (
             <Button
               className="bg-emerald-600 hover:bg-emerald-700 text-white"
-              onClick={() => navigate('purchases')}
+              onClick={() => navigate('products')}
             >
               Add Stock
             </Button>
@@ -862,6 +862,7 @@ function ProductRow({
                 <p className="font-medium mb-2 text-xs uppercase tracking-wider text-muted-foreground">
                   Batch Details — {product.name}
                 </p>
+                <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-dotted">
@@ -899,6 +900,7 @@ function ProductRow({
                     })}
                   </tbody>
                 </table>
+                </div>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">No batches available for this product.</p>

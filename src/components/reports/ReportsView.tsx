@@ -28,7 +28,7 @@ import {
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart.tsx';
 import {
   PieChart, Pie, Cell, AreaChart, Area, XAxis, YAxis, CartesianGrid,
-  BarChart, Bar,
+  BarChart, Bar, Legend
 } from 'recharts';
 import type { ChartDataPoint } from '@/types';
 import { toast } from 'sonner';
@@ -745,21 +745,23 @@ export default function ReportsView() {
             {loading ? (
               <Skeleton className="h-64 w-full" />
             ) : revenueData.length > 0 ? (
-              <ChartContainer config={revenueConfig} className="h-64">
-                <AreaChart data={revenueData}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                  <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} />
-                  <YAxis fontSize={11} tickLine={false} axisLine={false} />
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                  <defs>
-                    <linearGradient id="reportRevenueGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <Area type="monotone" dataKey="value" stroke="var(--color-revenue)" fill="url(#reportRevenueGrad)" strokeWidth={2} />
-                </AreaChart>
-              </ChartContainer>
+              <div className="overflow-x-auto">
+                <ChartContainer config={revenueConfig} className="h-64 min-w-[350px]">
+                  <AreaChart data={revenueData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="name" fontSize={11} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
+                    <YAxis fontSize={11} tickLine={false} axisLine={false} tickMargin={8} width={45} />
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <defs>
+                      <linearGradient id="reportRevenueGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <Area type="monotone" dataKey="value" stroke="var(--color-revenue)" fill="url(#reportRevenueGrad)" strokeWidth={2} />
+                  </AreaChart>
+                </ChartContainer>
+              </div>
             ) : (
               <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
                 No revenue data for this period
@@ -777,27 +779,27 @@ export default function ReportsView() {
             {loading ? (
               <Skeleton className="h-64 w-full" />
             ) : paymentData.length > 0 ? (
-              <ChartContainer config={pieConfig} className="h-64">
-                <PieChart>
-                  <Pie
-                    data={paymentData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={90}
-                    paddingAngle={4}
-                    dataKey="value"
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                    labelLine={false}
-                    fontSize={12}
-                  >
-                    {paymentData.map((_, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <ChartTooltip content={<ChartTooltipContent />} />
-                </PieChart>
-              </ChartContainer>
+              <div className="overflow-x-auto">
+                <ChartContainer config={pieConfig} className="h-64 min-w-[300px]">
+                  <PieChart>
+                    <Pie
+                      data={paymentData}
+                      cx="50%"
+                      cy="45%"
+                      innerRadius="45%"
+                      outerRadius="65%"
+                      paddingAngle={4}
+                      dataKey="value"
+                    >
+                      {paymentData.map((_, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <ChartTooltip content={<ChartTooltipContent />} />
+                    <Legend verticalAlign="bottom" height={36} iconType="circle" wrapperStyle={{ fontSize: '12px' }} />
+                  </PieChart>
+                </ChartContainer>
+              </div>
             ) : (
               <div className="h-64 flex items-center justify-center text-muted-foreground text-sm">
                 No payment data for this period
@@ -859,12 +861,12 @@ export default function ReportsView() {
 
             {/* Monthly bar chart */}
             {monthlySummary.length > 1 && (
-              <div className="mt-6">
-                <ChartContainer config={monthBarConfig} className="h-48">
-                  <BarChart data={monthlySummary}>
+              <div className="mt-6 overflow-x-auto">
+                <ChartContainer config={monthBarConfig} className="h-48 min-w-[400px]">
+                  <BarChart data={monthlySummary} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="month" fontSize={11} tickLine={false} axisLine={false} />
-                    <YAxis fontSize={11} tickLine={false} axisLine={false} />
+                    <XAxis dataKey="month" fontSize={11} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
+                    <YAxis fontSize={11} tickLine={false} axisLine={false} tickMargin={8} width={45} />
                     <ChartTooltip content={<ChartTooltipContent />} />
                     <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[4, 4, 0, 0]} />
                     <Bar dataKey="profit" fill="var(--color-profit)" radius={[4, 4, 0, 0]} />

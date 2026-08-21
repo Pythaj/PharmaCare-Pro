@@ -29,14 +29,12 @@ export function usePermissions() {
 
   /** Check if a specific write permission is granted */
   const canWrite = useCallback(
-    (resource: 'products' | 'inventory' | 'purchases' | 'customers' | 'sales' | 'settings') => {
+    (resource: 'products' | 'inventory' | 'sales' | 'settings') => {
       switch (resource) {
         case 'products':
         case 'inventory':
-        case 'purchases':
         case 'settings':
           return isAdmin;
-        case 'customers':
         case 'sales':
           return true;
         default:

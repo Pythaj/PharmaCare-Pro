@@ -17,6 +17,7 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  Download,
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
@@ -25,6 +26,9 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
+import { useState } from 'react';
+import { InstallFAB, detectPlatform, isInstallReady, triggerInstall } from '@/components/InstallPrompt';
+import type { Platform } from '@/components/InstallPrompt';
 
 interface NavItem {
   label: string;
@@ -127,13 +131,25 @@ export function Sidebar() {
   const { currentUser, currentPage, sidebarOpen, navigate, toggleSidebar, setSidebarOpen, setShowProfileDialog, appName } = useAppStore();
   const userRole = currentUser?.role || 'sales';
   const isAdmin = userRole === 'admin';
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+  const isStandalone = typeof window !== 'undefined' && (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as any).standalone === true
+  );
 
   function handleUserSectionClick() {
     if (isAdmin) {
       navigate('settings');
+      if (window.innerWidth < 1024) setSidebarOpen(false);
     } else {
       setShowProfileDialog(true);
+      if (window.innerWidth < 1024) setSidebarOpen(false);
     }
+  }
+
+  function handleNavClick(page: Page) {
+    navigate(page);
+    if (window.innerWidth < 1024) setSidebarOpen(false);
   }
 
   const visibleSections = isAdmin ? adminNavSections : salesNavSections;
@@ -259,7 +275,7 @@ export function Sidebar() {
                       const button = (
                         <button
                           key={item.page}
-                          onClick={() => navigate(item.page)}
+                          onClick={() => handleNavClick(item.page)}
                           className={cn(
                             'group/nav relative flex w-full items-center rounded-lg text-sm font-medium transition-all duration-200',
                             sidebarOpen
@@ -346,6 +362,43 @@ export function Sidebar() {
       {/* Bottom separator */}
       <div className="mx-3 h-px bg-gradient-to-r from-transparent via-slate-800 to-transparent" />
 
+      {/* ─── Install App Button ─── */}
+      {!isStandalone && (
+        <div className="shrink-0 px-3 pt-2">
+          {sidebarOpen ? (
+            <button
+              onClick={() => setShowInstallPrompt(true)}
+              className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-200 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20"
+            >
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/20">
+                <Download className="h-3.5 w-3.5 text-emerald-400" />
+              </div>
+              <span className="text-xs font-medium text-emerald-400">Download App</span>
+            </button>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={() => setShowInstallPrompt(true)}
+                  className="flex w-full items-center justify-center rounded-lg py-2 transition-all duration-200 hover:bg-emerald-500/10"
+                >
+                  <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-500/20">
+                    <Download className="h-3.5 w-3.5 text-emerald-400" />
+                  </div>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent
+                side="right"
+                sideOffset={12}
+                className="bg-slate-900 text-white border-slate-700/50 text-xs font-medium px-3 py-1.5 rounded-lg shadow-xl"
+              >
+                Download App
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      )}
+
       {/* ─── User Info — always pinned at bottom ─── */}
       <div className="shrink-0 p-3">
         <TooltipProvider delayDuration={150}>
@@ -412,6 +465,16 @@ export function Sidebar() {
 
   return (
     <>
+      {/* Install prompt overlay */}
+      <AnimatePresence>
+        {showInstallPrompt && (
+          <InstallOverlay
+            appName={appName}
+            onClose={() => setShowInstallPrompt(false)}
+          />
+        )}
+      </AnimatePresence>
+
       {/* Mobile overlay + drawer */}
       <AnimatePresence>
         {sidebarOpen && (
@@ -462,5 +525,118 @@ export function Sidebar() {
         </motion.div>
       </div>
     </>
+  );
+}
+
+/* ──────────────────────────────── */
+/*  Install Overlay (desktop-aware) */
+/* ──────────────────────────────── */
+
+function InstallOverlay({ appName, onClose }: { appName: string; onClose: () => void }) {
+  const platform = detectPlatform();
+  const installReady = isInstallReady();
+  const [installing, setInstalling] = useState(false);
+  const [justInstalled, setJustInstalled] = useState(false);
+  const isDesktop = platform === 'desktop';
+  const isIOS = platform === 'ios';
+  const isAndroid = platform === 'android';
+
+  const handleInstall = async () => {
+    setInstalling(true);
+    const success = await triggerInstall();
+    setInstalling(false);
+    if (success) {
+      setJustInstalled(true);
+      setTimeout(() => onClose(), 2000);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.9 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl"
+      >
+        <div className="text-center mb-4">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600">
+            <Download className="h-7 w-7 text-white" />
+          </div>
+          <h3 className="text-lg font-bold text-slate-900">Download App</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            {isDesktop
+              ? 'Install PharmaCare Pro on your PC for quick access'
+              : `Add ${appName} to your home screen for the best experience`}
+          </p>
+        </div>
+
+        {justInstalled ? (
+          <div className="flex flex-col items-center gap-2 py-4">
+            <div className="flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100">
+              <Download className="h-7 w-7 text-emerald-600" />
+            </div>
+            <p className="text-sm font-semibold text-slate-900">Installed!</p>
+            <p className="text-xs text-slate-500 text-center">Launch PharmaCare Pro from your desktop or start menu.</p>
+          </div>
+        ) : isIOS ? (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800 mb-4">
+            <p>Tap the Share button in Safari, then select <strong>"Add to Home Screen"</strong>.</p>
+          </div>
+        ) : installReady ? (
+          <div className="space-y-3 mb-4">
+            <button
+              onClick={handleInstall}
+              disabled={installing}
+              className="w-full h-11 rounded-xl bg-emerald-600 text-sm font-semibold text-white hover:bg-emerald-500 transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-200"
+            >
+              {installing ? (
+                <>
+                  <span className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Installing...
+                </>
+              ) : (
+                <>
+                  <Download className="h-4 w-4" />
+                  {isDesktop ? 'Install on PC' : 'Install App'}
+                </>
+              )}
+            </button>
+            {isDesktop && (
+              <p className="text-xs text-slate-400 text-center">
+                Opens as a standalone window. Works offline.
+              </p>
+            )}
+          </div>
+        ) : isDesktop ? (
+          <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800 mb-4">
+            <p className="font-medium mb-1">Install on PC</p>
+            <p>Open Chrome menu <strong>(⋮)</strong> → <strong>Cast, Save, and Share</strong> → <strong>Install PharmaCare Pro…</strong></p>
+          </div>
+        ) : isAndroid ? (
+          <div className="rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800 mb-4">
+            <p>Open Chrome menu <strong>(⋮)</strong> → <strong>Add to Home Screen</strong>.</p>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-sm text-slate-600 mb-4">
+            <p>Use your browser's <strong>Add to Home Screen</strong> option.</p>
+          </div>
+        )}
+
+        <button
+          onClick={onClose}
+          className="w-full h-11 rounded-xl bg-slate-100 text-sm font-medium text-slate-600 hover:bg-slate-200 transition-colors"
+        >
+          {justInstalled ? 'Done' : 'Close'}
+        </button>
+      </motion.div>
+    </motion.div>
   );
 }

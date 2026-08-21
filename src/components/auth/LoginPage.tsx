@@ -13,6 +13,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { useAppStore } from '@/stores/app-store';
 import { toast } from 'sonner';
 import type { User } from '@/types';
+import InstallPrompt, { InstallFAB } from '@/components/InstallPrompt';
 
 const loginSchema = z.object({
   email: z.string().email('Please enter a valid email address'),
@@ -52,7 +53,8 @@ export default function LoginPage() {
         throw new Error(result.error || 'Login failed');
       }
 
-      const user: User = await res.json();
+      const result = await res.json();
+      const user: User = result.user;
       login(user);
       toast.success(`Welcome back, ${user.name}!`, {
         description: 'You have successfully signed in.',
@@ -249,8 +251,38 @@ export default function LoginPage() {
                 </Button>
               </form>
 
+              {/* Mobile Features (hidden on desktop) */}
+              <div className="mt-6 lg:hidden">
+                <details className="group">
+                  <summary className="flex items-center justify-between cursor-pointer text-xs font-semibold uppercase tracking-wider text-slate-400 hover:text-slate-600 select-none py-2">
+                    <span>Features</span>
+                    <svg className="h-4 w-4 transition-transform group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </summary>
+                  <div className="mt-2 space-y-2 text-sm text-slate-600">
+                    {[
+                      'Point of Sale & Billing',
+                      'Inventory & Stock Management',
+                      'Purchase & Procurement',
+                      'Customer Relationship Management',
+                      'Comprehensive Reports & Analytics',
+                    ].map((feature) => (
+                      <div key={feature} className="flex items-center gap-3 rounded-lg bg-slate-50 px-3 py-2">
+                        <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full" style={{ backgroundColor: 'var(--accent-primary-muted)' }}>
+                          <svg className="h-3 w-3" style={{ color: 'var(--accent-primary)' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        </div>
+                        <span className="text-xs">{feature}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              </div>
+
               {/* Demo credentials */}
-              <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Demo Credentials
                 </p>
@@ -283,6 +315,10 @@ export default function LoginPage() {
           </Card>
         </motion.div>
       </div>
+
+      {/* PWA Install Prompt */}
+      <InstallPrompt />
+      <InstallFAB />
     </div>
   );
 }
