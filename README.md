@@ -285,4 +285,5 @@ The system uses **Ghanaian Cedi (GHS)** as its default currency, formatted using
 ## License
 
 Private — All rights reserved.#   D e p l o y   t r i g g e r   2 0 2 6 - 0 8 - 2 1   2 2 : 2 9 : 1 1  
+    
  
