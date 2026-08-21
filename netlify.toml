@@ -1,5 +1,5 @@
 [build]
-  command = "npm run build:netlify"
+  command = "npm install --legacy-peer-deps && prisma generate && next build"
   publish = ".next"
 
 [functions]
@@ -11,7 +11,7 @@
 
 [env]
   NEXT_TELEMETRY_DISABLED = "1"
-  NPM_FLAGS = "--legacy-peer-deps"
+  npm_config_legacy_peer_deps = "true"
 
 [[headers]]
   for = "/sw.js"
