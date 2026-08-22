@@ -1,6 +1,32 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { verifyPassword, generateToken } from '@/lib/auth';
+import { getAuthUser } from '@/lib/require-auth';
+
+// GET /api/auth — lightweight session check.
+// Returns the current user (from the HttpOnly JWT cookie) or 401 when the
+// session is missing/expired. Used by the client to validate persisted
+// sessions on load instead of trusting localStorage indefinitely.
+export async function GET(request: NextRequest) {
+  const payload = getAuthUser(request);
+  if (!payload) {
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  }
+
+  // Confirm the account still exists and is active (revocation support)
+  const user = await db.user.findUnique({
+    where: { id: payload.userId },
+    select: { id: true, name: true, email: true, role: true, phone: true, active: true },
+  });
+
+  if (!user || !user.active) {
+    const response = NextResponse.json({ error: 'Session invalid' }, { status: 401 });
+    response.cookies.set('auth_token', '', { httpOnly: true, maxAge: 0, path: '/' });
+    return response;
+  }
+
+  return NextResponse.json({ user });
+}
 
 export async function POST(request: NextRequest) {
   try {

@@ -1,7 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
-export async function GET() {
+/** Distinguishes client-facing validation failures from unexpected server errors */
+class ValidationError extends Error {}
+
+
+export async function GET(request: NextRequest) {
+  // Returns are an admin-managed area; both roles may read for now,
+  // matching the ReturnsView admin gating client-side
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const returns = await db.return.findMany({
       include: {
@@ -30,13 +43,28 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  // Identity from HttpOnly JWT cookie — fixes the missing-userId payload bug
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+  const userId = auth.user!.userId
+
   try {
     const body = await request.json()
-    const { saleId, userId, reason, items, status = 'approved' } = body
+    const { saleId, reason, items, status = 'approved' } = body
 
-    if (!saleId || !userId || !reason) {
+    if (!saleId || !reason) {
       return NextResponse.json(
-        { error: 'Sale ID, user ID, and reason are required' },
+        { error: 'Sale ID and reason are required' },
+        { status: 400 }
+      )
+    }
+
+    const validStatuses = ['approved', 'pending', 'rejected']
+    if (!validStatuses.includes(status)) {
+      return NextResponse.json(
+        { error: 'Status must be "approved", "pending", or "rejected"' },
         { status: 400 }
       )
     }
@@ -46,10 +74,7 @@ export async function POST(request: NextRequest) {
       where: { id: saleId },
       include: {
         items: {
-          include: {
-            product: { select: { id: true, name: true } },
-            batch: true,
-          },
+          include: { product: { select: { name: true } } },
         },
       },
     })
@@ -60,97 +85,140 @@ export async function POST(request: NextRequest) {
         { status: 404 }
       )
     }
+    if (sale.status === 'returned') {
+      return NextResponse.json(
+        { error: 'This sale has already been fully returned' },
+        { status: 400 }
+      )
+    }
 
-    let totalRefund = 0
+    // Everything below commits atomically — a partial failure can never leave
+    // stock restored without a return record (or vice versa)
+    const result = await db.$transaction(async (tx) => {
+      // Previously returned quantities per sale item, across ALL prior
+      // returns of this sale — prevents over-returning the same line twice
+      const priorReturns = await tx.returnItem.findMany({
+        where: {
+          return: { saleId, status: { in: ['approved', 'pending'] } },
+        },
+        select: { saleItemId: true, quantity: true },
+      })
+      const returnedQty = new Map<string, number>()
+      for (const ri of priorReturns) {
+        returnedQty.set(ri.saleItemId, (returnedQty.get(ri.saleItemId) ?? 0) + ri.quantity)
+      }
 
-    // Process return items
-    if (items && items.length > 0) {
-      for (const returnItem of items) {
-        const saleItem = sale.items.find(
-          (si) => si.id === returnItem.saleItemId
-        )
-
-        if (!saleItem) {
-          return NextResponse.json(
-            { error: `Sale item ${returnItem.saleItemId} not found` },
-            { status: 400 }
-          )
+      // Resolve which quantities are being returned in THIS request
+      let planned: { saleItemId: string; quantity: number; unitPrice: number; batchId: string | null }[]
+      if (items && items.length > 0) {
+        planned = []
+        for (const reqItem of items) {
+          const saleItem = sale.items.find((si) => si.id === reqItem.saleItemId)
+          if (!saleItem) {
+            throw new ValidationError(`Sale item ${reqItem.saleItemId} not found on this sale`)
+          }
+          const qty = Number(reqItem.quantity)
+          if (!Number.isInteger(qty) || qty <= 0) {
+            throw new ValidationError('Return quantity must be a positive whole number')
+          }
+          const alreadyReturned = returnedQty.get(saleItem.id) ?? 0
+          const remaining = saleItem.quantity - alreadyReturned
+          if (qty > remaining) {
+            throw new ValidationError(
+              `Cannot return ${qty} of "${saleItem.product?.name ?? 'item'}" — only ${remaining} remain returnable` +
+                ` (${alreadyReturned} of ${saleItem.quantity} already returned)`
+            )
+          }
+          planned.push({ saleItemId: saleItem.id, quantity: qty, unitPrice: saleItem.unitPrice, batchId: saleItem.batchId })
         }
-
-        if (returnItem.quantity > saleItem.quantity) {
-          return NextResponse.json(
-            { error: `Cannot return more than purchased for item ${returnItem.saleItemId}` },
-            { status: 400 }
-          )
-        }
-
-        totalRefund += saleItem.unitPrice * returnItem.quantity
-
-        // Add quantity back to batch if batch exists
-        if (saleItem.batchId && status === 'approved') {
-          await db.batch.update({
-            where: { id: saleItem.batchId },
-            data: { quantity: { increment: returnItem.quantity } },
-          })
+      } else {
+        // Full return — refund every item's remaining un-returned quantity
+        planned = sale.items
+          .map((si) => ({
+            saleItemId: si.id,
+            quantity: si.quantity - (returnedQty.get(si.id) ?? 0),
+            unitPrice: si.unitPrice,
+            batchId: si.batchId,
+          }))
+          .filter((p) => p.quantity > 0)
+        if (planned.length === 0) {
+          throw new ValidationError('All items on this sale have already been returned')
         }
       }
-    } else {
-      // Full return - refund entire sale amount
-      totalRefund = sale.totalAmount
 
-      // Add all quantities back to batches
+      const totalRefund = planned.reduce((sum, p) => sum + p.unitPrice * p.quantity, 0)
+
+      // Create the return record + its line items together
+      const returnRecord = await tx.return.create({
+        data: {
+          saleId,
+          userId,
+          reason,
+          totalRefund,
+          status,
+          items: {
+            create: planned.map((p) => ({ saleItemId: p.saleItemId, quantity: p.quantity })),
+          },
+        },
+        include: {
+          sale: {
+            select: {
+              id: true,
+              invoiceNo: true,
+              customer: { select: { id: true, name: true } },
+            },
+          },
+          user: { select: { id: true, name: true } },
+        },
+      })
+
+      // Approved returns restore stock to the original batch immediately
       if (status === 'approved') {
-        for (const saleItem of sale.items) {
-          if (saleItem.batchId) {
-            await db.batch.update({
-              where: { id: saleItem.batchId },
-              data: { quantity: { increment: saleItem.quantity } },
+        for (const p of planned) {
+          if (p.batchId) {
+            await tx.batch.update({
+              where: { id: p.batchId },
+              data: { quantity: { increment: p.quantity } },
             })
           }
         }
       }
-    }
 
-    const returnRecord = await db.return.create({
-      data: {
-        saleId,
-        userId,
-        reason,
-        totalRefund,
-        status,
-      },
-      include: {
-        sale: {
-          select: {
-            id: true,
-            invoiceNo: true,
-            customer: { select: { id: true, name: true } },
-          },
-        },
-        user: { select: { id: true, name: true } },
-      },
+      // Recompute sale status from approved refunds only
+      const approvedRefunds = await tx.return.aggregate({
+        where: { saleId, status: 'approved' },
+        _sum: { totalRefund: true },
+      })
+      const totalReturned = approvedRefunds._sum.totalRefund ?? 0
+      const newStatus =
+        totalReturned >= sale.totalAmount - 0.001 // float tolerance
+          ? 'returned'
+          : totalReturned > 0
+            ? 'partial_return'
+            : sale.status
+
+      await tx.sale.update({
+        where: { id: saleId },
+        data: { status: newStatus },
+      })
+
+      return { returnRecord, totalRefund, invoiceNo: sale.invoiceNo }
     })
 
-    // Update sale status
-    const allReturns = await db.return.findMany({
-      where: { saleId, status: 'approved' },
+    await logAudit({
+      userId,
+      action: 'RETURN',
+      entity: 'Return',
+      entityId: result.returnRecord.id,
+      details: `Processed return for ${result.invoiceNo} (refund GHS ${result.totalRefund.toFixed(2)}): ${reason}`,
+      ipAddress: getClientIp(request),
     })
 
-    const totalReturned = allReturns.reduce((sum, r) => sum + r.totalRefund, 0)
-    const newStatus =
-      totalReturned >= sale.totalAmount
-        ? 'returned'
-        : totalReturned > 0
-          ? 'partial_return'
-          : sale.status
-
-    await db.sale.update({
-      where: { id: saleId },
-      data: { status: newStatus },
-    })
-
-    return NextResponse.json(returnRecord, { status: 201 })
+    return NextResponse.json(result.returnRecord, { status: 201 })
   } catch (error) {
+    if (error instanceof ValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     console.error('Return create error:', error)
     return NextResponse.json(
       { error: 'Failed to process return' },

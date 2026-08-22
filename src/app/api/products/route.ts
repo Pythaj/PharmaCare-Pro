@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireAdmin } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(request: NextRequest) {
   try {
@@ -116,7 +117,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const auth = await requireAdmin(body)
+    // Auth from HttpOnly JWT cookie — identity is never trusted from the body
+    const auth = await requireAdmin(request)
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
@@ -143,6 +145,15 @@ export async function POST(request: NextRequest) {
       include: {
         category: { select: { id: true, name: true } },
       },
+    })
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'CREATE',
+      entity: 'Product',
+      entityId: product.id,
+      details: `Created product "${product.name}"`,
+      ipAddress: getClientIp(request),
     })
 
     return NextResponse.json(product, { status: 201 })

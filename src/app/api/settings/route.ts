@@ -1,5 +1,7 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/require-auth';
+import { logAudit, getClientIp } from '@/lib/audit';
 
 // GET /api/settings — fetch all settings as key-value pairs
 export async function GET() {
@@ -20,8 +22,13 @@ export async function GET() {
   }
 }
 
-// PUT /api/settings — upsert all provided key-value pairs
+// PUT /api/settings — upsert all provided key-value pairs (admin only)
 export async function PUT(request: NextRequest) {
+  const auth = await requireAdmin(request);
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const body = await request.json();
     const incoming: Record<string, string> = body.settings;
@@ -41,6 +48,14 @@ export async function PUT(request: NextRequest) {
         }),
       ),
     );
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'UPDATE',
+      entity: 'SystemSetting',
+      details: `Saved ${entries.length} system setting${entries.length !== 1 ? 's' : ''}`,
+      ipAddress: getClientIp(request),
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

@@ -10,6 +10,14 @@ async function hashPassword(password: string): Promise<string> {
 async function seed() {
   console.log('Seeding database...');
 
+  // Guard: prevent accidental duplicate seeding of products/sales on re-run
+  const existingProducts = await db.product.count();
+  if (existingProducts > 0) {
+    console.log(`⏭️  Database already seeded (${existingProducts} products found). Skipping.`);
+    console.log('   To re-seed, clear the database first.');
+    return;
+  }
+
   // Categories
   const catData = [
     'Pain Relief', 'Antibiotics', 'Antimalarials', 'Vitamins & Supplements',

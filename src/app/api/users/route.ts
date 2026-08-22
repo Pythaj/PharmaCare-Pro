@@ -1,19 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin } from '@/lib/require-auth'
+import { hashPassword } from '@/lib/auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
-export async function GET() {
+const USER_SELECT = {
+  id: true,
+  name: true,
+  email: true,
+  role: true,
+  phone: true,
+  active: true,
+  createdAt: true,
+  updatedAt: true,
+} as const
+
+// GET /api/users — list all users (admin only)
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const users = await db.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        phone: true,
-        active: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: USER_SELECT,
       orderBy: { createdAt: 'desc' },
     })
 
@@ -27,7 +38,13 @@ export async function GET() {
   }
 }
 
+// POST /api/users — create a user (admin only). Passwords are hashed at rest.
 export async function POST(request: NextRequest) {
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const body = await request.json()
     const { name, email, password, role, phone } = body
@@ -35,6 +52,21 @@ export async function POST(request: NextRequest) {
     if (!name || !email || !password) {
       return NextResponse.json(
         { error: 'Name, email, and password are required' },
+        { status: 400 }
+      )
+    }
+
+    if (typeof password !== 'string' || password.length < 6) {
+      return NextResponse.json(
+        { error: 'Password must be at least 6 characters' },
+        { status: 400 }
+      )
+    }
+
+    const validRoles = ['admin', 'sales']
+    if (role && !validRoles.includes(role)) {
+      return NextResponse.json(
+        { error: 'Role must be either "admin" or "sales"' },
         { status: 400 }
       )
     }
@@ -47,23 +79,27 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    // SECURITY: never store plaintext passwords
+    const hashedPassword = await hashPassword(password)
+
     const user = await db.user.create({
       data: {
         name,
         email,
-        password,
+        password: hashedPassword,
         role: role || 'sales',
         phone: phone || null,
       },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        phone: true,
-        active: true,
-        createdAt: true,
-      },
+      select: USER_SELECT,
+    })
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'CREATE',
+      entity: 'User',
+      entityId: user.id,
+      details: `Created ${user.role} account for ${user.email}`,
+      ipAddress: getClientIp(request),
     })
 
     return NextResponse.json(user, { status: 201 })
@@ -76,7 +112,13 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// PUT /api/users — update a user by id in body (admin only)
 export async function PUT(request: NextRequest) {
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const body = await request.json()
     const { id, name, email, role, phone, active, password } = body
@@ -96,27 +138,69 @@ export async function PUT(request: NextRequest) {
       )
     }
 
+    // Guard: an admin cannot deactivate or demote their own account
+    if (id === auth.user!.userId) {
+      if (active === false) {
+        return NextResponse.json(
+          { error: 'You cannot deactivate your own account' },
+          { status: 400 }
+        )
+      }
+      if (role && role !== 'admin') {
+        return NextResponse.json(
+          { error: 'You cannot change your own role' },
+          { status: 400 }
+        )
+      }
+    }
+
+    // Guard: never deactivate/demote the last active admin (prevents lockout)
+    if (
+      existing.role === 'admin' &&
+      existing.active &&
+      ((active === false) || (role && role !== 'admin'))
+    ) {
+      const activeAdmins = await db.user.count({
+        where: { role: 'admin', active: true, NOT: { id } },
+      })
+      if (activeAdmins === 0) {
+        return NextResponse.json(
+          { error: 'Cannot remove the last active administrator' },
+          { status: 400 }
+        )
+      }
+    }
+
     const updateData: Record<string, unknown> = {}
     if (name !== undefined) updateData.name = name
     if (email !== undefined) updateData.email = email
     if (role !== undefined) updateData.role = role
     if (phone !== undefined) updateData.phone = phone
     if (active !== undefined) updateData.active = active
-    if (password !== undefined) updateData.password = password
+    if (password !== undefined) {
+      if (typeof password !== 'string' || password.length < 6) {
+        return NextResponse.json(
+          { error: 'Password must be at least 6 characters' },
+          { status: 400 }
+        )
+      }
+      // SECURITY: hash on update as well
+      updateData.password = await hashPassword(password)
+    }
 
     const updated = await db.user.update({
       where: { id },
       data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        phone: true,
-        active: true,
-        createdAt: true,
-        updatedAt: true,
-      },
+      select: USER_SELECT,
+    })
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'UPDATE',
+      entity: 'User',
+      entityId: updated.id,
+      details: `Updated account ${updated.email}${password ? ' (password reset)' : ''}`,
+      ipAddress: getClientIp(request),
     })
 
     return NextResponse.json(updated)

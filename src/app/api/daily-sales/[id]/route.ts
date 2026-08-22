@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
 // GET /api/daily-sales/[id] — get a specific day's record with all sales
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id } = await params
 
@@ -21,12 +28,13 @@ export async function GET(
       return NextResponse.json({ error: 'Daily sales record not found' }, { status: 404 })
     }
 
-    // Fetch all sales for this date
+    // Fetch all sales for this date (exclusive next-midnight bound)
     const dayStart = new Date(record.date + 'T00:00:00')
-    const dayEnd = new Date(record.date + 'T23:59:59')
+    const dayEnd = new Date(record.date + 'T00:00:00')
+    dayEnd.setDate(dayEnd.getDate() + 1)
 
     const sales = await db.sale.findMany({
-      where: { createdAt: { gte: dayStart, lte: dayEnd } },
+      where: { createdAt: { gte: dayStart, lt: dayEnd } },
       include: {
         user: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, phone: true } },
@@ -46,25 +54,21 @@ export async function GET(
   }
 }
 
-// PATCH /api/daily-sales/[id] — close/submit the day's record
+// PATCH /api/daily-sales/[id] — close the day's record (staff) or reopen it (admin only)
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+  const userId = auth.user!.userId
+
   try {
     const { id } = await params
     const body = await request.json()
-    const { action, userId, notes } = body
-
-    if (!userId) {
-      return NextResponse.json({ error: 'User ID is required' }, { status: 400 })
-    }
-
-    // Validate userId exists
-    const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
-    if (!userExists) {
-      return NextResponse.json({ error: 'User not found' }, { status: 400 })
-    }
+    const { action, notes } = body
 
     const record = await db.dailySalesRecord.findUnique({ where: { id } })
 
@@ -79,10 +83,11 @@ export async function PATCH(
 
       // Recalculate final stats
       const dayStart = new Date(record.date + 'T00:00:00')
-      const dayEnd = new Date(record.date + 'T23:59:59')
+      const dayEnd = new Date(record.date + 'T00:00:00')
+      dayEnd.setDate(dayEnd.getDate() + 1)
 
       const sales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lte: dayEnd } },
+        where: { createdAt: { gte: dayStart, lt: dayEnd } },
         include: { items: true },
       })
 
@@ -117,10 +122,23 @@ export async function PATCH(
         },
       })
 
+      await logAudit({
+        userId,
+        action: 'CLOSE_DAY',
+        entity: 'DailySalesRecord',
+        entityId: id,
+        details: `Closed register for ${record.date} (GHS ${totalRevenue.toFixed(2)} across ${totalTransactions} sales)`,
+        ipAddress: getClientIp(request),
+      })
+
       return NextResponse.json(updated)
     }
 
     if (action === 'reopen') {
+      // Reopening a closed register is a privileged action
+      if (auth.user!.role !== 'admin') {
+        return NextResponse.json({ error: 'Admin access required to reopen a closed day' }, { status: 403 })
+      }
       if (record.status === 'open') {
         return NextResponse.json({ error: 'This day is already open' }, { status: 400 })
       }
@@ -136,6 +154,15 @@ export async function PATCH(
           opener: { select: { id: true, name: true } },
           closer: { select: { id: true, name: true } },
         },
+      })
+
+      await logAudit({
+        userId,
+        action: 'REOPEN_DAY',
+        entity: 'DailySalesRecord',
+        entityId: id,
+        details: `Reopened register for ${record.date}`,
+        ipAddress: getClientIp(request),
       })
 
       return NextResponse.json(updated)

@@ -64,117 +64,28 @@ import {
 import { toast } from 'sonner';
 import { useAccentTheme, THEME_SWATCHES, type AccentTheme } from '@/hooks/use-accent-theme';
 import { useAppStore } from '@/stores/app-store';
+import {
+  defaultSettings,
+  flattenSettings,
+  unflattenSettings,
+  SETTINGS_STORAGE_KEY as STORAGE_KEY,
+  type AllSettings,
+  type PharmacyInfo,
+  type ReceiptSettings,
+  type DisplaySettings,
+  type POSSettings,
+  type NotificationSettings,
+  type BusinessSettings,
+  type DataSettings,
+} from '@/lib/app-settings';
 
-// ─── Types ───────────────────────────────────────────────────────
-
-interface PharmacyInfo {
-  appName: string;
-  name: string;
-  tagline: string;
-  address: string;
-  phone: string;
-  email: string;
-  taxRate: number;
-  logoUrl: string;
-  faviconUrl: string;
-}
-
-interface ReceiptSettings {
-  headerText: string;
-  footerText: string;
-  width: string;
-  showTax: boolean;
-  showDiscount: boolean;
-}
-
-interface DisplaySettings {
-  currency: string;
-  dateFormat: string;
-  timeFormat: string;
-  primaryColor: string;
-}
-
-interface POSSettings {
-  defaultPaymentMethod: string;
-  autoPrintReceipt: boolean;
-  defaultDiscount: number;
-  requireCustomer: boolean;
-  allowNegativeStock: boolean;
-  maxLineItems: number;
-}
-
-interface NotificationSettings {
-  lowStockThreshold: number;
-  expiryAlertDays: number;
-  enableNotifications: boolean;
-}
-
-interface BusinessSettings {
-  enableHours: boolean;
-  openTime: string;
-  closeTime: string;
-  closedDays: string;
-}
-
-interface DataSettings {
-  autoBackup: string;
-  sessionTimeout: number;
-  requirePassword: boolean;
-}
-
-interface AllSettings {
-  pharmacy: PharmacyInfo;
-  receipt: ReceiptSettings;
-  display: DisplaySettings;
-  pos: POSSettings;
-  notifications: NotificationSettings;
-  business: BusinessSettings;
-  data: DataSettings;
-}
-
-// ─── Helpers: flatten / unflatten settings for API ─────────────
-
-function flattenSettings(s: AllSettings): Record<string, string> {
-  const result: Record<string, string> = {};
-  const walk = (obj: Record<string, unknown>, prefix: string) => {
-    for (const [k, v] of Object.entries(obj)) {
-      const key = prefix ? `${prefix}.${k}` : k;
-      if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-        walk(v as Record<string, unknown>, key);
-      } else {
-        result[key] = String(v);
-      }
-    }
-  };
-  walk(s as unknown as Record<string, unknown>, '');
-  return result;
-}
-
-function unflattenSettings(flat: Record<string, string>): Partial<AllSettings> {
-  const result: Record<string, unknown> = {};
-  for (const [compoundKey, value] of Object.entries(flat)) {
-    const parts = compoundKey.split('.');
-    let current: Record<string, unknown> = result;
-    for (let i = 0; i < parts.length - 1; i++) {
-      if (!current[parts[i]] || typeof current[parts[i]] !== 'object') {
-        current[parts[i]] = {};
-      }
-      current = current[parts[i]] as Record<string, unknown>;
-    }
-    // Parse numbers and booleans
-    let parsed: string | number | boolean = value;
-    if (value === 'true') parsed = true;
-    else if (value === 'false') parsed = false;
-    else if (value !== '' && !isNaN(Number(value))) parsed = Number(value);
-    current[parts[parts.length - 1]] = parsed;
-  }
-  return result as unknown as Partial<AllSettings>;
-}
+// Settings types, defaults and flatten/unflatten helpers live in
+// @/lib/app-settings — the single source of truth shared with consumers
+// such as POSView (Rule 18).
 
 // ─── Constants ──────────────────────────────────────────────────
 
 // Re-exported from hook for convenience — COLOR_SWATCHES is now imported from useAccentTheme
-const STORAGE_KEY = 'pharmacy_settings';
 
 const DAYS_OF_WEEK = [
   { label: 'Sunday', value: '0' },
@@ -188,56 +99,10 @@ const DAYS_OF_WEEK = [
 
 // ─── Defaults ────────────────────────────────────────────────────
 
-const defaults: AllSettings = {
-  pharmacy: {
-    appName: 'PharmaCare Pro',
-    name: 'GreenLife Pharmacy',
-    tagline: 'Pharmacy Management',
-    address: '123 Health Street, Accra, Ghana',
-    phone: '+233 30 123 4567',
-    email: 'info@greenlifepharmacy.com',
-    taxRate: 12.5,
-    logoUrl: '',
-    faviconUrl: '',
-  },
-  receipt: {
-    headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
-    footerText: 'Thank you for your purchase!',
-    width: '80mm',
-    showTax: true,
-    showDiscount: false,
-  },
-  display: {
-    currency: 'GHS',
-    dateFormat: 'dd/MM/yyyy',
-    timeFormat: 'HH:mm',
-    primaryColor: 'emerald',
-  },
-  pos: {
-    defaultPaymentMethod: 'cash',
-    autoPrintReceipt: true,
-    defaultDiscount: 0,
-    requireCustomer: false,
-    allowNegativeStock: false,
-    maxLineItems: 50,
-  },
-  notifications: {
-    lowStockThreshold: 10,
-    expiryAlertDays: 30,
-    enableNotifications: true,
-  },
-  business: {
-    enableHours: false,
-    openTime: '08:00',
-    closeTime: '18:00',
-    closedDays: '0',
-  },
-  data: {
-    autoBackup: 'off',
-    sessionTimeout: 480,
-    requirePassword: true,
-  },
-};
+// Defaults live in @/lib/app-settings (imported above as `defaultSettings`
+// and aliased to `defaults` below to keep existing references working).
+
+const defaults: AllSettings = defaultSettings;
 
 // ─── Component ───────────────────────────────────────────────────
 
@@ -383,8 +248,6 @@ export default function SettingsView() {
         '/api/products',
         '/api/sales',
         '/api/customers',
-        '/api/suppliers',
-        '/api/purchases',
         '/api/categories',
         '/api/batches',
         '/api/returns',

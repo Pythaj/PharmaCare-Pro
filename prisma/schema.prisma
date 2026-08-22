@@ -1,5 +1,9 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // "native" = local dev (Windows/macOS/Linux); "rhel-openssl-3.0" = AWS
+  // Lambda/Netlify Functions runtime. Without the second target, production
+  // functions crash at runtime with a missing query-engine library.
+  binaryTargets = ["native", "rhel-openssl-3.0.x", "rhel-openssl-1.1.x"]
 }
 
 datasource db {
@@ -167,6 +171,7 @@ model SaleItem {
   sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
   product   Product @relation(fields: [productId], references: [id])
   batch     Batch?  @relation(fields: [batchId], references: [id])
+  returnItems ReturnItem[]
 
   @@map("sale_items")
 }
@@ -181,9 +186,24 @@ model Return {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  sale      Sale    @relation(fields: [saleId], references: [id])
+  sale      Sale         @relation(fields: [saleId], references: [id])
+  items     ReturnItem[]
 
   @@map("returns")
+}
+
+// Per-line return tracking: makes cumulative over-return validation possible
+// (a SaleItem can never have more returned quantity than was purchased)
+model ReturnItem {
+  id         String @id @default(cuid())
+  returnId   String
+  saleItemId String
+  quantity   Int
+
+  return   Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItem SaleItem @relation(fields: [saleItemId], references: [id])
+
+  @@map("return_items")
 }
 
 model AuditLog {

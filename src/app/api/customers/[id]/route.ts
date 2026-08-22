@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id } = await params
     const customer = await db.customer.findUnique({
@@ -54,11 +60,12 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params
-    const body = await request.json()
-    const auth = await requireAdmin(body)
+    // Admin-only mutation — identity from HttpOnly JWT cookie
+    const auth = await requireAdmin(request)
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
+    const body = await request.json()
     const { name, email, phone, address } = body
 
     const existing = await db.customer.findUnique({ where: { id } })
@@ -76,6 +83,15 @@ export async function PATCH(
       },
     })
 
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'UPDATE',
+      entity: 'Customer',
+      entityId: id,
+      details: `Updated customer "${updated.name}"`,
+      ipAddress: getClientIp(request),
+    })
+
     return NextResponse.json(updated)
   } catch (error) {
     console.error('Customer update error:', error)
@@ -89,9 +105,8 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params
-    const { searchParams } = new URL(request.url)
-    const userId = searchParams.get('userId') || ''
-    const auth = await requireAdmin({ userId })
+    // Admin-only mutation — identity from HttpOnly JWT cookie
+    const auth = await requireAdmin(request)
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
@@ -112,6 +127,15 @@ export async function DELETE(
     }
 
     await db.customer.delete({ where: { id } })
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'DELETE',
+      entity: 'Customer',
+      entityId: id,
+      details: `Deleted customer "${existing.name}"`,
+      ipAddress: getClientIp(request),
+    })
 
     return NextResponse.json({ message: 'Customer deleted successfully' })
   } catch (error) {

@@ -1,18 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAuth } from '@/lib/require-auth'
 
 // GET /api/daily-sales/today — get or auto-create today's record with live sales
 export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = new URL(request.url)
-    const userId = searchParams.get('userId') || ''
+  // Authenticated staff only; identity for opener comes from the JWT cookie
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
 
-    // Validate userId exists in users table before using as FK
-    let validUserId: string | undefined = undefined
-    if (userId) {
-      const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
-      if (userExists) validUserId = userId
-    }
+  try {
+    const validUserId = auth.user!.userId
 
     // Get today's date in YYYY-MM-DD format (using system timezone)
     const now = new Date()
@@ -21,7 +20,10 @@ export async function GET(request: NextRequest) {
       String(now.getDate()).padStart(2, '0')
 
     const dayStart = new Date(todayStr + 'T00:00:00')
-    const dayEnd = new Date(todayStr + 'T23:59:59')
+    // Exclusive upper bound at next midnight — includes the full final second
+    // of the day that T23:59:59 dropped
+    const dayEnd = new Date(todayStr + 'T00:00:00')
+    dayEnd.setDate(dayEnd.getDate() + 1)
 
     // Find or create today's daily record
     let record = await db.dailySalesRecord.findUnique({
@@ -36,7 +38,7 @@ export async function GET(request: NextRequest) {
     if (!record) {
       // Calculate existing sales for today
       const todaySales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lte: dayEnd } },
+        where: { createdAt: { gte: dayStart, lt: dayEnd } },
         include: { items: true },
       })
 
@@ -71,7 +73,7 @@ export async function GET(request: NextRequest) {
     } else if (record.status === 'open') {
       // Refresh stats if day is still open (sales might have been added)
       const todaySales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lte: dayEnd } },
+        where: { createdAt: { gte: dayStart, lt: dayEnd } },
         include: { items: true },
       })
 
@@ -105,7 +107,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch today's actual sales with details
     const todaySales = await db.sale.findMany({
-      where: { createdAt: { gte: dayStart, lte: dayEnd } },
+      where: { createdAt: { gte: dayStart, lt: dayEnd } },
       include: {
         user: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, phone: true } },

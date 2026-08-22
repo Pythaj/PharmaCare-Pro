@@ -29,6 +29,9 @@ import {
   Sparkles,
   Syringe,
   Pill,
+  UserRoundPlus,
+  UserRound,
+  Zap,
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, animate, useSpring } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -47,7 +50,9 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog';
 import { useAppStore } from '@/stores/app-store';
+import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
 import { toast } from 'sonner';
+import { Label } from '@/components/ui/label';
 import type { Product, Batch, Customer, CartItem } from '@/types';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
@@ -586,6 +591,8 @@ function getCategoryIcon(catName: string) {
 // ─────────────────────────────────────────────────────────────
 export default function POSView() {
   const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer } = useAppStore();
+  // Configurable VAT rate + receipt branding come from system settings
+  const { settings } = usePharmacySettings();
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
@@ -643,6 +650,63 @@ export default function POSView() {
 
   // Auto-refresh interval ref
   const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Customer selection (restored Walk-In flow) ──
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [showWalkInDialog, setShowWalkInDialog] = useState(false);
+  const [walkInName, setWalkInName] = useState('Walk-In Customer');
+  const [walkInPhone, setWalkInPhone] = useState('');
+  const [addingWalkIn, setAddingWalkIn] = useState(false);
+
+  const selectedCustomer = useMemo(
+    () => customers.find((c) => c.id === selectedCustomerId) ?? null,
+    [customers, selectedCustomerId]
+  );
+
+  const fetchCustomers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/customers');
+      if (res.ok) {
+        const data = await res.json();
+        setCustomers(data.customers ?? []);
+      }
+    } catch { /* silent — customer attach is optional in POS */ }
+  }, []);
+
+  useEffect(() => {
+    fetchCustomers();
+  }, [fetchCustomers]);
+
+  // Quick Walk-In: register a minimal customer and attach to the current sale
+  const handleAddWalkIn = async () => {
+    if (!walkInName.trim()) {
+      toast.error('Please enter a customer name');
+      return;
+    }
+    setAddingWalkIn(true);
+    try {
+      const res = await fetch('/api/customers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: walkInName.trim(), phone: walkInPhone.trim() || undefined }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to add customer');
+      }
+      const newCustomer: Customer = await res.json();
+      setCustomers((prev) => [...prev, newCustomer]);
+      setSelectedCustomer(newCustomer.id);
+      setShowWalkInDialog(false);
+      setWalkInName('Walk-In Customer');
+      setWalkInPhone('');
+      toast.success(`${newCustomer.name} added & selected`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to add customer');
+    } finally {
+      setAddingWalkIn(false);
+    }
+  };
 
   const fetchProducts = useCallback(async (query: string) => {
     try {
@@ -782,7 +846,8 @@ export default function POSView() {
   };
 
   const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
-  const tax = subtotal * 0.125;
+  const taxRatePct = settings.pharmacy.taxRate;
+  const tax = subtotal * (taxRatePct / 100);
   const total = subtotal + tax - discount;
 
   const filteredProducts = activeCategory === 'All'
@@ -833,7 +898,7 @@ export default function POSView() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: currentUser?.id,
+          // Cashier identity comes from the HttpOnly auth cookie server-side
           customerId: selectedCustomerId,
           items: cart.map(item => ({
             productId: item.productId,
@@ -940,6 +1005,41 @@ export default function POSView() {
       </div>
     );
   }
+
+  // ── Customer attach bar (shared by desktop cart panel & mobile sheet) ──
+  const customerBlock = (
+    <div className="shrink-0 px-3 py-2 border-b border-slate-100/80 bg-white/90">
+      {selectedCustomer ? (
+        <div className="flex items-center justify-between gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-2.5 py-1.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="h-6 w-6 shrink-0 rounded-full bg-emerald-600 flex items-center justify-center">
+              <UserRound className="h-3 w-3 text-white" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[9px] font-semibold uppercase tracking-wider text-emerald-600/70 leading-none">Customer</p>
+              <p className="text-[12px] font-medium text-slate-800 truncate leading-tight">{selectedCustomer.name}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSelectedCustomer(null)}
+            title="Detach customer"
+            className="shrink-0 h-6 w-6 rounded-md text-emerald-500 hover:text-red-500 hover:bg-white transition-colors flex items-center justify-center"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setShowWalkInDialog(true)}
+          className="w-full flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-emerald-300 bg-emerald-50/40 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50 hover:border-emerald-400 transition-colors"
+        >
+          <Zap className="h-3 w-3" />
+          Quick Walk-In
+          <span className="font-normal text-emerald-600/60">— register &amp; attach customer</span>
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <div className="flex-col lg:flex-row flex h-full gap-0 pb-20 lg:pb-0">
@@ -1280,6 +1380,7 @@ export default function POSView() {
                 <button onClick={clearCart} className="text-xs font-medium text-red-400 hover:text-red-600">Clear all</button>
               )}
             </div>
+            {customerBlock}
             {/* Cart items scrollable */}
             <div className="flex-1 overflow-y-auto px-3 py-2">
               {cart.length > 0 ? (
@@ -1342,7 +1443,7 @@ export default function POSView() {
             <div className="shrink-0 border-t border-slate-100 bg-white px-4 pt-3 pb-6 space-y-3">
               <div className="rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2.5 space-y-1">
                 <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="font-medium font-mono">{formatGHS(subtotal)}</span></div>
-                <div className="flex justify-between text-xs"><span className="text-slate-400">VAT (12.5%)</span><span className="font-mono text-slate-500">{formatGHS(tax)}</span></div>
+                <div className="flex justify-between text-xs"><span className="text-slate-400">VAT ({taxRatePct}%)</span><span className="font-mono text-slate-500">{formatGHS(tax)}</span></div>
                 <div className="flex items-center justify-between text-xs"><span className="text-slate-400">Discount</span>
                   <Input type="number" value={discount || ''} onChange={(e) => setDiscount(Number(e.target.value) || 0)} className="w-20 h-6 text-xs text-right bg-white border-slate-200 px-1.5 rounded-md" placeholder="0.00" />
                 </div>
@@ -1415,6 +1516,7 @@ export default function POSView() {
         </div>
 
         {/* ─── Cart Items — premium scroll, NEVER pushes payment ─── */}
+        {customerBlock}
         <div className="flex-1 min-h-0 overflow-y-auto cart-items-scroll relative">
           {/* Top fade when scrolled */}
           <div className="sticky top-0 z-10 h-3 bg-gradient-to-b from-white via-white/80 to-transparent pointer-events-none" />
@@ -1519,7 +1621,7 @@ export default function POSView() {
                 <span className="text-slate-600 font-medium font-mono tabular-nums">{formatGHS(subtotal)}</span>
               </div>
               <div className="flex justify-between text-[11px]">
-                <span className="text-slate-400">VAT (12.5%)</span>
+                <span className="text-slate-400">VAT ({taxRatePct}%)</span>
                 <span className="text-slate-500 font-mono tabular-nums">{formatGHS(tax)}</span>
               </div>
               <div className="flex items-center justify-between text-[11px]">
@@ -1599,6 +1701,69 @@ export default function POSView() {
         )}
       </AnimatePresence>
 
+      {/* Quick Walk-In Dialog */}
+      <Dialog open={showWalkInDialog} onOpenChange={setShowWalkInDialog}>
+        <DialogContent className="sm:max-w-sm p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-5 pt-5 pb-3">
+            <DialogTitle className="flex items-center gap-2 text-base text-slate-900">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100">
+                <UserRoundPlus className="h-4 w-4 text-emerald-600" />
+              </span>
+              Quick Walk-In
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Register a customer in seconds — only a name is needed. The customer is attached to this sale automatically.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="px-5 pb-5 space-y-3.5">
+            <div className="space-y-1.5">
+              <Label htmlFor="walkin-name" className="text-xs font-medium text-slate-600">Name *</Label>
+              <Input
+                id="walkin-name"
+                value={walkInName}
+                onChange={(e) => setWalkInName(e.target.value)}
+                placeholder="Customer name"
+                disabled={addingWalkIn}
+                autoFocus
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="walkin-phone" className="text-xs font-medium text-slate-600">Phone (optional)</Label>
+              <Input
+                id="walkin-phone"
+                type="tel"
+                value={walkInPhone}
+                onChange={(e) => setWalkInPhone(e.target.value)}
+                placeholder="e.g. 024 000 0000"
+                disabled={addingWalkIn}
+              />
+            </div>
+            <p className="text-[10px] text-slate-400">
+              Full details can be added later from the Customers page.
+            </p>
+          </div>
+          <DialogFooter className="flex-row gap-2 px-5 pb-4 border-t border-slate-100 pt-3">
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={() => setShowWalkInDialog(false)}
+              disabled={addingWalkIn}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={handleAddWalkIn}
+              disabled={addingWalkIn || !walkInName.trim()}
+            >
+              {addingWalkIn ? 'Adding...' : 'Add & Select'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>
         <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
@@ -1617,11 +1782,11 @@ export default function POSView() {
                   <div className="relative">
                     <div className="flex items-center justify-center gap-1.5 mb-0.5">
                       <PillLogo className="h-4 w-4 text-emerald-200" />
-                      <h3 className="text-base font-bold tracking-wide">GreenLife Pharmacy</h3>
+                      <h3 className="text-base font-bold tracking-wide">{settings.pharmacy.name}</h3>
                       <PillLogo className="h-4 w-4 text-emerald-200" />
                     </div>
-                    <p className="text-emerald-100 text-[10px]">123 Health Street, Accra, Ghana</p>
-                    <p className="text-emerald-100 text-[10px]">Tel: +233 30 123 4567</p>
+                    <p className="text-emerald-100 text-[10px]">{settings.pharmacy.address}</p>
+                    <p className="text-emerald-100 text-[10px]">Tel: {settings.pharmacy.phone}</p>
                   </div>
                 </div>
 
@@ -1696,11 +1861,13 @@ export default function POSView() {
                       <span>Subtotal</span>
                       <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
                     </div>
-                    <div className="flex justify-between text-slate-500">
-                      <span>VAT (12.5%)</span>
-                      <span className="font-mono">{formatGHS(completedSale.tax)}</span>
-                    </div>
-                    {completedSale.discount > 0 && (
+                    {settings.receipt.showTax && (
+                      <div className="flex justify-between text-slate-500">
+                        <span>VAT ({taxRatePct}%)</span>
+                        <span className="font-mono">{formatGHS(completedSale.tax)}</span>
+                      </div>
+                    )}
+                    {settings.receipt.showDiscount && completedSale.discount > 0 && (
                       <div className="flex justify-between text-red-500">
                         <span>Discount</span>
                         <span className="font-mono">-{formatGHS(completedSale.discount)}</span>
@@ -1721,8 +1888,10 @@ export default function POSView() {
 
                   {/* Footer */}
                   <div className="text-center space-y-0.5">
-                    <p className="text-[10px] text-slate-400 font-medium">Thank you for choosing GreenLife Pharmacy!</p>
-                    <p className="text-[9px] text-slate-300">Your Health, Our Priority</p>
+                    {settings.receipt.footerText && (
+                      <p className="text-[10px] text-slate-400 font-medium">{settings.receipt.footerText}</p>
+                    )}
+                    <p className="text-[9px] text-slate-300">{settings.pharmacy.tagline}</p>
                     <div className="flex items-center justify-center gap-1 pt-1">
                       {Array.from({ length: 28 }).map((_, i) => (
                         <div key={i} className="w-[1.5px] h-3 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-admin'
+import { requireAdmin } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(
   _request: NextRequest,
@@ -41,11 +42,12 @@ export async function PUT(
 ) {
   try {
     const { id } = await params
-    const body = await request.json()
-    const auth = await requireAdmin(body)
+    // Auth from HttpOnly JWT cookie — identity is never trusted from the body
+    const auth = await requireAdmin(request)
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
+    const body = await request.json()
 
     const product = await db.product.findUnique({ where: { id } })
     if (!product) {
@@ -72,6 +74,15 @@ export async function PUT(
       },
     })
 
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'UPDATE',
+      entity: 'Product',
+      entityId: id,
+      details: `Updated product "${updated.name}"`,
+      ipAddress: getClientIp(request),
+    })
+
     return NextResponse.json(updated)
   } catch (error) {
     console.error('Product update error:', error)
@@ -88,8 +99,8 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params
-    const body = await request.json().catch(() => ({}))
-    const auth = await requireAdmin(body)
+    // Auth from HttpOnly JWT cookie (DELETE sends no body)
+    const auth = await requireAdmin(request)
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
@@ -105,6 +116,15 @@ export async function DELETE(
     const deactivated = await db.product.update({
       where: { id },
       data: { active: false },
+    })
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'DELETE',
+      entity: 'Product',
+      entityId: id,
+      details: `Deactivated product "${deactivated.name}"`,
+      ipAddress: getClientIp(request),
     })
 
     return NextResponse.json(deactivated)

@@ -111,6 +111,28 @@ export default function Home() {
   const { currentPage, isAuthenticated, sidebarOpen, currentUser } = useAppStore();
   const isDesktop = useIsDesktop();
   const navigate = useAppStore((s) => s.navigate);
+  const logout = useAppStore((s) => s.logout);
+
+  // Validate persisted sessions on load: zustand may say "authenticated"
+  // from localStorage while the real HttpOnly JWT cookie has expired.
+  // A single GET /api/auth check resolves this; 401 → clean logout.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/auth');
+        if (!res.ok && !cancelled) {
+          logout();
+        }
+      } catch {
+        // Network error: keep current state, individual API calls will
+        // surface their own connection errors
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Role-based page access guard
   const resolvedPage = (() => {

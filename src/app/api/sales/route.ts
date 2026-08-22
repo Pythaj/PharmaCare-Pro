@@ -1,12 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
+import { recomputeDailyRecord } from '@/lib/daily-sales'
 
 export async function GET(request: NextRequest) {
+  // All roles may read sales; sales staff are scoped to their own records
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const from = searchParams.get('from') || ''
     const to = searchParams.get('to') || ''
-    const userId = searchParams.get('userId') || ''
+    const requestedUserId = searchParams.get('userId') || ''
     const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined
 
     const where: Record<string, unknown> = {}
@@ -17,8 +26,13 @@ export async function GET(request: NextRequest) {
     if (to) {
       where.createdAt = { ...((where.createdAt as Record<string, unknown>) || {}), lte: new Date(to) }
     }
-    if (userId) {
-      where.userId = userId
+    if (requestedUserId) {
+      where.userId = requestedUserId
+    }
+    // SECURITY: non-admin users may only ever read their own sales,
+    // regardless of what userId they request
+    if (auth.user!.role !== 'admin') {
+      where.userId = auth.user!.userId
     }
 
     const sales = await db.sale.findMany({
@@ -49,11 +63,17 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // Auth from HttpOnly JWT cookie — the cashier identity comes from the token
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+  const userId = auth.user!.userId
+
   try {
     const body = await request.json()
     const {
       customerId,
-      userId,
       items,
       discount = 0,
       tax = 0,
@@ -61,9 +81,24 @@ export async function POST(request: NextRequest) {
       notes,
     } = body
 
-    if (!userId || !items || !items.length) {
+    if (!items || !items.length) {
       return NextResponse.json(
-        { error: 'User ID and items are required' },
+        { error: 'Items are required' },
+        { status: 400 }
+      )
+    }
+
+    const validPaymentMethods = ['cash', 'card', 'mobile_money']
+    if (!validPaymentMethods.includes(paymentMethod)) {
+      return NextResponse.json(
+        { error: 'Invalid payment method' },
+        { status: 400 }
+      )
+    }
+
+    if (typeof discount !== 'number' || discount < 0 || typeof tax !== 'number' || tax < 0) {
+      return NextResponse.json(
+        { error: 'Discount and tax must be non-negative numbers' },
         { status: 400 }
       )
     }
@@ -217,6 +252,16 @@ export async function POST(request: NextRequest) {
       return newSale
     })
 
+    // Audit outside the transaction: a logging failure must not roll back a sale
+    await logAudit({
+      userId,
+      action: 'SALE_COMPLETE',
+      entity: 'Sale',
+      entityId: sale.id,
+      details: `Completed sale ${sale.invoiceNo} (GHS ${sale.totalAmount.toFixed(2)}, ${items.length} item${items.length !== 1 ? 's' : ''}, ${paymentMethod})`,
+      ipAddress: getClientIp(request),
+    })
+
     return NextResponse.json(sale, { status: 201 })
   } catch (error) {
     console.error('Sale create error:', error)
@@ -229,6 +274,12 @@ export async function POST(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  // DESTRUCTIVE bulk operation — admin only
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const confirm = searchParams.get('confirm')
@@ -240,6 +291,10 @@ export async function DELETE(request: NextRequest) {
       )
     }
 
+    // Capture which days had registers before wiping, so their totals
+    // can be recomputed (zeroed) afterwards instead of drifting stale
+    const dailyRecords = await db.dailySalesRecord.findMany({ select: { date: true } })
+
     // Delete returns first (they reference sales)
     const returnCount = await db.return.count()
     if (returnCount > 0) {
@@ -249,6 +304,20 @@ export async function DELETE(request: NextRequest) {
     // SaleItems cascade on sale delete
     const saleCount = await db.sale.count()
     await db.sale.deleteMany()
+
+    // Recompute register totals for every affected day (they all become 0,
+    // preserving open/close history while reflecting the wiped sales)
+    for (const record of dailyRecords) {
+      await recomputeDailyRecord(record.date)
+    }
+
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'DELETE',
+      entity: 'Sale',
+      details: `Bulk cleared ${saleCount} sales, ${returnCount} returns and recomputed ${dailyRecords.length} daily records`,
+      ipAddress: getClientIp(request),
+    })
 
     return NextResponse.json({ message: `Deleted ${saleCount} sales and ${returnCount} return records` })
   } catch (error) {

@@ -80,6 +80,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { toast } from 'sonner';
 import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
+import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
 import type { DailySalesRecord, Sale, SaleItem, User } from '@/types';
 
 function formatGHS(value: number): string {
@@ -105,6 +106,8 @@ function formatTime(dateStr: string): string {
 
 export default function DailySalesRegister() {
   const { currentUser, navigate } = useAppStore();
+  // Receipt branding comes from system settings (single source of truth)
+  const { settings } = usePharmacySettings();
   const { isAdmin } = usePermissions();
   const [activeTab, setActiveTab] = useState('today');
 
@@ -353,9 +356,9 @@ export default function DailySalesRegister() {
   @media print { body { margin: 0; padding: 10px; } }
 </style></head><body>
   <div class="header">
-    <div class="pharmacy-name">GreenLife Pharmacy</div>
-    <div class="info">Accra, Ghana</div>
-    <div class="info">Tel: +233 30 123 4567</div>
+    <div class="pharmacy-name">${settings.pharmacy.name}</div>
+    <div class="info">${settings.pharmacy.address}</div>
+    <div class="info">Tel: ${settings.pharmacy.phone}</div>
   </div>
   <div class="info"><strong>Invoice:</strong> ${sale.invoiceNo}</div>
   <div class="info"><strong>Date:</strong> ${new Date(sale.createdAt).toLocaleString('en-GH')}</div>
@@ -367,7 +370,7 @@ export default function DailySalesRegister() {
   <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:bold;border-top:2px dashed #ccc;padding-top:8px;margin-top:8px">
     <span>TOTAL:</span><span>${formatGHS(sale.totalAmount)}</span>
   </div>
-  <div class="footer"><p>Thank you for your purchase!</p></div>
+  <div class="footer"><p>${settings.receipt.footerText}</p></div>
   <div style="text-align:center;margin-top:20px">
     <button onclick="window.print()" style="padding:8px 24px;background:#059669;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px">Print</button>
   </div>

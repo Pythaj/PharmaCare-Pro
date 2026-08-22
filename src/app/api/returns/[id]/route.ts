@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAdmin } from '@/lib/require-auth'
+import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Admin-only action — identity from HttpOnly JWT cookie
+  const auth = await requireAdmin(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id } = await params
 
@@ -29,24 +37,36 @@ export async function DELETE(
       )
     }
 
-    await db.return.delete({ where: { id } })
+    // Atomic: removing the return and recomputing the sale status commit together
+    await db.$transaction(async (tx) => {
+      await tx.return.delete({ where: { id } })
 
-    // Recalculate sale status since a pending return was removed
-    const remainingReturns = await db.return.findMany({
-      where: { saleId: returnRecord.saleId, status: 'approved' },
+      // Recalculate sale status since a pending return was removed
+      const remainingReturns = await tx.return.findMany({
+        where: { saleId: returnRecord.saleId, status: 'approved' },
+      })
+      const totalReturned = remainingReturns.reduce((sum, r) => sum + r.totalRefund, 0)
+
+      const newStatus =
+        totalReturned >= returnRecord.sale.totalAmount
+          ? 'returned'
+          : totalReturned > 0
+            ? 'partial_return'
+            : 'completed'
+
+      await tx.sale.update({
+        where: { id: returnRecord.saleId },
+        data: { status: newStatus },
+      })
     })
-    const totalReturned = remainingReturns.reduce((sum, r) => sum + r.totalRefund, 0)
 
-    const newStatus =
-      totalReturned >= returnRecord.sale.totalAmount
-        ? 'returned'
-        : totalReturned > 0
-          ? 'partial_return'
-          : 'completed'
-
-    await db.sale.update({
-      where: { id: returnRecord.saleId },
-      data: { status: newStatus },
+    await logAudit({
+      userId: auth.user!.userId,
+      action: 'DELETE',
+      entity: 'Return',
+      entityId: id,
+      details: `Deleted pending return of GHS ${returnRecord.totalRefund.toFixed(2)} for sale ${returnRecord.saleId}`,
+      ipAddress: getClientIp(request),
     })
 
     return NextResponse.json({ message: 'Return deleted successfully' })

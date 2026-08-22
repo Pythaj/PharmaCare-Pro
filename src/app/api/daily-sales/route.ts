@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { requireAuth } from '@/lib/require-auth'
 
 // GET /api/daily-sales — list all daily records (paginated, with summary)
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const page = parseInt(searchParams.get('page') || '1')
@@ -35,20 +41,21 @@ export async function GET(request: NextRequest) {
 
 // POST /api/daily-sales — open a new daily record for a given date
 export async function POST(request: NextRequest) {
+  // Authenticated staff only; the opener identity comes from the JWT cookie
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const body = await request.json()
-    const { date, userId } = body
+    const { date } = body
 
     if (!date) {
       return NextResponse.json({ error: 'Date is required' }, { status: 400 })
     }
 
-    // Validate userId if provided
-    let validUserId: string | undefined = undefined
-    if (userId) {
-      const userExists = await db.user.findUnique({ where: { id: userId }, select: { id: true } })
-      if (userExists) validUserId = userId
-    }
+    const validUserId = auth.user!.userId
 
     // Check if record already exists for this date
     const existing = await db.dailySalesRecord.findUnique({ where: { date } })
@@ -66,11 +73,13 @@ export async function POST(request: NextRequest) {
 
     // Calculate existing sales for this date
     const dayStart = new Date(date + 'T00:00:00')
-    const dayEnd = new Date(date + 'T23:59:59')
+    // Exclusive upper bound at next midnight (full-day coverage)
+    const dayEnd = new Date(date + 'T00:00:00')
+    dayEnd.setDate(dayEnd.getDate() + 1)
 
     const sales = await db.sale.findMany({
       where: {
-        createdAt: { gte: dayStart, lte: dayEnd },
+        createdAt: { gte: dayStart, lt: dayEnd },
       },
       include: {
         items: { include: { product: { select: { name: true, unit: true } } } },

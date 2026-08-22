@@ -1,10 +1,20 @@
 [build]
-  command = "npm install --legacy-peer-deps && prisma generate && next build"
+  # --webpack: Next 16 defaults server builds to Turbopack, which emits hashed
+  # external aliases (@prisma/client-<hash>) as filesystem junctions. Those
+  # junctions are lost/hollowed during function packaging, so every database
+  # route crashed on production ("Cannot find module @prisma/client-<hash>").
+  # Webpack emits plain require('@prisma/client') externals — resolvable from
+  # the node_modules shipped via [functions].included_files below.
+  command = "npm install --legacy-peer-deps && prisma generate && next build --webpack && node scripts/fix-turbopack-junctions.mjs"
   publish = ".next"
 
 [functions]
   node_bundler = "esbuild"
-  included_files = ["prisma/**/*"]
+  # prisma/**            → schema + engines referenced by generator output
+  # .prisma + @prisma    → query engine binaries AND Turbopack's hashed
+  #                        external aliases (e.g. @prisma/client-<hash>) which
+  #                        are resolved at runtime from /var/task/node_modules
+  included_files = ["prisma/**/*", "node_modules/.prisma/**/*", "node_modules/@prisma/**/*"]
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
@@ -24,7 +34,7 @@
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
-[[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/:splat"
-  status = 200
+# NOTE: no manual /api/* redirect here — @netlify/plugin-nextjs maps Next.js
+# API routes to Netlify Functions automatically. A custom "/api/*" →
+# "/.netlify/functions/:splat" rewrite previously shadowed it and returned
+# 404 for every API call on production.

@@ -141,6 +141,13 @@ export interface SaleItem {
   batch?: Batch;
 }
 
+export interface ReturnItem {
+  id: string;
+  returnId: string;
+  saleItemId: string;
+  quantity: number;
+}
+
 export interface Return {
   id: string;
   saleId: string;
@@ -150,6 +157,7 @@ export interface Return {
   status: string;
   createdAt: string;
   sale?: Sale;
+  items?: ReturnItem[];
 }
 
 export interface AuditLog {
