@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion } from 'framer-motion';
-import { Pill, Loader2, Eye, EyeOff } from 'lucide-react';
+import { Pill, Loader2, Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -77,9 +77,9 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-dvh max-h-dvh overflow-hidden bg-slate-50/60">
       {/* Left branding panel - hidden on mobile */}
-      <div className="hidden lg:flex lg:w-1/2 relative overflow-hidden" style={{ background: 'linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-via), var(--accent-gradient-to))' }}>
+      <div className="hidden lg:flex lg:w-1/2 h-full relative overflow-hidden" style={{ background: 'linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-via), var(--accent-gradient-to))' }}>
         {/* Decorative elements */}
         <div className="absolute inset-0 opacity-10">
           <div className="absolute -top-24 -left-24 h-96 w-96 rounded-full bg-white" />
@@ -97,7 +97,7 @@ export default function LoginPage() {
           </svg>
         </div>
 
-        <div className="relative z-10 flex flex-col items-center justify-center px-12 text-center">
+        <div className="relative z-10 flex h-full flex-col items-center justify-center px-12 text-center">
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -112,7 +112,9 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.1 }}
-            className="mb-4 text-4xl font-bold tracking-tight text-white"
+            className="mb-3 text-7xl font-extrabold tracking-tight text-white drop-shadow-lg"
+            style={{ fontSize: '4.5rem', fontWeight: 800, letterSpacing: '-0.025em', textShadow: '0 4px 24px rgba(0,0,0,0.18)' }}
+            suppressHydrationWarning
           >
             {appName}
           </motion.h1>
@@ -121,7 +123,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.2 }}
-            className="mb-12 text-lg opacity-90"
+            className="mb-10 text-lg opacity-90"
           >
             {appTagline}
           </motion.p>
@@ -130,7 +132,7 @@ export default function LoginPage() {
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.6, delay: 0.3 }}
-            className="space-y-4 text-left text-white/80"
+            className="space-y-3.5 text-left text-white/80"
           >
             {[
               'Point of Sale & Billing',
@@ -153,19 +155,24 @@ export default function LoginPage() {
       </div>
 
       {/* Right login form */}
-      <div className="flex w-full items-center justify-center px-4 py-12 lg:w-1/2 bg-slate-50/50">
+      <div className="flex w-full lg:w-1/2 h-full items-center justify-center overflow-hidden px-4 py-6 lg:py-0 bg-slate-50/60">
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.5 }}
-          className="w-full max-w-md"
+          className="w-full max-w-md max-h-full overflow-y-auto no-scrollbar"
+          suppressHydrationWarning
         >
           {/* Mobile logo */}
-          <div className="mb-8 flex flex-col items-center lg:hidden">
+          <div className="mb-6 flex flex-col items-center lg:hidden">
             <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl" style={{ backgroundColor: 'var(--accent-primary)' }}>
               <Pill className="h-7 w-7 text-white" />
             </div>
-            <h1 className="text-2xl font-bold text-slate-900">{appName}</h1>
+            <h1
+              className="text-5xl font-extrabold tracking-tight text-slate-900"
+              style={{ fontSize: '3rem', fontWeight: 800, letterSpacing: '-0.025em' }}
+              suppressHydrationWarning
+            >{appName}</h1>
             <p className="text-sm text-slate-500">{appTagline}</p>
           </div>
 
@@ -272,11 +279,11 @@ export default function LoginPage() {
               </div>
 
               {/* Demo credentials */}
-              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                <p className="mb-2.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
+              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3.5">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Demo Credentials
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <button
                     type="button"
                     onClick={() => fillDemo('admin@pharmacy.com', 'admin123')}
@@ -303,6 +310,13 @@ export default function LoginPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Security footer */}
+          <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            <span>Secured with encrypted authentication</span>
+            <Lock className="ml-2 h-3 w-3" />
+          </div>
         </motion.div>
       </div>
 

@@ -1,7 +1,7 @@
-const CACHE_NAME = 'pharmacare-v4';
-const STATIC_CACHE = 'pharmacare-static-v4';
-const DYNAMIC_CACHE = 'pharmacare-dynamic-v4';
-const API_CACHE = 'pharmacare-api-v4';
+const CACHE_NAME = 'pharmacare-v5';
+const STATIC_CACHE = 'pharmacare-static-v5';
+const DYNAMIC_CACHE = 'pharmacare-dynamic-v5';
+const API_CACHE = 'pharmacare-api-v5';
 
 const STATIC_ASSETS = [
   '/manifest.json',
