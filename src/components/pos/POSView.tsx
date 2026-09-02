@@ -922,7 +922,7 @@ export default function POSView() {
       const saleData = {
         invoiceNo: data.invoiceNo,
         customerName: data.customer?.name,
-        items: (data.items ?? []).map((item: any) => ({
+        items: (data.items ?? []).map((item: { product?: { name?: string } | null; productId: string; quantity: number; unitPrice: number; total: number }) => ({
           productName: item.product?.name ?? 'Unknown',
           quantity: item.quantity,
           unitPrice: item.unitPrice,
@@ -1097,7 +1097,7 @@ export default function POSView() {
           </div>
           <div className="flex items-center gap-1 bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
             <Package className="h-3 w-3 text-emerald-600" />
-            <span>{filteredProducts.filter(p => p.totalStock > (p.reorderLevel || 10)).length} active</span>
+            <span>{filteredProducts.filter(p => p.totalStock > 0).length} active</span>
           </div>
           <div className="flex items-center gap-1 bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
             <AlertTriangle className="h-3 w-3 text-amber-600" />

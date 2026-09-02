@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAuth } from '@/lib/require-auth'
+import { buildDailyAggregates } from '@/lib/daily-sales'
 
 // GET /api/daily-sales/today — get or auto-create today's record with live sales
 export async function GET(request: NextRequest) {
@@ -24,6 +25,7 @@ export async function GET(request: NextRequest) {
     // of the day that T23:59:59 dropped
     const dayEnd = new Date(todayStr + 'T00:00:00')
     dayEnd.setDate(dayEnd.getDate() + 1)
+    const dayRange = { gte: dayStart, lt: dayEnd }
 
     // Find or create today's daily record
     let record = await db.dailySalesRecord.findUnique({
@@ -34,36 +36,16 @@ export async function GET(request: NextRequest) {
       },
     })
 
-    // Auto-create if doesn't exist
     if (!record) {
-      // Calculate existing sales for today
-      const todaySales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lt: dayEnd } },
-        include: { items: true },
-      })
-
-      const totalRevenue = todaySales.reduce((sum, s) => sum + s.totalAmount, 0)
-      const totalProfit = todaySales.reduce((sum, s) => sum + s.profit, 0)
-      const totalDiscount = todaySales.reduce((sum, s) => sum + s.discount, 0)
-      const totalTransactions = todaySales.length
-      const totalItemsSold = todaySales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
-      const cashTotal = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
-      const cardTotal = todaySales.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
-      const mobileMoneyTotal = todaySales.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
+      // Auto-create if doesn't exist — aggregates derived from existing sales
+      const aggregates = await buildDailyAggregates(dayStart, dayEnd)
 
       record = await db.dailySalesRecord.create({
         data: {
           date: todayStr,
           status: 'open',
           openedBy: validUserId,
-          totalRevenue,
-          totalProfit,
-          totalDiscount,
-          totalTransactions,
-          totalItemsSold,
-          cashTotal,
-          cardTotal,
-          mobileMoneyTotal,
+          ...aggregates,
         },
         include: {
           opener: { select: { id: true, name: true } },
@@ -72,32 +54,11 @@ export async function GET(request: NextRequest) {
       })
     } else if (record.status === 'open') {
       // Refresh stats if day is still open (sales might have been added)
-      const todaySales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lt: dayEnd } },
-        include: { items: true },
-      })
-
-      const totalRevenue = todaySales.reduce((sum, s) => sum + s.totalAmount, 0)
-      const totalProfit = todaySales.reduce((sum, s) => sum + s.profit, 0)
-      const totalDiscount = todaySales.reduce((sum, s) => sum + s.discount, 0)
-      const totalTransactions = todaySales.length
-      const totalItemsSold = todaySales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
-      const cashTotal = todaySales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
-      const cardTotal = todaySales.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
-      const mobileMoneyTotal = todaySales.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
+      const aggregates = await buildDailyAggregates(dayStart, dayEnd)
 
       record = await db.dailySalesRecord.update({
         where: { id: record.id },
-        data: {
-          totalRevenue,
-          totalProfit,
-          totalDiscount,
-          totalTransactions,
-          totalItemsSold,
-          cashTotal,
-          cardTotal,
-          mobileMoneyTotal,
-        },
+        data: { ...aggregates },
         include: {
           opener: { select: { id: true, name: true } },
           closer: { select: { id: true, name: true } },
@@ -107,7 +68,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch today's actual sales with details
     const todaySales = await db.sale.findMany({
-      where: { createdAt: { gte: dayStart, lt: dayEnd } },
+      where: { createdAt: dayRange },
       include: {
         user: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, phone: true } },

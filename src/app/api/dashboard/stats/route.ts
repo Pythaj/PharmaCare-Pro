@@ -104,10 +104,11 @@ export async function GET(request: NextRequest) {
       (p) => (productStock.get(p.id) || 0) > 0
     ).length
 
-    // Low stock count (qty <= reorderLevel)
-    const lowStockCount = products.filter(
-      (p) => (productStock.get(p.id) || 0) <= p.reorderLevel
-    ).length
+    // Low stock count: in stock but at or below reorder level (excludes zero-stock)
+    const lowStockCount = products.filter((p) => {
+      const stock = productStock.get(p.id) || 0;
+      return stock > 0 && stock <= p.reorderLevel;
+    }).length
 
     return NextResponse.json({
       todaySales: todaySalesResult._sum.totalAmount || 0,

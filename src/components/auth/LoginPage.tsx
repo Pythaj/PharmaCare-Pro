@@ -30,6 +30,7 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -69,21 +70,10 @@ export default function LoginPage() {
   };
 
   const fillDemo = (email: string, password: string) => {
-    // Using react-hook-form's setValue indirectly by targeting DOM
-    const form = document.querySelector('form');
-    if (!form) return;
-    const emailInput = form.querySelector<HTMLInputElement>('input[name="email"]');
-    const passwordInput = form.querySelector<HTMLInputElement>('input[name="password"]');
-    if (emailInput) {
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set;
-      nativeInputValueSetter.call(emailInput, email);
-      emailInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    if (passwordInput) {
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set;
-      nativeInputValueSetter.call(passwordInput, password);
-      passwordInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    // Use react-hook-form's setValue — reacts to form state reliably
+    // instead of fragile DOM value setter manipulation.
+    setValue('email', email, { shouldValidate: true });
+    setValue('password', password, { shouldValidate: true });
   };
 
   return (

@@ -140,17 +140,12 @@ export async function POST(request: NextRequest) {
         if (item.batchId) {
           const batch = await tx.batch.findUnique({
             where: { id: item.batchId },
-            select: { costPrice: true, sellingPrice: true },
+            select: { costPrice: true },
           })
           if (!batch) {
             throw new Error(`Batch ${item.batchId} not found`)
           }
           costPrice = batch.costPrice
-
-          // Validate stock
-          if (batch.sellingPrice !== item.unitPrice) {
-            // Price may have changed, use the batch price for profit calc
-          }
         }
 
         profit += (item.unitPrice - costPrice) * item.quantity

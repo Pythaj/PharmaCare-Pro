@@ -101,6 +101,44 @@ export const THEME_SWATCHES = [
   { name: 'Teal', value: 'teal' as const, className: 'bg-teal-500', preview: '#14b8a6' },
 ];
 
+// ─── Theme Application (single source of truth) ─────────────────
+
+export const ACCENT_THEMES = Object.keys(themes) as AccentTheme[];
+
+/**
+ * Applies a theme's CSS custom properties to :root.
+ * This is the ONLY place theme CSS vars are written — components must
+ * not re-implement this logic (Rule 18: One Source of Truth).
+ */
+export function applyThemeVars(theme: AccentTheme): void {
+  const colors = themes[theme] ?? themes.emerald;
+  const root = document.documentElement;
+
+  root.style.setProperty('--accent-50', colors[50]);
+  root.style.setProperty('--accent-100', colors[100]);
+  root.style.setProperty('--accent-200', colors[200]);
+  root.style.setProperty('--accent-500', colors[500]);
+  root.style.setProperty('--accent-600', colors[600]);
+  root.style.setProperty('--accent-700', colors[700]);
+  root.style.setProperty('--accent-primary', colors.primary);
+  root.style.setProperty('--accent-primary-hover', colors.primaryHover);
+  root.style.setProperty('--accent-primary-light', colors.primaryLight);
+  root.style.setProperty('--accent-primary-muted', colors.primaryMuted);
+  root.style.setProperty('--accent-primary-foreground', colors.primaryForeground);
+  root.style.setProperty('--accent-primary-fg-dark', colors.primaryForegroundOnDark);
+  root.style.setProperty('--accent-primary-dot', colors.primaryDot);
+  root.style.setProperty('--accent-primary-border', colors.primaryBorder);
+  root.style.setProperty('--accent-gradient-from', colors.gradientFrom);
+  root.style.setProperty('--accent-gradient-via', colors.gradientVia);
+  root.style.setProperty('--accent-gradient-to', colors.gradientTo);
+  root.style.setProperty('--accent-secondary', colors.secondary);
+
+  // Also set a data attribute for Tailwind-aware theme matching
+  root.setAttribute('data-accent', theme);
+}
+
+export const VALID_ACCENT_THEMES = new Set<string>(ACCENT_THEMES);
+
 // ─── Hook ───────────────────────────────────────────────────────
 
 /**
@@ -127,30 +165,7 @@ export function useAccentTheme() {
 
   // Apply CSS variables to :root whenever theme changes
   useEffect(() => {
-    const colors = themes[accentTheme] ?? themes.emerald;
-    const root = document.documentElement;
-
-    root.style.setProperty('--accent-50', colors[50]);
-    root.style.setProperty('--accent-100', colors[100]);
-    root.style.setProperty('--accent-200', colors[200]);
-    root.style.setProperty('--accent-500', colors[500]);
-    root.style.setProperty('--accent-600', colors[600]);
-    root.style.setProperty('--accent-700', colors[700]);
-    root.style.setProperty('--accent-primary', colors.primary);
-    root.style.setProperty('--accent-primary-hover', colors.primaryHover);
-    root.style.setProperty('--accent-primary-light', colors.primaryLight);
-    root.style.setProperty('--accent-primary-muted', colors.primaryMuted);
-    root.style.setProperty('--accent-primary-foreground', colors.primaryForeground);
-    root.style.setProperty('--accent-primary-fg-dark', colors.primaryForegroundOnDark);
-    root.style.setProperty('--accent-primary-dot', colors.primaryDot);
-    root.style.setProperty('--accent-primary-border', colors.primaryBorder);
-    root.style.setProperty('--accent-gradient-from', colors.gradientFrom);
-    root.style.setProperty('--accent-gradient-via', colors.gradientVia);
-    root.style.setProperty('--accent-gradient-to', colors.gradientTo);
-    root.style.setProperty('--accent-secondary', colors.secondary);
-
-    // Also set a data attribute for Tailwind-aware theme matching
-    root.setAttribute('data-accent', accentTheme);
+    applyThemeVars(accentTheme);
   }, [accentTheme]);
 
   const setTheme = useCallback(

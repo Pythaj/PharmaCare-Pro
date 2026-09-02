@@ -171,7 +171,10 @@ export default function Home() {
   }
 
   // Sidebar width: only apply margin on desktop where sidebar is fixed
-  const sidebarWidth = isDesktop ? (sidebarOpen ? 260 : 68) : 0;
+  // Values must match Sidebar's WIDTH_OPEN / WIDTH_COLLAPSED constants (Rule 18)
+  const SIDEBAR_OPEN = 256;
+  const SIDEBAR_COLLAPSED = 64;
+  const sidebarWidth = isDesktop ? (sidebarOpen ? SIDEBAR_OPEN : SIDEBAR_COLLAPSED) : 0;
 
   // Pages that manage their own full-height layout (no page-level scroll)
   const selfScrollingPages: Page[] = ['pos'];
