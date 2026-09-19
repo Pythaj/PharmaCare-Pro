@@ -884,6 +884,155 @@ const ProductGrid = memo(function ProductGrid({
 });
 
 // ─────────────────────────────────────────────────────────────
+// CartLine – one cart row. Memoized so typing in search/cash/notes
+// (unrelated state) never re-renders existing cart rows. The desktop
+// variant deliberately avoids framer 'layout' projections, which were the
+// main drag on cart edits (layout thrash across every row).
+// ─────────────────────────────────────────────────────────────
+const CartLine = memo(function CartLine({
+  item,
+  reorderLevel,
+  stockAfterSale,
+  variant,
+  onRemove,
+  onDecrease,
+  onIncrease,
+  onIncreaseCascade,
+}: {
+  item: CartItem;
+  reorderLevel: number;
+  stockAfterSale: number;
+  variant: 'desktop' | 'mobile';
+  onRemove: (productId: string, batchId: string) => void;
+  onDecrease: (productId: string, batchId: string, quantity: number) => void;
+  onIncrease: (productId: string, batchId: string, quantity: number) => void;
+  onIncreaseCascade: (item: CartItem) => void;
+}) {
+  const statusLine = item.isBackorder ? (
+    <p className={variant === 'mobile'
+      ? 'text-[10px] font-semibold text-amber-600 flex items-center gap-1'
+      : 'text-[9px] font-semibold tracking-wide uppercase text-amber-600 flex items-center gap-1'}
+    >
+      <PackagePlus className="h-3 w-3" />
+      Backorder{variant === 'mobile' ? ' — sells ahead of stock' : ''}
+    </p>
+  ) : (
+    <p className={variant === 'mobile'
+      ? `text-[10px] font-semibold ${stockAfterSale <= 0 ? 'text-red-500' : stockAfterSale <= reorderLevel ? 'text-amber-600' : 'text-slate-300'}`
+      : `text-[9px] font-semibold tracking-wide uppercase ${stockAfterSale <= 0 ? 'text-red-500' : stockAfterSale <= reorderLevel ? 'text-amber-600' : 'text-slate-300'}`}
+    >
+      {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
+    </p>
+  );
+
+  if (variant === 'mobile') {
+    return (
+      <div className="py-2.5 px-3 rounded-xl border border-slate-100 bg-slate-50/50">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-slate-800 truncate">{item.productName}</p>
+            <p className="text-xs text-slate-400 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
+          </div>
+          <span className="font-bold text-sm text-slate-800 tabular-nums shrink-0">{formatGHS(item.unitPrice * item.quantity)}</span>
+        </div>
+        <div className="flex items-center justify-between mt-2">
+          {statusLine}
+          <div className="flex items-center gap-2">
+            <button
+              className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+              aria-label={`Remove ${item.productName}`}
+              onClick={() => onRemove(item.productId, item.batchId)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+            <div className="flex items-center bg-white rounded-lg border border-slate-200">
+              <button
+                className="h-8 w-8 rounded-l-lg flex items-center justify-center text-slate-500 hover:bg-slate-50"
+                aria-label="Decrease quantity"
+                onClick={() => onDecrease(item.productId, item.batchId, item.quantity - 1)}
+                disabled={item.quantity <= 1}
+              >
+                <Minus className="h-3 w-3" />
+              </button>
+              <span className="w-8 text-center text-sm font-bold tabular-nums text-slate-700">{item.quantity}</span>
+              <button
+                className={`h-8 w-8 rounded-r-lg flex items-center justify-center ${item.quantity >= item.availableQty ? 'text-slate-200 cursor-not-allowed' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-600'}`}
+                aria-label="Increase quantity"
+                onClick={() => {
+                  if (item.quantity < item.availableQty) onIncrease(item.productId, item.batchId, item.quantity + 1);
+                  else onIncreaseCascade(item);
+                }}
+                disabled={item.quantity >= item.availableQty}
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 12, scale: 0.98 }}
+      animate={{ opacity: 1, x: 0, scale: 1 }}
+      exit={{ opacity: 0, x: -12, scale: 0.95, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
+      transition={{ type: 'spring', stiffness: 420, damping: 30 }}
+      className="py-2 px-2.5 rounded-xl border border-slate-100/80 bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200 group"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-[12px] text-slate-800 truncate leading-tight">{item.productName}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
+        </div>
+        <span className="font-bold text-[12px] text-slate-800 tabular-nums shrink-0 pt-px">
+          {formatGHS(item.unitPrice * item.quantity)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between mt-1.5">
+        {statusLine}
+        <div className="flex items-center gap-1">
+          <button
+            className="h-8 w-8 rounded-md flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
+            aria-label={`Remove ${item.productName}`}
+            onClick={() => onRemove(item.productId, item.batchId)}
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+          <div className="flex items-center bg-white rounded-lg border border-slate-200 shadow-sm">
+            <button
+              className="h-8 w-8 rounded-l-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors"
+              aria-label="Decrease quantity"
+              onClick={() => onDecrease(item.productId, item.batchId, item.quantity - 1)}
+              disabled={item.quantity <= 1}
+            >
+              <Minus className="h-3 w-3" />
+            </button>
+            <span className="w-8 text-center text-xs font-bold tabular-nums text-slate-700">{item.quantity}</span>
+            <button
+              className={`h-8 w-8 rounded-r-lg flex items-center justify-center transition-colors ${
+                item.quantity >= item.availableQty
+                  ? 'text-slate-200 cursor-not-allowed'
+                  : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600'
+              }`}
+              aria-label="Increase quantity"
+              onClick={() => {
+                if (item.quantity < item.availableQty) onIncrease(item.productId, item.batchId, item.quantity + 1);
+                else onIncreaseCascade(item);
+              }}
+              disabled={item.quantity >= item.availableQty}
+            >
+              <Plus className="h-3 w-3" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </motion.div>
+  );
+});
+
+// ─────────────────────────────────────────────────────────────
 // Main POSView Component
 // ─────────────────────────────────────────────────────────────
 export default function POSView() {
@@ -1215,7 +1364,7 @@ export default function POSView() {
   // "Quantity +" on a cart line: bump the line, and when THIS batch runs out,
   // cascade automatically into the next earliest-expiring batch instead of
   // blocking the cashier (FEFO across batches).
-  const handleIncreaseQuantity = (item: CartItem) => {
+  const handleIncreaseQuantity = useCallback((item: CartItem) => {
     if (item.quantity < item.availableQty) {
       updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
       return;
@@ -1252,7 +1401,7 @@ export default function POSView() {
       expiryDate: nextBatch.expiryDate,
     });
     toast.info(`Continuing from batch ${nextBatch.batchNumber}`, { duration: 1500 });
-  };
+  }, [cart, products, addToCart, updateCartQuantity]);
 
   const subtotal = cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
   const effectiveDiscount = Math.min(discount, subtotal);
@@ -1696,52 +1845,17 @@ export default function POSView() {
                     const reorderLevel = product?.reorderLevel || 10;
                     const stockAfterSale = (product?.totalStock || 0) - item.quantity;
                     return (
-                      <div key={`${item.productId}-${item.batchId}`} className="py-2.5 px-3 rounded-xl border border-slate-100 bg-slate-50/50">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-semibold text-sm text-slate-800 truncate">{item.productName}</p>
-                            <p className="text-xs text-slate-400 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
-                          </div>
-                          <span className="font-bold text-sm text-slate-800 tabular-nums shrink-0">{formatGHS(item.unitPrice * item.quantity)}</span>
-                        </div>
-                        <div className="flex items-center justify-between mt-2">
-                          {item.isBackorder ? (
-                            <p className="text-[10px] font-semibold text-amber-600 flex items-center gap-1">
-                              <PackagePlus className="h-3 w-3" />
-                              Backorder — sells ahead of stock
-                            </p>
-                          ) : (
-                            <p className={`text-[10px] font-semibold ${stockAfterSale <= 0 ? 'text-red-500' : stockAfterSale <= reorderLevel ? 'text-amber-600' : 'text-slate-300'}`}>
-                              {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
-                            </p>
-                          )}
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                              onClick={() => removeFromCart(item.productId, item.batchId)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                            <div className="flex items-center bg-white rounded-lg border border-slate-200">
-                              <button
-                                className="h-8 w-8 rounded-l-lg flex items-center justify-center text-slate-500 hover:bg-slate-50"
-                                onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
-                                disabled={item.quantity <= 1}
-                              >
-                                <Minus className="h-3 w-3" />
-                              </button>
-                              <span className="w-8 text-center text-sm font-bold tabular-nums text-slate-700">{item.quantity}</span>
-                              <button
-                                className={`h-8 w-8 rounded-r-lg flex items-center justify-center ${item.quantity >= item.availableQty ? 'text-slate-200 cursor-not-allowed' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-600'}`}
-                                onClick={() => { if (item.quantity < item.availableQty) updateCartQuantity(item.productId, item.batchId, item.quantity + 1); else handleIncreaseQuantity(item); }}
-                                disabled={item.quantity >= item.availableQty}
-                              >
-                                <Plus className="h-3 w-3" />
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                      <CartLine
+                        key={`${item.productId}-${item.batchId}`}
+                        item={item}
+                        reorderLevel={reorderLevel}
+                        stockAfterSale={stockAfterSale}
+                        variant="mobile"
+                        onRemove={removeFromCart}
+                        onDecrease={updateCartQuantity}
+                        onIncrease={updateCartQuantity}
+                        onIncreaseCascade={handleIncreaseQuantity}
+                      />
                     );
                   })}
                 </div>
@@ -1844,76 +1958,17 @@ export default function POSView() {
                   const stockAfterSale = (product?.totalStock || 0) - item.quantity;
 
                   return (
-                    <motion.div
+                    <CartLine
                       key={`${item.productId}-${item.batchId}`}
-                      initial={{ opacity: 0, x: 12, scale: 0.98 }}
-                      animate={{ opacity: 1, x: 0, scale: 1 }}
-                      exit={{ opacity: 0, x: -12, scale: 0.95, height: 0, marginBottom: 0, paddingTop: 0, paddingBottom: 0 }}
-                      transition={{ type: 'spring', stiffness: 420, damping: 30 }}
-                      className="py-2 px-2.5 rounded-xl border border-slate-100/80 bg-slate-50/50 hover:bg-white hover:border-slate-200 hover:shadow-sm transition-all duration-200 group"
-                      layout
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-[12px] text-slate-800 truncate leading-tight">{item.productName}</p>
-                          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
-                        </div>
-                        <span className="font-bold text-[12px] text-slate-800 tabular-nums shrink-0 pt-px">
-                          {formatGHS(item.unitPrice * item.quantity)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between mt-1.5">
-                        {item.isBackorder ? (
-                          <p className="text-[9px] font-semibold tracking-wide uppercase text-amber-600 flex items-center gap-1">
-                            <PackagePlus className="h-3 w-3" />
-                            Backorder
-                          </p>
-                        ) : (
-                          <p className={`text-[9px] font-semibold tracking-wide uppercase ${
-                            stockAfterSale <= 0 ? 'text-red-500' :
-                            stockAfterSale <= reorderLevel ? 'text-amber-600' :
-                            'text-slate-300'
-                          }`}>
-                            {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-1">
-                          <button
-                            className="h-8 w-8 rounded-md flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"
-                            onClick={() => removeFromCart(item.productId, item.batchId)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                          <div className="flex items-center bg-white rounded-lg border border-slate-200 shadow-sm">
-                            <button
-                              className="h-8 w-8 rounded-l-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors"
-                              onClick={() => updateCartQuantity(item.productId, item.batchId, item.quantity - 1)}
-                              disabled={item.quantity <= 1}
-                            >
-                              <Minus className="h-3 w-3" />
-                            </button>
-                            <span className="w-8 text-center text-xs font-bold tabular-nums text-slate-700">{item.quantity}</span>
-                            <button
-                              className={`h-8 w-8 rounded-r-lg flex items-center justify-center transition-colors ${
-                                item.quantity >= item.availableQty
-                                  ? 'text-slate-200 cursor-not-allowed'
-                                  : 'text-slate-400 hover:bg-emerald-50 hover:text-emerald-600'
-                              }`}
-                              onClick={() => {
-                                if (item.quantity < item.availableQty) {
-                                  updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
-                                } else {
-                                  handleIncreaseQuantity(item);
-                                }
-                              }}
-                              disabled={item.quantity >= item.availableQty}
-                            >
-                              <Plus className="h-3 w-3" />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
+                      item={item}
+                      reorderLevel={reorderLevel}
+                      stockAfterSale={stockAfterSale}
+                      variant="desktop"
+                      onRemove={removeFromCart}
+                      onDecrease={updateCartQuantity}
+                      onIncrease={updateCartQuantity}
+                      onIncreaseCascade={handleIncreaseQuantity}
+                    />
                   );
                 })}
               </div>
