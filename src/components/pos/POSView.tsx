@@ -932,10 +932,8 @@ export default function POSView() {
 
   const subtotal = cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
   const effectiveDiscount = Math.min(discount, subtotal);
-  const taxRatePct = settings.pharmacy.taxRate;
-  const tax = subtotal * (taxRatePct / 100);
-  const total = Math.max(0, subtotal + tax - effectiveDiscount);
-  const changeDue = paymentMethod === 'cash' ? Math.max(0, cashReceived - total) : 0;
+  // VAT is intentionally NOT added at the POS — retail prices are all-inclusive.
+  const total = Math.max(0, subtotal - effectiveDiscount);
 
   const filteredProducts = activeCategory === 'All'
     ? products
@@ -1001,7 +999,7 @@ export default function POSView() {
             quantity: item.quantity,
           })),
           discount: appliedDiscount,
-          tax,
+          tax: 0,
           paymentMethod,
           notes: notes || undefined,
         }),
@@ -1076,29 +1074,28 @@ export default function POSView() {
     setSelectedCustomer(null);
   };
 
-  // Reported-change display on the desktop payment section
+  // Reported-change display on the desktop/mobile payment sections. The
+  // tendered amount is optional — it only feeds the change-due readout.
   const renderCashChange = () =>
     paymentMethod === 'cash' ? (
-      <div className="rounded-lg bg-emerald-50/70 border border-emerald-100 px-2.5 py-1.5 space-y-1">
+      <div className="rounded-lg bg-slate-50/70 border border-slate-100 px-2.5 py-1.5 space-y-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] text-emerald-700/70 uppercase tracking-wide font-semibold">Cash received</span>
+          <span className="text-[10px] text-slate-400 uppercase tracking-wide font-semibold">Cash received (optional)</span>
           <Input
             type="number"
             min={0}
             value={cashReceived || ''}
             onChange={(e) => setCashReceived(Math.max(0, Number(e.target.value) || 0))}
-            className="w-24 h-6 text-[11px] text-right bg-white border-emerald-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20 font-mono"
+            className="w-24 h-6 text-[11px] text-right bg-white border-slate-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20 font-mono"
             placeholder="0.00"
           />
         </div>
-        <div className="flex items-center justify-between text-[10px]">
-          <span className="text-emerald-700/70">
-            {cashReceived >= total ? 'Change due' : 'Entered'}
-          </span>
-          <span className={`font-mono font-bold ${cashReceived >= total ? 'text-emerald-700' : 'text-amber-600'}`}>
-            {formatGHS(cashReceived >= total ? cashReceived - total : Math.max(0, total - cashReceived))}
-          </span>
-        </div>
+        {cashReceived >= total && (
+          <div className="flex items-center justify-between text-[10px]">
+            <span className="text-slate-500">Change due</span>
+            <span className="font-mono font-bold text-emerald-700">{formatGHS(cashReceived - total)}</span>
+          </div>
+        )}
       </div>
     ) : null;
 
@@ -1567,7 +1564,6 @@ export default function POSView() {
             <div className="shrink-0 border-t border-slate-100 bg-white px-4 pt-3 pb-6 space-y-3">
               <div className="rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2.5 space-y-1">
                 <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="font-medium font-mono">{formatGHS(subtotal)}</span></div>
-                <div className="flex justify-between text-xs"><span className="text-slate-400">VAT ({taxRatePct}%)</span><span className="font-mono text-slate-500">{formatGHS(tax)}</span></div>
                 <div className="flex items-center justify-between text-xs"><span className="text-slate-400">Discount</span>
                   <Input type="number" value={discount || ''} onChange={(e) => setDiscount(Number(e.target.value) || 0)} className="w-20 h-6 text-xs text-right bg-white border-slate-200 px-1.5 rounded-md" placeholder="0.00" />
                 </div>
@@ -1589,7 +1585,7 @@ export default function POSView() {
               {renderCashChange()}
               <Button className="w-full h-12 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-bold text-sm shadow-lg rounded-xl"
                 onClick={() => { setCartOpen(false); setTimeout(handleCompleteSale, 300); }}
-                disabled={cart.length === 0 || submitting || (paymentMethod === 'cash' && cashReceived < total)}>
+                disabled={cart.length === 0 || submitting}>
                 {submitting ? 'Processing...' : `Complete Sale — ${formatGHS(total)}`}
               </Button>
             </div>
@@ -1747,10 +1743,6 @@ export default function POSView() {
                 <span className="text-slate-400">Subtotal</span>
                 <span className="text-slate-600 font-medium font-mono tabular-nums">{formatGHS(subtotal)}</span>
               </div>
-              <div className="flex justify-between text-[11px]">
-                <span className="text-slate-400">VAT ({taxRatePct}%)</span>
-                <span className="text-slate-500 font-mono tabular-nums">{formatGHS(tax)}</span>
-              </div>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">Discount</span>
                 <Input
@@ -1799,7 +1791,7 @@ export default function POSView() {
             <Button
               className="w-full h-10 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white font-bold text-[13px] shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:shadow-emerald-500/30 active:scale-[0.98] rounded-xl"
               onClick={handleCompleteSale}
-              disabled={cart.length === 0 || submitting || (paymentMethod === 'cash' && cashReceived < total)}
+              disabled={cart.length === 0 || submitting}
             >
               {submitting ? (
                 <span className="flex items-center gap-2">
@@ -1997,9 +1989,9 @@ export default function POSView() {
                       <span>Subtotal</span>
                       <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
                     </div>
-                    {settings.receipt.showTax && (
+                    {(completedSale?.tax ?? 0) > 0 && (
                       <div className="flex justify-between text-slate-500">
-                        <span>VAT ({taxRatePct}%)</span>
+                        <span>VAT</span>
                         <span className="font-mono">{formatGHS(completedSale.tax)}</span>
                       </div>
                     )}
