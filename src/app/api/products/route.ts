@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireAuth, requireAdmin } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(request: NextRequest) {
