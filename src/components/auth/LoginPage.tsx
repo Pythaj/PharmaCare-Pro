@@ -5,7 +5,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { motion } from 'framer-motion';
-import { Pill, Loader2, Eye, EyeOff, Lock, ShieldCheck } from 'lucide-react';
+import { Pill, Loader2, Eye, EyeOff, Lock, ShieldCheck, KeyRound, Mail, Sparkles } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -25,6 +25,13 @@ type LoginFormValues = z.infer<typeof loginSchema>;
 export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  // First-time login: account was created with a temporary password
+  const [pendingSetup, setPendingSetup] = useState<User | null>(null);
+  const [setupLoading, setSetupLoading] = useState(false);
+  const [setupEmail, setSetupEmail] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupConfirm, setSetupConfirm] = useState('');
+  const [showSetupPassword, setShowSetupPassword] = useState(false);
   const { login, appName, appTagline } = useAppStore();
 
   const {
@@ -55,6 +62,13 @@ export default function LoginPage() {
 
       const result = await res.json();
       const user: User = result.user;
+
+      // Temporary credentials — route into the first-run setup instead
+      if (result.mustChangePassword) {
+        setPendingSetup(user);
+        return;
+      }
+
       login(user);
       toast.success(`Welcome back, ${user.name}!`, {
         description: 'You have successfully signed in.',
@@ -65,6 +79,50 @@ export default function LoginPage() {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleFirstRunSubmit = async () => {
+    if (setupPassword.length < 8) {
+      toast.error('Password too short', {
+        description: 'Use at least 8 characters for your new password.',
+      });
+      return;
+    }
+    if (setupPassword !== setupConfirm) {
+      toast.error('Passwords do not match', {
+        description: 'Please re-enter the same password in both fields.',
+      });
+      return;
+    }
+
+    setSetupLoading(true);
+    try {
+      const res = await fetch('/api/auth/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: setupPassword,
+          email: setupEmail.trim() || undefined,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.error || 'Setup failed');
+      }
+
+      const user: User = result.user;
+      login(user);
+      toast.success('Welcome to your workspace!', {
+        description: 'Your credentials are set up and you are signed in.',
+      });
+    } catch (err) {
+      toast.error('Setup Failed', {
+        description: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+      });
+    } finally {
+      setSetupLoading(false);
     }
   };
 
@@ -168,6 +226,128 @@ export default function LoginPage() {
             <p className="text-sm text-slate-500">{appTagline}</p>
           </div>
 
+          {pendingSetup ? (
+            <>
+              <Card className="border-slate-200 shadow-lg shadow-slate-200/50 overflow-hidden">
+                {/* Setup hero header */}
+                <div className="px-6 py-5 text-white relative overflow-hidden" style={{ background: 'linear-gradient(to bottom right, var(--accent-gradient-from), var(--accent-gradient-via), var(--accent-gradient-to))' }}>
+                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px' }} />
+                  <div className="relative flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/20 ring-1 ring-white/25">
+                      <Sparkles className="h-5 w-5 text-white" />
+                    </div>
+                    <div className="min-w-0">
+                      <h2 className="text-base font-bold leading-tight">Welcome, {pendingSetup.name}!</h2>
+                      <p className="text-[11px] text-white/85 truncate">Complete your account setup to continue</p>
+                    </div>
+                  </div>
+                  <p className="relative mt-3 text-[11px] leading-relaxed text-white/85">
+                    Your account is using a temporary password. Set your own password below to secure your
+                    workspace — it only takes a moment.
+                  </p>
+                </div>
+                <CardContent className="space-y-3.5 pt-5">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="setup-email" className="text-xs font-medium text-slate-600">
+                      Email address
+                    </Label>
+                    <div className="relative">
+                      <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
+                      <Input
+                        id="setup-email"
+                        type="email"
+                        value={setupEmail}
+                        onChange={(e) => setSetupEmail(e.target.value)}
+                        defaultValue={pendingSetup.email}
+                        placeholder="you@pharmacy.com"
+                        disabled={setupLoading}
+                        className="h-11 border-slate-200 bg-white pr-3 pl-9 text-sm focus-visible:border-[var(--accent-primary)]"
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400">Pre-filled with your temporary email — change it if you like.</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="setup-password" className="text-xs font-medium text-slate-600">
+                      New password
+                    </Label>
+                    <div className="relative">
+                      <KeyRound className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
+                      <Input
+                        id="setup-password"
+                        type={showSetupPassword ? 'text' : 'password'}
+                        value={setupPassword}
+                        onChange={(e) => setSetupPassword(e.target.value)}
+                        placeholder="At least 8 characters"
+                        autoComplete="new-password"
+                        disabled={setupLoading}
+                        className="h-11 border-slate-200 bg-white pr-10 pl-9 text-sm focus-visible:border-[var(--accent-primary)]"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowSetupPassword(!showSetupPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                        tabIndex={-1}
+                      >
+                        {showSetupPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="setup-confirm" className="text-xs font-medium text-slate-600">
+                      Confirm password
+                    </Label>
+                    <div className="relative">
+                      <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
+                      <Input
+                        id="setup-confirm"
+                        type={showSetupPassword ? 'text' : 'password'}
+                        value={setupConfirm}
+                        onChange={(e) => setSetupConfirm(e.target.value)}
+                        placeholder="Re-enter your new password"
+                        autoComplete="new-password"
+                        disabled={setupLoading}
+                        onKeyDown={(e) => { if (e.key === 'Enter') handleFirstRunSubmit(); }}
+                        className="h-11 border-slate-200 bg-white pr-3 pl-9 text-sm focus-visible:border-[var(--accent-primary)]"
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    onClick={handleFirstRunSubmit}
+                    disabled={setupLoading || !setupPassword.trim()}
+                    className="h-11 w-full text-white font-medium transition-colors"
+                    style={{ backgroundColor: 'var(--accent-primary)' }}
+                  >
+                    {setupLoading ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Setting up...
+                      </>
+                    ) : (
+                      'Finish Setup & Enter App'
+                    )}
+                  </Button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPendingSetup(null)}
+                    disabled={setupLoading}
+                    className="w-full text-center text-[11px] text-slate-400 hover:text-slate-600 transition-colors"
+                  >
+                    Sign out instead
+                  </button>
+                </CardContent>
+              </Card>
+
+              <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <span>Your password is encrypted before being stored</span>
+              </div>
+            </>
+          ) : (
           <Card className="border-slate-200 shadow-lg shadow-slate-200/50">
             <CardHeader className="space-y-1 pb-4">
               <CardTitle className="text-2xl font-bold text-slate-900">Sign In</CardTitle>
@@ -272,6 +452,7 @@ export default function LoginPage() {
 
             </CardContent>
           </Card>
+          )}
 
           {/* Security footer */}
           <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-400">

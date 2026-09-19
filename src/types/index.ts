@@ -29,6 +29,7 @@ export interface User {
   role: UserRole;
   phone?: string;
   active: boolean;
+  mustChangePassword?: boolean;
   createdAt: string;
   updatedAt: string;
 }

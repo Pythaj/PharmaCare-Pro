@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X, PackagePlus, Boxes, RefreshCcw, Package } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X, PackagePlus, Boxes, RefreshCcw, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -38,7 +38,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialog, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
@@ -642,6 +642,8 @@ export default function ProductsView() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [productToDelete, setProductToDelete] = useState<ProductWithStock | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showIncludedInactive, setShowIncludedInactive] = useState(false);
+  const includeInactiveRef = useRef(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Edit Price dialog state
@@ -671,6 +673,7 @@ export default function ProductsView() {
     try {
       let url = `/api/products?search=${encodeURIComponent(query)}`;
       if (cat && cat !== 'all') url += `&categoryId=${cat}`;
+      if (includeInactiveRef.current) url += `&includeInactive=true`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -699,6 +702,12 @@ export default function ProductsView() {
     }
     init();
   }, []);
+
+  const handleToggleInactive = (value: boolean) => {
+    setShowIncludedInactive(value);
+    includeInactiveRef.current = value;
+    fetchProducts(search, categoryFilter);
+  };
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -813,23 +822,49 @@ export default function ProductsView() {
     setLoadingBatches(false);
   };
 
-  const handleDeleteProduct = async () => {
+  const handleDeleteProduct = async (permanent = false) => {
     if (!productToDelete) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/products/${productToDelete.id}`, { method: 'DELETE' });
+      const res = await fetch(
+        `/api/products/${productToDelete.id}${permanent ? '?permanent=true' : ''}`,
+        { method: 'DELETE' }
+      );
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to remove product');
       }
-      toast.success(`Product "${productToDelete.name}" removed successfully`);
+      const data = await res.json().catch(() => ({}));
+      toast.success(data.message || `Product "${productToDelete.name}" ${permanent ? 'permanently deleted' : 'deactivated'}`);
       setShowDeleteDialog(false);
       setProductToDelete(null);
       fetchProducts(search, categoryFilter);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to remove product');
+      toast.error('Could not delete product', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleRestoreProduct = async (product: ProductWithStock) => {
+    try {
+      const res = await fetch(`/api/products/${product.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to restore product');
+      }
+      toast.success(`"${product.name}" restored to inventory`);
+      fetchProducts(search, categoryFilter);
+    } catch (err) {
+      toast.error('Restore failed', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
     }
   };
 
@@ -1064,6 +1099,16 @@ export default function ProductsView() {
               ))}
             </SelectContent>
           </Select>
+          <Button
+            variant="outline"
+            size="sm"
+            className={`h-9 gap-1.5 text-xs ${showIncludedInactive ? 'border-emerald-500 text-emerald-700 bg-emerald-50' : 'text-slate-500'}`}
+            onClick={() => handleToggleInactive(!showIncludedInactive)}
+            title="Show products that were deactivated"
+          >
+            <Boxes className="h-3.5 w-3.5" />
+            Deactivated
+          </Button>
           {canManageProducts && (
             <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { setShowAddDialog(true); setAddAutoDetected(false); }}>
               <Plus className="h-4 w-4 mr-1" />
@@ -1288,15 +1333,27 @@ export default function ProductsView() {
                                 >
                                   <Tag className="h-4 w-4" />
                                 </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
-                                  onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setShowDeleteDialog(true); }}
-                                  title="Remove Product"
-                                >
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
+                                {product.active === false ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                    onClick={(e) => { e.stopPropagation(); handleRestoreProduct(product); }}
+                                    title="Restore this product to inventory"
+                                  >
+                                    <RefreshCcw className="h-4 w-4" />
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                                    onClick={(e) => { e.stopPropagation(); setProductToDelete(product); setShowDeleteDialog(true); }}
+                                    title="Remove Product"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                )}
                               </div>
                             </TableCell>
                           )}
@@ -2082,19 +2139,51 @@ export default function ProductsView() {
           <AlertDialogHeader>
             <AlertDialogTitle>Remove Product — {productToDelete?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will deactivate the product and hide it from all listings. Existing sales records containing
-              this product will remain unaffected.
+              <div className="space-y-3">
+                <p>
+                  Deactivating hides the product from listings while keeping it (and its sales history) fully intact.
+                  Permanently deleting erases the product and its stock records for good.
+                </p>
+                {productToDelete && (
+                  <div className="rounded-lg bg-muted/50 p-3 grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                    <span className="text-muted-foreground">Units in stock</span>
+                    <span className="text-right font-semibold tabular-nums">{productToDelete.totalStock} {productToDelete.unit}</span>
+                    <span className="text-muted-foreground">Batches</span>
+                    <span className="text-right font-semibold tabular-nums">{productToDelete._count?.batches ?? 0}</span>
+                    <span className="text-muted-foreground">Linked sales</span>
+                    <span className="text-right font-semibold tabular-nums">{productToDelete._count?.saleItems ?? 0}</span>
+                  </div>
+                )}
+                {(productToDelete?._count?.saleItems ?? 0) > 0 && (
+                  <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    This product has sales records — it can be deactivated but never permanently deleted (that would
+                    corrupt your sales history).
+                  </p>
+                )}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
+          <AlertDialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-between gap-2">
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-red-600 hover:bg-red-700 text-white"
-              onClick={handleDeleteProduct}
-              disabled={deleting}
-            >
-              {deleting ? 'Removing...' : 'Remove Product'}
-            </AlertDialogAction>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                className="border-slate-200"
+                onClick={() => handleDeleteProduct(false)}
+                disabled={deleting}
+              >
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Deactivate'}
+              </Button>
+              <Button
+                className="bg-red-600 hover:bg-red-700 text-white"
+                onClick={() => handleDeleteProduct(true)}
+                disabled={deleting || (productToDelete?._count?.saleItems ?? 0) > 0}
+                title={(productToDelete?._count?.saleItems ?? 0) > 0 ? 'Cannot delete — product has sales history' : 'Permanently erase product and its stock records'}
+              >
+                {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4 mr-1" />}
+                Delete permanently
+              </Button>
+            </div>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

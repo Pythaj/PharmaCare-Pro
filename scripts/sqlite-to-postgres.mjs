@@ -75,10 +75,38 @@ const TABLES = [
   'system_settings',
 ];
 
-function toValue(v) {
-  if (v === undefined) return null;
-  if (v instanceof Date) return v.toISOString();
-  return v;
+// Coerce an SQLite raw value into what PostgreSQL expects for a column of the
+// given data_type. SQLite is dynamically typed, so booleans arrive as 0/1 and
+// Prisma.Decimal objects must lose their JSON serialisers too.
+function coerceValue(raw, pgType) {
+  if (raw === undefined || raw === null) return null;
+
+  if (pgType === 'boolean') {
+    if (typeof raw === 'boolean') return raw;
+    if (raw === 0 || raw === '0' || raw === 'false' || raw === 'f') return false;
+    if (raw === 1 || raw === '1' || raw === 'true' || raw === 't') return true;
+    return Boolean(raw);
+  }
+  if (pgType === 'integer' || pgType === 'smallint' || pgType === 'bigint') {
+    return typeof raw === 'number' ? raw : (Number.isFinite(Number(raw)) ? Number(raw) : raw);
+  }
+  if (pgType === 'numeric' || pgType === 'money') {
+    if (typeof raw === 'number') return raw;
+    if (raw instanceof Date) return raw.toISOString();
+    return String(raw).trim();
+  }
+  if (pgType === 'double precision' || pgType === 'real') {
+    return typeof raw === 'number' ? raw : Number(raw);
+  }
+  if (pgType.includes('timestamp') || pgType === 'date') {
+    if (raw instanceof Date) return raw.toISOString();
+    return String(raw);
+  }
+  if (typeof raw === 'object') {
+    if (Array.isArray(raw)) return JSON.stringify(raw);
+    if (typeof raw.toString === 'function') return raw.toString();
+  }
+  return raw;
 }
 
 async function main() {
@@ -86,11 +114,23 @@ async function main() {
   console.log(`[migration] target : ${TARGET}`);
 
   const prisma = new PrismaClient();
-  const pool = new pg.Pool({ connectionString: TARGET, max: 4 });
+  const pool = new pg.Pool({ connectionString: TARGET, max: 4, connectionTimeoutMillis: 20000 });
+  let client;
 
   try {
-    const client = await pool.connect();
-    const totals = {};
+    client = await pool.connect();
+
+    // Fetch authoritative column list + type for each table from the TARGET.
+    const colsByTable = {};
+    for (const t of TABLES) {
+      const r = await client.query(
+        `SELECT column_name, data_type FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1
+          ORDER BY ordinal_position`,
+        [t]
+      );
+      colsByTable[t] = r.rows.map((x) => ({ name: x.column_name, type: x.data_type }));
+    }
 
     if (TRUNCATE) {
       console.log('[migration] --truncate: clearing existing PostgreSQL tables (CASCADE)...');
@@ -99,41 +139,36 @@ async function main() {
 
     await client.query('BEGIN');
 
+    const totals = {};
     for (const table of TABLES) {
       const rows = await prisma.$queryRawUnsafe(`SELECT * FROM "${table}"`);
       const count = Array.isArray(rows) ? rows.length : 0;
       totals[table] = count;
       if (count === 0) continue;
 
-      const cols = Object.keys(rows[0]);
+      const cols = colsByTable[table];
       const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
-      const quoted = cols.map((c) => `"${c}"`);
+      const quoted = cols.map((c) => `"${c.name}"`);
       const sql = `INSERT INTO "${table}" (${quoted.join(', ')}) VALUES (${placeholders})`;
 
       for (const row of rows) {
-        const values = cols.map((c) => toValue(row[c]));
+        const values = cols.map((c) => coerceValue(row[c.name], c.type));
         await client.query(sql, values);
       }
       console.log(`[migration] ${table.padEnd(22)} ${count} row(s)`);
     }
 
     await client.query('COMMIT');
-    client.release();
-    await pool.end();
-
     console.log('\n[migration] Done. Table totals:');
     for (const [t, n] of Object.entries(totals)) console.log(`  ${t.padEnd(22)} ${n}`);
   } catch (err) {
-    console.error('\n[migration] FAILED — rolling back this run:', err.message);
-    try {
-      const c = await pool.connect();
-      await c.query('ROLLBACK');
-      c.release();
-    } catch {
-      /* pool may already be gone */
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { /* already aborted */ }
     }
+    console.error('\n[migration] FAILED — all changes for this run rolled back:', err.message);
     process.exitCode = 1;
   } finally {
+    if (client) client.release();
     await pool.end().catch(() => {});
     await prisma.$disconnect().catch(() => {});
   }

@@ -4,6 +4,26 @@ import { requireAdmin, requireAuth } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { recomputeDailyRecord } from '@/lib/daily-sales'
 
+class ValidationError extends Error {}
+
+function normalizeSale(sale: any) {
+  return {
+    ...sale,
+    subtotal: Number(sale.subtotal),
+    tax: Number(sale.tax),
+    discount: Number(sale.discount),
+    totalAmount: Number(sale.totalAmount),
+    profit: Number(sale.profit),
+    items: sale.items.map((item: any) => ({
+      ...item,
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unitPrice),
+      costPrice: Number(item.costPrice),
+      total: Number(item.total),
+    })),
+  }
+}
+
 export async function GET(request: NextRequest) {
   // All roles may read sales; sales staff are scoped to their own records
   const auth = await requireAuth(request)
@@ -16,7 +36,11 @@ export async function GET(request: NextRequest) {
     const from = searchParams.get('from') || ''
     const to = searchParams.get('to') || ''
     const requestedUserId = searchParams.get('userId') || ''
-    const limit = searchParams.get('limit') ? parseInt(searchParams.get('limit')!, 10) : undefined
+    const limitParam = searchParams.get('limit')
+    // Default 50, hard cap at 500 — protects against unbounded reads
+    const limit = limitParam
+      ? Math.min(Math.max(parseInt(limitParam, 10) || 50, 1), 500)
+      : 50
 
     const where: Record<string, unknown> = {}
 
@@ -52,7 +76,7 @@ export async function GET(request: NextRequest) {
       take: limit,
     })
 
-    return NextResponse.json({ sales })
+    return NextResponse.json({ sales: sales.map(normalizeSale) })
   } catch (error) {
     console.error('Sales list error:', error)
     return NextResponse.json(
@@ -81,7 +105,7 @@ export async function POST(request: NextRequest) {
       notes,
     } = body
 
-    if (!items || !items.length) {
+    if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
         { error: 'Items are required' },
         { status: 400 }
@@ -103,17 +127,20 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Validate all items have required fields
+    // Validate structure up-front
     for (const item of items) {
-      if (!item.productId || !item.quantity || !item.unitPrice) {
-        return NextResponse.json(
-          { error: 'Each item must have productId, quantity, and unitPrice' },
-          { status: 400 }
-        )
+      if (!item.productId) {
+        throw new ValidationError('Each item must have a productId')
+      }
+      const qty = Number(item.quantity)
+      if (!Number.isInteger(qty) || qty < 1) {
+        throw new ValidationError('Item quantities must be positive whole numbers')
       }
     }
 
-    // Use Prisma transaction for atomic stock deduction + sale creation
+    // Use Prisma transaction for atomic stock deduction + sale creation.
+    // Prices are derived server-side from the cheapest-eligible or selected
+    // batch — the client's unitPrice is never trusted (Rule 13/14).
     const sale = await db.$transaction(async (tx) => {
       // Generate invoice number
       const today = new Date()
@@ -129,78 +156,97 @@ export async function POST(request: NextRequest) {
 
       let subtotal = 0
       let profit = 0
-      const saleItemsData = []
+      const saleItemsData: any[] = []
 
       for (const item of items) {
-        const total = item.quantity * item.unitPrice
-        subtotal += total
+        const quantity = Math.floor(Number(item.quantity))
 
-        // Get cost price from batch
-        let costPrice = item.costPrice || 0
         if (item.batchId) {
+          // Explicit batch (POS sends per-batch cart lines) — price is the
+          // batch's configured sellingPrice. Expired batches can never sell.
           const batch = await tx.batch.findUnique({
             where: { id: item.batchId },
-            select: { costPrice: true },
           })
           if (!batch) {
-            throw new Error(`Batch ${item.batchId} not found`)
+            throw new ValidationError(`Batch ${item.batchId} not found`)
           }
-          costPrice = batch.costPrice
-        }
+          if (batch.productId !== item.productId) {
+            throw new ValidationError(`Batch ${batch.batchNumber} does not belong to that product`)
+          }
+          if (batch.expiryDate && new Date(batch.expiryDate) < today) {
+            throw new ValidationError(`Batch ${batch.batchNumber} is expired and cannot be sold — remove it from the sale.`)
+          }
+          if (batch.quantity < quantity) {
+            throw new ValidationError(`Insufficient stock for batch "${batch.batchNumber}". Only ${batch.quantity} available, but ${quantity} requested.`)
+          }
 
-        profit += (item.unitPrice - costPrice) * item.quantity
+          const unitPrice = Number(batch.sellingPrice)
+          const costPrice = Number(batch.costPrice)
+          const total = unitPrice * quantity
+          subtotal += total
+          profit += (unitPrice - costPrice) * quantity
 
-        // Get expiry date from batch
-        let expiryDate = null
-        if (item.batchId) {
-          const batch = await tx.batch.findUnique({
-            where: { id: item.batchId },
-            select: { expiryDate: true },
+          saleItemsData.push({
+            productId: item.productId,
+            batchId: item.batchId,
+            quantity,
+            unitPrice,
+            costPrice,
+            total,
+            expiryDate: batch.expiryDate || null,
           })
-          expiryDate = batch?.expiryDate || null
-        }
-
-        saleItemsData.push({
-          productId: item.productId,
-          batchId: item.batchId || null,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          costPrice,
-          total,
-          expiryDate,
-        })
-
-        // Deduct from batch if batchId provided (with row-level lock via findUnique + update)
-        if (item.batchId) {
-          const batch = await tx.batch.findUnique({
-            where: { id: item.batchId },
-          })
-
-          if (!batch) {
-            throw new Error(`Batch ${item.batchId} not found`)
-          }
-          if (batch.quantity < item.quantity) {
-            throw new Error(`Insufficient stock for "${batch.batchNumber}". Only ${batch.quantity} available, but ${item.quantity} requested.`)
-          }
 
           await tx.batch.update({
             where: { id: item.batchId },
-            data: { quantity: { decrement: item.quantity } },
+            data: { quantity: { decrement: quantity } },
           })
         } else {
-          // FEFO: deduct from earliest expiring batches
+          // No batch: FEFO across eligible (non-expired) batches. Because
+          // batches can carry different prices, each source batch becomes its
+          // own line so the receipt math is always exact.
+          const product = await tx.product.findUnique({ where: { id: item.productId } })
+          if (!product) {
+            throw new ValidationError(`Product ${item.productId} not found`)
+          }
+
           const availableBatches = await tx.batch.findMany({
-            where: {
-              productId: item.productId,
-              quantity: { gt: 0 },
-            },
+            where: { productId: item.productId, quantity: { gt: 0 } },
             orderBy: { expiryDate: 'asc' },
           })
 
-          let remainingQty = item.quantity
+          let remainingQty = quantity
+          let hadExpiredOnly = false
+          let reachedExpired = false
+
           for (const batch of availableBatches) {
             if (remainingQty <= 0) break
+            const isExpired = batch.expiryDate && new Date(batch.expiryDate) < today
+            if (isExpired) {
+              // Batch has stock but is expired — don't sell it. Note it so we
+              // can give a precise error instead of a misleading "insufficient".
+              hadExpiredOnly = true
+              if (batch.quantity >= remainingQty) reachedExpired = true
+              continue
+            }
+            hadExpiredOnly = false
+
             const deductQty = Math.min(batch.quantity, remainingQty)
+            const unitPrice = Number(batch.sellingPrice)
+            const costPrice = Number(batch.costPrice)
+            const total = unitPrice * deductQty
+            subtotal += total
+            profit += (unitPrice - costPrice) * deductQty
+
+            saleItemsData.push({
+              productId: item.productId,
+              batchId: batch.id,
+              quantity: deductQty,
+              unitPrice,
+              costPrice,
+              total,
+              expiryDate: batch.expiryDate || null,
+            })
+
             await tx.batch.update({
               where: { id: batch.id },
               data: { quantity: { decrement: deductQty } },
@@ -209,9 +255,17 @@ export async function POST(request: NextRequest) {
           }
 
           if (remainingQty > 0) {
-            throw new Error(`Insufficient stock. Need ${item.quantity} but only ${item.quantity - remainingQty} available across all batches.`)
+            if (reachedExpired || (hadExpiredOnly && availableBatches.every(b => b.expiryDate && new Date(b.expiryDate) < today))) {
+              throw new ValidationError(`"${product.name}" stock has expired and cannot be sold — receive a fresh batch first.`)
+            }
+            throw new ValidationError(`Insufficient stock for "${product.name}". Need ${quantity} but only ${quantity - remainingQty} available across all batches.`)
           }
         }
+      }
+
+      // A discount can never drive the total below zero
+      if (discount > subtotal) {
+        throw new ValidationError('Discount cannot be greater than the subtotal')
       }
 
       const totalAmount = subtotal - discount + tax
@@ -253,7 +307,7 @@ export async function POST(request: NextRequest) {
       action: 'SALE_COMPLETE',
       entity: 'Sale',
       entityId: sale.id,
-      details: `Completed sale ${sale.invoiceNo} (GHS ${sale.totalAmount.toFixed(2)}, ${items.length} item${items.length !== 1 ? 's' : ''}, ${paymentMethod})`,
+      details: `Completed sale ${sale.invoiceNo} (GHS ${Number(sale.totalAmount).toFixed(2)}, ${items.length} item${items.length !== 1 ? 's' : ''}, ${paymentMethod})`,
       ipAddress: getClientIp(request),
     })
 
@@ -269,13 +323,15 @@ export async function POST(request: NextRequest) {
       console.error('Daily record recompute after sale error:', error)
     }
 
-    return NextResponse.json(sale, { status: 201 })
+    return NextResponse.json(normalizeSale(sale), { status: 201 })
   } catch (error) {
     console.error('Sale create error:', error)
     const message = error instanceof Error ? error.message : 'Failed to create sale'
+    const isValidation = error instanceof ValidationError ||
+      (error instanceof Error && (message.includes('Insufficient') || message.includes('expired')))
     return NextResponse.json(
       { error: message },
-      { status: error instanceof Error && message.includes('Insufficient') ? 400 : 500 }
+      { status: isValidation ? 400 : 500 }
     )
   }
 }

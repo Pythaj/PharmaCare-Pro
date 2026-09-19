@@ -13,8 +13,13 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''
     const categoryId = searchParams.get('categoryId') || ''
+    // includeInactive=true reveals soft-deactivated products (for restore/audit)
+    const includeInactive = searchParams.get('includeInactive') === 'true'
 
-    const conditions: any[] = [{ active: true }]
+    const conditions: any[] = []
+    if (!includeInactive) {
+      conditions.push({ active: true })
+    }
     if (search) {
       conditions.push({
         OR: [
@@ -51,7 +56,14 @@ export async function GET(request: NextRequest) {
       const minSellingPrice = p.batches.length > 0
         ? Math.min(...p.batches.map(b => b.sellingPrice))
         : (p.defaultSellingPrice || 0);
-      const batchesWithQty = p.batches.map(b => ({ ...b, currentQty: b.quantity }));
+      // Normalize Prisma.Decimal (serialized as strings on Postgres / sqlite JSON)
+      const batchesWithQty = p.batches.map(b => ({
+        ...b,
+        quantity: Number(b.quantity),
+        currentQty: Number(b.quantity),
+        costPrice: Number(b.costPrice),
+        sellingPrice: Number(b.sellingPrice),
+      }));
 
       // Calculate earliest expiry
       const earliestExpiry = p.batches.length > 0 ? p.batches[0].expiryDate : null;
@@ -90,8 +102,8 @@ export async function GET(request: NextRequest) {
         description: p.description,
         unit: p.unit,
         reorderLevel: p.reorderLevel,
-        defaultCostPrice: p.defaultCostPrice,
-        defaultSellingPrice: p.defaultSellingPrice,
+        defaultCostPrice: Number(p.defaultCostPrice),
+        defaultSellingPrice: Number(p.defaultSellingPrice),
         active: p.active,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
@@ -99,7 +111,7 @@ export async function GET(request: NextRequest) {
         _count: p._count,
         batches: batchesWithQty,
         totalStock,
-        minSellingPrice,
+        minSellingPrice: Number(minSellingPrice),
         earliestExpiry,
         daysToExpiry,
         hasExpiringBatches,

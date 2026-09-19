@@ -213,19 +213,39 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       stats: {
-        totalRevenue,
-        totalProfit,
+        totalRevenue: Number(totalRevenue),
+        totalProfit: Number(totalProfit),
         totalSales,
         totalItemsSold,
-        avgSaleValue,
-        bestProduct,
+        avgSaleValue: Number(avgSaleValue),
+        bestProduct: bestProduct ? {
+          ...bestProduct,
+          quantity: Number(bestProduct.quantity),
+          revenue: Number(bestProduct.revenue),
+        } : null,
       },
-      revenueData,
-      paymentData,
-      topProducts,
-      dailyBreakdown,
-      cashierPerformance,
-      monthlySummary,
+      revenueData: revenueData.map((d) => ({ name: d.name, value: Number(d.value) })),
+      paymentData: paymentData.map((d) => ({ name: d.name, value: Number(d.value) })),
+      topProducts: topProducts.map((p) => ({
+        name: p.name,
+        quantity: Number(p.quantity),
+        revenue: Number(p.revenue),
+      })),
+      dailyBreakdown: dailyBreakdown.map((d) => ({
+        ...d,
+        revenue: Number(d.revenue),
+        profit: Number(d.profit),
+      })),
+      cashierPerformance: cashierPerformance.map((c) => ({
+        ...c,
+        revenue: Number(c.revenue),
+        profit: Number(c.profit),
+      })),
+      monthlySummary: monthlySummary.map((m) => ({
+        ...m,
+        revenue: Number(m.revenue),
+        profit: Number(m.profit),
+      })),
     })
   } catch (error) {
     console.error('Reports fetch error:', error)

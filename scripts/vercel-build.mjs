@@ -30,6 +30,11 @@ const isCloud = process.env.VERCEL === '1' || process.env.DATABASE_PROVIDER === 
 if (isCloud) {
   console.log('[build] Cloud target detected — generating PostgreSQL Prisma client');
   run('prisma generate --schema prisma/schema.postgres.prisma');
+  // Self-migrate the cloud database so schema changes (e.g. new columns with
+  // defaults) are applied before this deployment goes live. Idempotent for
+  // additive changes and safe to run on every deploy.
+  console.log('[build] Applying schema to cloud database (prisma db push)');
+  run('prisma db push --schema prisma/schema.postgres.prisma --skip-generate');
 } else {
   console.log('[build] Local target detected — generating SQLite Prisma client');
   run('prisma generate');

@@ -612,8 +612,12 @@ export default function POSView() {
     totalAmount: number;
     paymentMethod: string;
     createdAt: string;
+    changeDue?: number;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const searchQueryRef = useRef('');
+  const [cashReceived, setCashReceived] = useState(0);
   const [loading, setLoading] = useState(true);
   const [cartOpen, setCartOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -646,6 +650,7 @@ export default function POSView() {
     totalAmount: number;
     paymentMethod: string;
     createdAt: string;
+    changeDue?: number;
   } | null>(null);
 
   // Auto-refresh interval ref
@@ -771,9 +776,11 @@ export default function POSView() {
     }
     init();
 
-    // 30-second auto-refresh
+    // 30-second auto-refresh — always uses the LATEST search term via a ref,
+    // so the interval (created once) never gets stuck on a stale query.
+    searchQueryRef.current = searchQueryRef.current || '';
     refreshIntervalRef.current = setInterval(() => {
-      fetchProducts(searchQuery);
+      fetchProducts(searchQueryRef.current);
     }, 30000);
 
     return () => {
@@ -784,12 +791,27 @@ export default function POSView() {
   }, [fetchProducts]); // intentionally not including searchQuery to avoid re-creating interval
 
   const handleSearch = (value: string) => {
+    searchQueryRef.current = value;
     setSearchQuery(value);
     if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (value === '') {
+      // Clearing the search must fetch immediately, never after a debounce
+      fetchProducts('');
+      return;
+    }
     debounceRef.current = setTimeout(() => {
       fetchProducts(value);
     }, 300);
   };
+
+  const isBatchExpired = (expiryDate?: string | null) =>
+    !!expiryDate && new Date(expiryDate).getTime() < Date.now();
+
+  // FEFO ordering across ALL eligible (non-expired) in-stock batches.
+  const eligibleBatchesFor = (product: ProductWithStock) =>
+    product.batches
+      .filter(b => b.quantity > 0 && !isBatchExpired(b.expiryDate))
+      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
 
   const handleAddToCart = (product: ProductWithStock) => {
     if (product.totalStock === 0) {
@@ -797,19 +819,40 @@ export default function POSView() {
       return;
     }
 
-    const bestBatch = product.batches
-      .filter(b => b.quantity > 0)
-      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime())[0];
-    if (!bestBatch) {
-      toast.error('No available stock for this product');
+    const eligible = eligibleBatchesFor(product);
+    if (eligible.length === 0) {
+      // Selling an expired dose is a health-and-compliance risk (Rule 13/14)
+      toast.error(`${product.name} stock is expired and cannot be sold`, {
+        description: 'Receive a fresh batch to start selling again.',
+        icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+      });
       return;
     }
 
-    // Check if already in cart - if so, check combined quantity
-    const existingItem = cart.find(i => i.productId === product.id && i.batchId === bestBatch.id);
-    const currentInCart = existingItem?.quantity ?? 0;
-    if (currentInCart + 1 > bestBatch.currentQty) {
-      toast.warning(`Only ${bestBatch.currentQty} units available in this batch`, {
+    // Units already reserved in the cart across this product's batches
+    const cartUnitsForProduct = cart
+      .filter(i => i.productId === product.id)
+      .reduce((s, i) => s + i.quantity, 0);
+    if (cartUnitsForProduct >= product.totalStock) {
+      toast.warning('All available stock is already in your cart', {
+        icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+      });
+      return;
+    }
+
+    // Pick the earliest-expiring batch with spare capacity (FEFO cascade).
+    // If the first batch is exhausted by the cart, spill over to the next.
+    let targetBatch: (typeof eligible)[number] | null = null;
+    for (const batch of eligible) {
+      const cartInBatch = cart.find(i => i.productId === product.id && i.batchId === batch.id)?.quantity ?? 0;
+      if (cartInBatch < batch.currentQty) {
+        targetBatch = batch;
+        break;
+      }
+    }
+
+    if (!targetBatch) {
+      toast.warning(`Only ${cartUnitsForProduct} unit${cartUnitsForProduct !== 1 ? 's' : ''} of ${product.name} available`, {
         icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
       });
       return;
@@ -818,13 +861,13 @@ export default function POSView() {
     addToCart({
       productId: product.id,
       productName: product.name,
-      batchId: bestBatch.id,
-      batchNumber: bestBatch.batchNumber,
+      batchId: targetBatch.id,
+      batchNumber: targetBatch.batchNumber,
       quantity: 1,
-      unitPrice: bestBatch.sellingPrice,
-      costPrice: bestBatch.costPrice,
-      availableQty: bestBatch.currentQty,
-      expiryDate: bestBatch.expiryDate,
+      unitPrice: Number(targetBatch.sellingPrice),
+      costPrice: Number(targetBatch.costPrice),
+      availableQty: targetBatch.currentQty,
+      expiryDate: targetBatch.expiryDate,
     });
 
     // Trigger add-to-cart animation
@@ -835,7 +878,7 @@ export default function POSView() {
       return next;
     });
 
-    const remaining = product.totalStock - currentInCart - 1;
+    const remaining = product.totalStock - cartUnitsForProduct - 1;
     if (remaining === 0) {
       toast.warning(`${product.name} is now the last unit!`, { icon: <AlertTriangle className="h-4 w-4 text-amber-500" /> });
     } else if (remaining <= (product.reorderLevel || 10)) {
@@ -845,10 +888,54 @@ export default function POSView() {
     }
   };
 
-  const subtotal = cart.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  // "Quantity +" on a cart line: bump the line, and when THIS batch runs out,
+  // cascade automatically into the next earliest-expiring batch instead of
+  // blocking the cashier (FEFO across batches).
+  const handleIncreaseQuantity = (item: CartItem) => {
+    if (item.quantity < item.availableQty) {
+      updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
+      return;
+    }
+
+    const product = products.find(p => p.id === item.productId);
+    if (!product) return;
+
+    const cartUnitsForProduct = cart
+      .filter(i => i.productId === item.productId)
+      .reduce((s, i) => s + i.quantity, 0);
+    if (cartUnitsForProduct >= product.totalStock) {
+      toast.warning(`All ${product.totalStock} units of ${product.name} are in the cart`);
+      return;
+    }
+
+    const nextBatch = eligibleBatchesFor(product).find(
+      b => b.id !== item.batchId && (cart.find(i => i.batchId === b.id)?.quantity ?? 0) < b.currentQty
+    );
+    if (!nextBatch) {
+      toast.warning(`No more ${product.name} stock available`);
+      return;
+    }
+
+    addToCart({
+      productId: product.id,
+      productName: product.name,
+      batchId: nextBatch.id,
+      batchNumber: nextBatch.batchNumber,
+      quantity: 1,
+      unitPrice: Number(nextBatch.sellingPrice),
+      costPrice: Number(nextBatch.costPrice),
+      availableQty: nextBatch.currentQty,
+      expiryDate: nextBatch.expiryDate,
+    });
+    toast.info(`Continuing from batch ${nextBatch.batchNumber}`, { duration: 1500 });
+  };
+
+  const subtotal = cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
+  const effectiveDiscount = Math.min(discount, subtotal);
   const taxRatePct = settings.pharmacy.taxRate;
   const tax = subtotal * (taxRatePct / 100);
-  const total = subtotal + tax - discount;
+  const total = Math.max(0, subtotal + tax - effectiveDiscount);
+  const changeDue = paymentMethod === 'cash' ? Math.max(0, cashReceived - total) : 0;
 
   const filteredProducts = activeCategory === 'All'
     ? products
@@ -877,6 +964,10 @@ export default function POSView() {
       toast.error('Cart is empty');
       return;
     }
+    // Guard against double-submits (rapid taps / queued clicks) — the request
+    // itself is also stock-locking on the server, but never queue two posts.
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     try {
       // Capture pre-sale stock for impact display
@@ -894,20 +985,22 @@ export default function POSView() {
         };
       });
 
+      // Clamp discount to the subtotal (never allow a negative total)
+      const appliedDiscount = Math.min(discount, subtotal);
+
       const res = await fetch('/api/sales', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          // Cashier identity comes from the HttpOnly auth cookie server-side
+          // Cashier identity comes from the HttpOnly auth cookie server-side.
+          // unitPrice/costPrice are recalculated server-side from the batch.
           customerId: selectedCustomerId,
           items: cart.map(item => ({
             productId: item.productId,
             batchId: item.batchId,
             quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            costPrice: item.costPrice,
           })),
-          discount,
+          discount: appliedDiscount,
           tax,
           paymentMethod,
           notes: notes || undefined,
@@ -935,6 +1028,7 @@ export default function POSView() {
         totalAmount: data.totalAmount,
         paymentMethod: data.paymentMethod,
         createdAt: data.createdAt,
+        changeDue: paymentMethod === 'cash' ? Math.max(0, cashReceived - Number(data.totalAmount)) : 0,
       };
 
       // Refresh products to show updated stock
@@ -950,6 +1044,7 @@ export default function POSView() {
       toast.error(err instanceof Error ? err.message : 'Failed to complete sale');
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
@@ -972,11 +1067,40 @@ export default function POSView() {
 
     setShowReceipt(false);
     setCompletedSale(null);
+    setPendingSaleData(null);
     clearCart();
     setDiscount(0);
+    setCashReceived(0);
     setNotes('');
     setPaymentMethod('cash');
+    setSelectedCustomer(null);
   };
+
+  // Reported-change display on the desktop payment section
+  const renderCashChange = () =>
+    paymentMethod === 'cash' ? (
+      <div className="rounded-lg bg-emerald-50/70 border border-emerald-100 px-2.5 py-1.5 space-y-1">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] text-emerald-700/70 uppercase tracking-wide font-semibold">Cash received</span>
+          <Input
+            type="number"
+            min={0}
+            value={cashReceived || ''}
+            onChange={(e) => setCashReceived(Math.max(0, Number(e.target.value) || 0))}
+            className="w-24 h-6 text-[11px] text-right bg-white border-emerald-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20 font-mono"
+            placeholder="0.00"
+          />
+        </div>
+        <div className="flex items-center justify-between text-[10px]">
+          <span className="text-emerald-700/70">
+            {cashReceived >= total ? 'Change due' : 'Entered'}
+          </span>
+          <span className={`font-mono font-bold ${cashReceived >= total ? 'text-emerald-700' : 'text-amber-600'}`}>
+            {formatGHS(cashReceived >= total ? cashReceived - total : Math.max(0, total - cashReceived))}
+          </span>
+        </div>
+      </div>
+    ) : null;
 
   const paymentIcons = {
     cash: Banknote,
@@ -1056,7 +1180,7 @@ export default function POSView() {
           />
           {searchQuery && (
             <button
-              onClick={() => { setSearchQuery(''); fetchProducts(''); }}
+              onClick={() => handleSearch('')}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
             >
               <X className="h-4 w-4" />
@@ -1420,7 +1544,7 @@ export default function POSView() {
                               <span className="w-8 text-center text-sm font-bold tabular-nums text-slate-700">{item.quantity}</span>
                               <button
                                 className={`h-8 w-8 rounded-r-lg flex items-center justify-center ${item.quantity >= item.availableQty ? 'text-slate-200 cursor-not-allowed' : 'text-slate-500 hover:bg-emerald-50 hover:text-emerald-600'}`}
-                                onClick={() => { if (item.quantity < item.availableQty) updateCartQuantity(item.productId, item.batchId, item.quantity + 1); }}
+                                onClick={() => { if (item.quantity < item.availableQty) updateCartQuantity(item.productId, item.batchId, item.quantity + 1); else handleIncreaseQuantity(item); }}
                                 disabled={item.quantity >= item.availableQty}
                               >
                                 <Plus className="h-3 w-3" />
@@ -1462,9 +1586,10 @@ export default function POSView() {
                   );
                 })}
               </div>
+              {renderCashChange()}
               <Button className="w-full h-12 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-bold text-sm shadow-lg rounded-xl"
                 onClick={() => { setCartOpen(false); setTimeout(handleCompleteSale, 300); }}
-                disabled={cart.length === 0 || submitting}>
+                disabled={cart.length === 0 || submitting || (paymentMethod === 'cash' && cashReceived < total)}>
                 {submitting ? 'Processing...' : `Complete Sale — ${formatGHS(total)}`}
               </Button>
             </div>
@@ -1581,6 +1706,8 @@ export default function POSView() {
                               onClick={() => {
                                 if (item.quantity < item.availableQty) {
                                   updateCartQuantity(item.productId, item.batchId, item.quantity + 1);
+                                } else {
+                                  handleIncreaseQuantity(item);
                                 }
                               }}
                               disabled={item.quantity >= item.availableQty}
@@ -1665,11 +1792,14 @@ export default function POSView() {
               })}
             </div>
 
+            {/* Cash tendered / change calculation */}
+            {renderCashChange()}
+
             {/* Complete Sale — premium CTA */}
             <Button
               className="w-full h-10 bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white font-bold text-[13px] shadow-lg shadow-emerald-500/25 transition-all hover:shadow-xl hover:shadow-emerald-500/30 active:scale-[0.98] rounded-xl"
               onClick={handleCompleteSale}
-              disabled={cart.length === 0 || submitting}
+              disabled={cart.length === 0 || submitting || (paymentMethod === 'cash' && cashReceived < total)}
             >
               {submitting ? (
                 <span className="flex items-center gap-2">
@@ -1827,6 +1957,12 @@ export default function POSView() {
                       <span className="text-slate-400 text-[9px] uppercase tracking-wider">Payment</span>
                       <p className="font-medium text-slate-700 capitalize text-[11px]">{completedSale.paymentMethod.replace('_', ' ')}</p>
                     </div>
+                    {completedSale.changeDue !== undefined && completedSale.changeDue > 0 && (
+                      <div>
+                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Change</span>
+                        <p className="font-medium text-emerald-600 font-mono text-[11px]">{formatGHS(completedSale.changeDue)}</p>
+                      </div>
+                    )}
                   </div>
 
                   {/* Dashed separator */}

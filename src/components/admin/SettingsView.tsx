@@ -44,6 +44,8 @@ import {
   X,
   Check,
   Sparkles,
+  UserCog,
+  KeyRound,
   ClipboardList,
   Search,
   Wifi,
@@ -122,6 +124,7 @@ const DAYS_OF_WEEK = [
 const defaults: AllSettings = defaultSettings;
 
 type TabKey =
+  | 'account'
   | 'general'
   | 'receipt'
   | 'pos'
@@ -133,6 +136,7 @@ type TabKey =
   | 'remote';
 
 const TAB_ITEMS: { key: TabKey; label: string; icon: React.ReactNode; description: string }[] = [
+  { key: 'account', label: 'Account', icon: <UserCog className="h-4 w-4" />, description: 'Profile & security' },
   { key: 'general', label: 'General', icon: <Globe className="h-4 w-4" />, description: 'Branding & display' },
   { key: 'receipt', label: 'Receipt', icon: <Receipt className="h-4 w-4" />, description: 'Print layout' },
   { key: 'pos', label: 'Point of Sale', icon: <ShoppingCart className="h-4 w-4" />, description: 'Sales behavior' },
@@ -166,6 +170,120 @@ export default function SettingsView() {
   const { theme: currentAccentTheme, setTheme: setAccentTheme } = useAccentTheme();
   const setAppName = useAppStore((s) => s.setAppName);
   const setAppTagline = useAppStore((s) => s.setAppTagline);
+
+  // Account/security mutation state
+  const currentUser = useAppStore((s) => s.currentUser);
+  const setCurrentUser = useAppStore((s) => s.setCurrentUser);
+  const loginTime = useAppStore((s) => s.loginTime);
+  const [profileName, setProfileName] = useState(currentUser?.name ?? '');
+  const [profileEmail, setProfileEmail] = useState(currentUser?.email ?? '');
+  const [emailCurrentPassword, setEmailCurrentPassword] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingEmail, setSavingEmail] = useState(false);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [showPwCurrent, setShowPwCurrent] = useState(false);
+  const [showPwNew, setShowPwNew] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  const applyUpdatedUser = (user: unknown) => {
+    const u = user as {
+      id: string; name: string; email: string; role: string; phone?: string;
+      active: boolean; mustChangePassword?: boolean; createdAt: string; updatedAt: string;
+    };
+    setCurrentUser(u as never);
+  };
+
+  const handleSaveName = async () => {
+    if (!profileName.trim()) {
+      toast.error('Display name cannot be empty');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: profileName.trim() }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Failed to update name');
+      applyUpdatedUser(result.user);
+      toast.success('Display name updated');
+    } catch (err) {
+      toast.error('Update failed', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleSaveEmail = async () => {
+    if (!profileEmail.trim() || !emailCurrentPassword) {
+      toast.error('Enter your new email and current password');
+      return;
+    }
+    setSavingEmail(true);
+    try {
+      const res = await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: profileEmail.trim(),
+          currentPassword: emailCurrentPassword,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Failed to update email');
+      applyUpdatedUser(result.user);
+      setEmailCurrentPassword('');
+      toast.success('Email address updated', {
+        description: 'Your sign-in email has been changed.',
+      });
+    } catch (err) {
+      toast.error('Update failed', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
+    } finally {
+      setSavingEmail(false);
+    }
+  };
+
+  const handleSavePassword = async () => {
+    if (pwNew.length < 8) {
+      toast.error('Password too short', { description: 'Use at least 8 characters.' });
+      return;
+    }
+    if (pwNew !== pwConfirm) {
+      toast.error('Passwords do not match');
+      return;
+    }
+    setSavingPassword(true);
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: pwCurrent, newPassword: pwNew }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Failed to change password');
+      applyUpdatedUser(result.user);
+      setPwCurrent('');
+      setPwNew('');
+      setPwConfirm('');
+      toast.success('Password changed', {
+        description: 'Use your new password next time you sign in.',
+      });
+    } catch (err) {
+      toast.error('Password update failed', {
+        description: err instanceof Error ? err.message : 'Please try again.',
+      });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<TabKey>('general');
 
@@ -1808,6 +1926,174 @@ export default function SettingsView() {
           )}
 
           {/* ── About ─────────────────────────────────── */}
+          {activeTab === 'account' && (
+            <>
+              {/* ─── Signed-in session info ─── */}
+              <Card className="overflow-hidden">
+                {sectionHeader(
+                  <UserCog className="h-4 w-4" />,
+                  'Account & Security',
+                  'Manage your profile, sign-in credentials and session',
+                )}
+                <CardContent className="pt-0 space-y-6">
+                  <div className="rounded-lg border bg-muted/30 overflow-hidden">
+                    <div className="flex items-center gap-4 px-4 py-4">
+                      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--accent-primary)] text-white text-base font-bold uppercase">
+                        {(currentUser?.name || '?').charAt(0)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm text-foreground truncate">{currentUser?.name}</p>
+                        <p className="text-xs text-muted-foreground truncate">{currentUser?.email}</p>
+                      </div>
+                      <Badge
+                        variant={currentUser?.role === 'admin' ? 'default' : 'secondary'}
+                        className="ml-auto capitalize"
+                      >
+                        {currentUser?.role ?? 'user'}
+                      </Badge>
+                    </div>
+                    <div className="divide-y">
+                      <div className="flex items-center justify-between px-4 py-2.5">
+                        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                          <Calendar className="h-3.5 w-3.5" /> Member since
+                        </span>
+                        <span className="text-xs font-medium">
+                          {currentUser?.createdAt
+                            ? new Date(currentUser.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+                            : '—'}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between px-4 py-2.5">
+                        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
+                          <Clock className="h-3.5 w-3.5" /> Last signed in
+                        </span>
+                        <span className="text-xs font-medium">
+                          {loginTime > 0
+                            ? new Date(loginTime).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                            : '—'}
+                        </span>
+                      </div>
+                      {currentUser?.mustChangePassword && (
+                        <div className="flex items-center justify-between px-4 py-2.5">
+                          <span className="text-xs text-amber-600">Still using temporary password</span>
+                          <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200">
+                            Change it below
+                          </Badge>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Display name */}
+                  <div className="space-y-2">
+                    <Label htmlFor="profile-name" className="text-sm font-medium">Display name</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="profile-name"
+                        value={profileName}
+                        onChange={(e) => setProfileName(e.target.value)}
+                        className="h-10"
+                      />
+                      <Button
+                        variant="outline"
+                        className="h-10 shrink-0"
+                        onClick={handleSaveName}
+                        disabled={savingProfile || profileName.trim() === (currentUser?.name ?? '')}
+                      >
+                        {savingProfile ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Email change — requires current password (credential rebinding) */}
+                  <div className="space-y-2">
+                    <Label htmlFor="profile-email" className="text-sm font-medium">Sign-in email</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="profile-email"
+                        type="email"
+                        value={profileEmail}
+                        onChange={(e) => setProfileEmail(e.target.value)}
+                        className="h-10"
+                      />
+                      <Button
+                        variant="outline"
+                        className="h-10 shrink-0"
+                        onClick={handleSaveEmail}
+                        disabled={savingEmail || profileEmail.trim() === (currentUser?.email ?? '') || !emailCurrentPassword}
+                      >
+                        {savingEmail ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Change email'}
+                      </Button>
+                    </div>
+                    <Input
+                      type={showPwCurrent ? 'text' : 'password'}
+                      value={emailCurrentPassword}
+                      onChange={(e) => setEmailCurrentPassword(e.target.value)}
+                      placeholder="Current password to confirm this change"
+                      className="h-10"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Your current password is required to change the email bound to your account — this keeps your
+                      credentials secure even if this device is shared.
+                    </p>
+                  </div>
+
+                  {/* Password change */}
+                  <div className="rounded-xl border p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="h-4 w-4 text-[var(--accent-primary)]" />
+                      <Label className="text-sm font-semibold">Change password</Label>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div className="space-y-1">
+                        <Label htmlFor="pw-current" className="text-xs text-muted-foreground">Current password</Label>
+                        <Input
+                          id="pw-current"
+                          type={showPwCurrent ? 'text' : 'password'}
+                          value={pwCurrent}
+                          onChange={(e) => setPwCurrent(e.target.value)}
+                          placeholder="••••••••"
+                          autoComplete="current-password"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="pw-new" className="text-xs text-muted-foreground">New password</Label>
+                        <Input
+                          id="pw-new"
+                          type={showPwNew ? 'text' : 'password'}
+                          value={pwNew}
+                          onChange={(e) => setPwNew(e.target.value)}
+                          placeholder="At least 8 characters"
+                          autoComplete="new-password"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="pw-confirm" className="text-xs text-muted-foreground">Confirm new password</Label>
+                        <Input
+                          id="pw-confirm"
+                          type={showPwNew ? 'text' : 'password'}
+                          value={pwConfirm}
+                          onChange={(e) => setPwConfirm(e.target.value)}
+                          placeholder="Repeat password"
+                          autoComplete="new-password"
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleSavePassword(); }}
+                        />
+                      </div>
+                    </div>
+                    <Button
+                      className="bg-[var(--accent-primary)] hover:bg-[var(--accent-primary-hover)] text-white"
+                      onClick={handleSavePassword}
+                      disabled={savingPassword || !pwCurrent || !pwNew || !pwConfirm}
+                    >
+                      {savingPassword && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                      Update password
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
+
           {activeTab === 'about' && (
             <Card className="overflow-hidden">
               {sectionHeader(
@@ -1886,8 +2172,8 @@ export default function SettingsView() {
             <RemotePanel />
           )}
 
-          {/* Bottom Save Bar — hidden on Remote tab (self-contained) */}
-          {activeTab !== 'remote' && (
+          {/* Bottom Save Bar — hidden on Remote & Account tabs (self-contained) */}
+          {activeTab !== 'remote' && activeTab !== 'account' && (
           <div className="sticky bottom-0 flex items-center justify-end gap-3 rounded-xl border bg-background/85 backdrop-blur-md p-4 shadow-sm z-10">
             <Button
               variant="outline"

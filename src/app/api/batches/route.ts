@@ -55,7 +55,12 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json(batches)
+    return NextResponse.json(batches.map((b) => ({
+      ...b,
+      quantity: Number(b.quantity),
+      costPrice: Number(b.costPrice),
+      sellingPrice: Number(b.sellingPrice),
+    })))
   } catch (error) {
     console.error('Batches list error:', error)
     return NextResponse.json(

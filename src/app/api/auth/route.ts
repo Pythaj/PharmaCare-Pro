@@ -3,12 +3,17 @@ import { db } from '@/lib/db';
 import { verifyPassword, generateToken } from '@/lib/auth';
 import { getAuthUser } from '@/lib/require-auth';
 
+const publicUser = {
+  id: true, name: true, email: true, role: true, phone: true, active: true,
+  mustChangePassword: true, createdAt: true,
+} as const;
+
 // GET /api/auth — lightweight session check.
 // Returns the current user (from the HttpOnly JWT cookie) or 401 when the
 // session is missing/expired. Used by the client to validate persisted
 // sessions on load instead of trusting localStorage indefinitely.
 export async function GET(request: NextRequest) {
-  const payload = getAuthUser(request);
+  const payload = await getAuthUser(request);
   if (!payload?.userId) {
     // Also covers stale-but-validly-signed tokens that carry no usable user id
     // — treat as unauthenticated and drop the offending cookie instead of
@@ -21,7 +26,7 @@ export async function GET(request: NextRequest) {
   // Confirm the account still exists and is active (revocation support)
   const user = await db.user.findUnique({
     where: { id: payload.userId },
-    select: { id: true, name: true, email: true, role: true, phone: true, active: true },
+    select: publicUser,
   });
 
   if (!user || !user.active) {
@@ -75,11 +80,10 @@ export async function POST(request: NextRequest) {
     const { password: _, ...safeUser } = user;
 
     const response = NextResponse.json(
-      { user: safeUser, token },
+      { user: safeUser, token, mustChangePassword: user.mustChangePassword },
       { status: 200 }
     );
 
-    // Set HttpOnly cookie for token.
     // Desktop: loopback HTTP must not require the Secure flag (localhost is a
     // trustworthy origin, but the packaged Electron server is plain HTTP).
     const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';

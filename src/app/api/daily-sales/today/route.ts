@@ -82,8 +82,30 @@ export async function GET(request: NextRequest) {
     })
 
     return NextResponse.json({
-      record,
-      sales: todaySales,
+      record: record ? {
+        ...record,
+        totalRevenue: Number(record.totalRevenue),
+        totalProfit: Number(record.totalProfit),
+        totalDiscount: Number(record.totalDiscount),
+        cashTotal: Number(record.cashTotal),
+        cardTotal: Number(record.cardTotal),
+        mobileMoneyTotal: Number(record.mobileMoneyTotal),
+      } : null,
+      sales: todaySales.map((s) => ({
+        ...s,
+        subtotal: Number(s.subtotal),
+        tax: Number(s.tax),
+        discount: Number(s.discount),
+        totalAmount: Number(s.totalAmount),
+        profit: Number(s.profit),
+        items: s.items.map((item) => ({
+          ...item,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+          costPrice: Number(item.costPrice),
+          total: Number(item.total),
+        })),
+      })),
     })
   } catch (error) {
     console.error('Daily sales today error:', error)

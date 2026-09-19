@@ -43,7 +43,23 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 })
     }
 
-    return NextResponse.json(sale)
+    const normalized = {
+      ...sale,
+      subtotal: Number(sale.subtotal),
+      tax: Number(sale.tax),
+      discount: Number(sale.discount),
+      totalAmount: Number(sale.totalAmount),
+      profit: Number(sale.profit),
+      items: sale.items.map((item) => ({
+        ...item,
+        quantity: Number(item.quantity),
+        unitPrice: Number(item.unitPrice),
+        costPrice: Number(item.costPrice),
+        total: Number(item.total),
+      })),
+    }
+
+    return NextResponse.json(normalized)
   } catch (error) {
     console.error('Sale get error:', error)
     return NextResponse.json(

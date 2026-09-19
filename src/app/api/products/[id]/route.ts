@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireAdmin, requireAuth } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // Any authenticated staff may read a single product
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { id } = await params
     const product = await db.product.findUnique({
@@ -26,7 +32,20 @@ export async function GET(
       )
     }
 
-    return NextResponse.json(product)
+    // Normalize Prisma.Decimal so the client never sees price/quantity strings
+    const normalized = {
+      ...product,
+      defaultCostPrice: Number(product.defaultCostPrice),
+      defaultSellingPrice: Number(product.defaultSellingPrice),
+      batches: product.batches.map((b) => ({
+        ...b,
+        quantity: Number(b.quantity),
+        costPrice: Number(b.costPrice),
+        sellingPrice: Number(b.sellingPrice),
+      })),
+    }
+
+    return NextResponse.json(normalized)
   } catch (error) {
     console.error('Product get error:', error)
     return NextResponse.json(
@@ -68,6 +87,7 @@ export async function PUT(
         reorderLevel: body.reorderLevel ?? product.reorderLevel,
         defaultCostPrice: body.defaultCostPrice !== undefined ? body.defaultCostPrice : product.defaultCostPrice,
         defaultSellingPrice: body.defaultSellingPrice !== undefined ? body.defaultSellingPrice : product.defaultSellingPrice,
+        active: body.active !== undefined ? body.active : product.active,
       },
       include: {
         category: { select: { id: true, name: true } },
@@ -79,7 +99,9 @@ export async function PUT(
       action: 'UPDATE',
       entity: 'Product',
       entityId: id,
-      details: `Updated product "${updated.name}"`,
+      details: body.active !== undefined && body.active !== product.active
+        ? `${body.active ? 'Restored' : 'Deactivated'} product "${updated.name}"`
+        : `Updated product "${updated.name}"`,
       ipAddress: getClientIp(request),
     })
 
@@ -105,7 +127,13 @@ export async function DELETE(
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
 
-    const product = await db.product.findUnique({ where: { id } })
+    const product = await db.product.findUnique({
+      where: { id },
+      include: {
+        batches: true,
+        _count: { select: { saleItems: true, batches: true } },
+      },
+    })
     if (!product) {
       return NextResponse.json(
         { error: 'Product not found' },
@@ -113,6 +141,42 @@ export async function DELETE(
       )
     }
 
+    const permanent = request.nextUrl.searchParams.get('permanent') === 'true'
+
+    if (permanent) {
+      // Refuse to destroy history when real sales exist against this product.
+      // saleItems cascade-removes stock history and falsifies daily-sales stats.
+      if (product._count.saleItems > 0) {
+        return NextResponse.json(
+          {
+            error: `This product has ${product._count.saleItems} linked sale record(s). It cannot be permanently deleted without corrupting sales history — deactivate it instead.`,
+          },
+          { status: 409 }
+        )
+      }
+
+      const batchCount = product._count.batches
+      await db.$transaction(async (tx) => {
+        await tx.batch.deleteMany({ where: { productId: id } })
+        await tx.product.delete({ where: { id } })
+      })
+
+      await logAudit({
+        userId: auth.user!.userId,
+        action: 'DELETE',
+        entity: 'Product',
+        entityId: id,
+        details: `Permanently deleted product "${product.name}" (removed ${batchCount} batch record${batchCount !== 1 ? 's' : ''})`,
+        ipAddress: getClientIp(request),
+      })
+
+      return NextResponse.json({
+        message: `Product "${product.name}" permanently deleted`,
+        permanent: true,
+      })
+    }
+
+    // Default path: soft-deactivate so accounting/sales history stays intact
     const deactivated = await db.product.update({
       where: { id },
       data: { active: false },
@@ -127,7 +191,11 @@ export async function DELETE(
       ipAddress: getClientIp(request),
     })
 
-    return NextResponse.json(deactivated)
+    return NextResponse.json({
+      message: `Product "${deactivated.name}" was deactivated (not deleted)`,
+      product: deactivated,
+      permanent: false,
+    })
   } catch (error) {
     console.error('Product delete error:', error)
     return NextResponse.json(

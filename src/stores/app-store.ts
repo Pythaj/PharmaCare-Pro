@@ -32,6 +32,7 @@ interface AppState {
   setAppName: (name: string) => void;
   setAppTagline: (tagline: string) => void;
   login: (user: User) => void;
+  setCurrentUser: (user: User) => void;
   logout: () => void;
   navigate: (page: Page) => void;
   toggleSidebar: () => void;
@@ -81,6 +82,10 @@ export const useAppStore = create<AppState>()(
     isAuthenticated: true,
     loginTime: Date.now(),
     currentPage: user.role === 'admin' ? 'admin-dashboard' : 'sales-dashboard',
+  }),
+
+  setCurrentUser: (user) => set({
+    currentUser: user,
   }),
   
   logout: async () => {
@@ -147,7 +152,7 @@ export const useAppStore = create<AppState>()(
     ),
   })),
   
-  clearCart: () => set({ cart: [], selectedCustomerId: null }),
+  clearCart: () => set({ cart: [] }),
   setSelectedCustomer: (id) => set({ selectedCustomerId: id }),
   
   // Search

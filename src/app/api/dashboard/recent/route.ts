@@ -117,7 +117,21 @@ export async function GET(request: NextRequest) {
     })
 
     return NextResponse.json({
-      recentSales,
+      recentSales: recentSales.map((s) => ({
+        ...s,
+        subtotal: Number(s.subtotal),
+        tax: Number(s.tax),
+        discount: Number(s.discount),
+        totalAmount: Number(s.totalAmount),
+        profit: Number(s.profit),
+        items: s.items.map((item) => ({
+          ...item,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+          costPrice: Number(item.costPrice),
+          total: Number(item.total),
+        })),
+      })),
       recentPurchases,
       recentReturns,
       stockAlerts: stockAlerts.slice(0, 20),

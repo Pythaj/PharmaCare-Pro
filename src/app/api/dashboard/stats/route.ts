@@ -111,12 +111,12 @@ export async function GET(request: NextRequest) {
     }).length
 
     return NextResponse.json({
-      todaySales: todaySalesResult._sum.totalAmount || 0,
-      weeklySales: weeklySalesResult._sum.totalAmount || 0,
-      monthlySales: monthlySalesResult._sum.totalAmount || 0,
-      totalRevenue: totalRevenueResult._sum.totalAmount || 0,
-      totalProfit: totalProfitResult._sum.profit || 0,
-      totalInventoryValue,
+      todaySales: Number(todaySalesResult._sum.totalAmount || 0),
+      weeklySales: Number(weeklySalesResult._sum.totalAmount || 0),
+      monthlySales: Number(monthlySalesResult._sum.totalAmount || 0),
+      totalRevenue: Number(totalRevenueResult._sum.totalAmount || 0),
+      totalProfit: Number(totalProfitResult._sum.profit || 0),
+      totalInventoryValue: Number(totalInventoryValue),
       productsInStock,
       lowStockCount,
       expiringCount: expiringBatches,

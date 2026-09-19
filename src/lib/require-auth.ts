@@ -44,5 +44,13 @@ export async function getAuthUser(request: NextRequest): Promise<JWTPayload | nu
   const token = getTokenFromHeader(authHeader) || cookieToken;
 
   if (!token) return null;
-  return verifyToken(token);
+  const payload = verifyToken(token);
+  if (!payload) return null;
+
+  // Return a plain literal owned by THIS module. Cross-module object graphs
+  // that carry a foreign "realm" tag have been observed losing their
+  // properties when handed back to the compiled route handler, so never pass
+  // the verifyToken() result object through directly.
+  const { userId, email, role } = payload;
+  return { userId, email, role };
 }

@@ -32,7 +32,18 @@ export async function GET(request: NextRequest) {
       db.dailySalesRecord.count({ where }),
     ])
 
-    return NextResponse.json({ records, total, page, limit })
+    return NextResponse.json({
+      records: records.map((r) => ({
+        ...r,
+        totalRevenue: Number(r.totalRevenue),
+        totalProfit: Number(r.totalProfit),
+        totalDiscount: Number(r.totalDiscount),
+        cashTotal: Number(r.cashTotal),
+        cardTotal: Number(r.cardTotal),
+        mobileMoneyTotal: Number(r.mobileMoneyTotal),
+      })),
+      total, page, limit,
+    })
   } catch (error) {
     console.error('Daily sales list error:', error)
     return NextResponse.json({ error: 'Failed to fetch daily sales records' }, { status: 500 })

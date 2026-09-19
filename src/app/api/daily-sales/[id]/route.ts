@@ -47,7 +47,32 @@ export async function GET(
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json({ record, sales })
+    return NextResponse.json({
+      record: {
+        ...record,
+        totalRevenue: Number(record.totalRevenue),
+        totalProfit: Number(record.totalProfit),
+        totalDiscount: Number(record.totalDiscount),
+        cashTotal: Number(record.cashTotal),
+        cardTotal: Number(record.cardTotal),
+        mobileMoneyTotal: Number(record.mobileMoneyTotal),
+      },
+      sales: sales.map((s) => ({
+        ...s,
+        subtotal: Number(s.subtotal),
+        tax: Number(s.tax),
+        discount: Number(s.discount),
+        totalAmount: Number(s.totalAmount),
+        profit: Number(s.profit),
+        items: s.items.map((item) => ({
+          ...item,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+          costPrice: Number(item.costPrice),
+          total: Number(item.total),
+        })),
+      })),
+    })
   } catch (error) {
     console.error('Daily sales detail error:', error)
     return NextResponse.json({ error: 'Failed to fetch daily sales record' }, { status: 500 })

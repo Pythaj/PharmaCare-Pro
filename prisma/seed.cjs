@@ -19,6 +19,7 @@ async function main() {
       role: 'admin',
       phone: '',
       active: true,
+      mustChangePassword: true,
     },
   });
 
