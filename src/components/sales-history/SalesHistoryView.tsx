@@ -327,10 +327,13 @@ export default function DailySalesRegister() {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to delete sale');
       }
-      toast.success(`Sale "${saleToDelete.invoiceNo}" deleted`);
+      toast.success(`Sale "${saleToDelete.invoiceNo}" voided — stock restored`);
       setShowDeleteDialog(false);
       setSaleToDelete(null);
+      setExpandedRecordId(null);
+      setExpandedRecordSales([]);
       fetchToday();
+      fetchPastRecords();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete sale');
     } finally {
@@ -642,7 +645,6 @@ export default function DailySalesRegister() {
                                 expanded={expandedSaleId === sale.id}
                                 expandedItems={expandedSaleItems}
                                 isAdmin={isAdmin}
-                                isDayOpen={isOpen}
                                 onExpand={handleExpandSale}
                                 onPrint={handlePrintReceipt}
                                 onDelete={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
@@ -721,10 +723,11 @@ export default function DailySalesRegister() {
                   record={record}
                   isExpanded={expandedRecordId === record.id}
                   expandedSales={expandedRecordSales}
-                  loadingDetail={loadingRecordDetail}
+                  isLoading={loadingRecordDetail}
                   isAdmin={isAdmin}
                   onExpand={() => handleExpandRecord(record.id)}
                   onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
+                  onVoid={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
                   formatGHS={formatGHS}
                   formatDate={formatDate}
                   onExpandSale={handleExpandSale}
@@ -1283,9 +1286,10 @@ export default function DailySalesRegister() {
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Sale — {saleToDelete?.invoiceNo}?</AlertDialogTitle>
+            <AlertDialogTitle>Void Sale — {saleToDelete?.invoiceNo}?</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The sale and all its items will be permanently deleted.
+              This removes the sale from your records and returns every item to the exact batch
+              it was sold from. Daily totals are recalculated automatically. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1295,7 +1299,7 @@ export default function DailySalesRegister() {
               onClick={handleDeleteSale}
               disabled={deleting}
             >
-              {deleting ? 'Deleting...' : 'Delete Sale'}
+              {deleting ? 'Voiding...' : 'Void Sale & Restore Stock'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1349,7 +1353,6 @@ function SaleRow({
   expanded,
   expandedItems,
   isAdmin,
-  isDayOpen,
   onExpand,
   onPrint,
   onDelete,
@@ -1360,7 +1363,6 @@ function SaleRow({
   expanded: boolean;
   expandedItems: SaleItem[];
   isAdmin: boolean;
-  isDayOpen: boolean;
   onExpand: (saleId: string, items?: SaleItem[]) => void;
   onPrint: (sale: Sale) => void;
   onDelete: (sale: Sale) => void;
@@ -1412,20 +1414,20 @@ function SaleRow({
             >
               <RotateCcw className="h-3.5 w-3.5 text-amber-600" />
             </Button>
-            {isAdmin && isDayOpen && (
+{isAdmin && (
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
                 onClick={(e) => { e.stopPropagation(); onDelete(sale); }}
-                title="Delete Sale"
+                title="Void Sale"
               >
                 <Trash2 className="h-3.5 w-3.5 text-red-500" />
               </Button>
             )}
-          </div>
-        </TableCell>
-      </TableRow>
+            </div>
+          </TableCell>
+        </TableRow>
       {expanded && (
         <TableRow key={`${sale.id}-items`} className="bg-muted/30">
           <TableCell colSpan={10} className="px-10 py-3">
@@ -1485,6 +1487,7 @@ function PastDayCard({
   isAdmin,
   onExpand,
   onReopen,
+  onVoid,
   formatGHS: fmtGHS,
   formatDate: fmtDate,
   onExpandSale,
@@ -1498,6 +1501,7 @@ function PastDayCard({
   isAdmin: boolean;
   onExpand: () => void;
   onReopen: () => void;
+  onVoid: (sale: Sale) => void;
   formatGHS: (v: number) => string;
   formatDate: (d: string) => string;
   onExpandSale: (saleId: string, items?: SaleItem[]) => void;
@@ -1774,6 +1778,7 @@ function PastDayCard({
                                 <TableHead>Customer</TableHead>
                                 <TableHead className="text-right">Total</TableHead>
                                 <TableHead>Payment</TableHead>
+                                {isAdmin && <TableHead className="w-12">Action</TableHead>}
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -1791,10 +1796,23 @@ function PastDayCard({
                                   <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
                                   <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
                                   <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
+                                  {isAdmin && (
+                                    <TableCell className="w-12">
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-7 w-7"
+                                        title="Void Sale"
+                                        onClick={(e) => { e.stopPropagation(); onVoid(sale); }}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                                      </Button>
+                                    </TableCell>
+                                  )}
                                 </TableRow>
                                 {expandedSaleId === sale.id && (
                                   <TableRow className="bg-muted/30">
-                                    <TableCell colSpan={6} className="px-8 py-2">
+                                    <TableCell colSpan={isAdmin ? 7 : 6} className="px-8 py-2">
                                       <table className="w-full text-xs">
                                         <tbody>
                                           {(sale.items ?? []).map((item) => (
