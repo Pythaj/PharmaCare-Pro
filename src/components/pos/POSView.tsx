@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo, useDeferredValue } from 'react';
 import {
   Search,
   Plus,
@@ -291,7 +291,7 @@ function StockGauge({
 // ─────────────────────────────────────────────────────────────
 // StockMovementTicker – animated stock change ticker bar
 // ─────────────────────────────────────────────────────────────
-function StockMovementTicker({ changes }: { changes: StockChange[] }) {
+const StockMovementTicker = memo(function StockMovementTicker({ changes }: { changes: StockChange[] }) {
   if (changes.length === 0) return null;
 
   return (
@@ -349,7 +349,7 @@ function StockMovementTicker({ changes }: { changes: StockChange[] }) {
       </div>
     </div>
   );
-}
+});
 
 // ─────────────────────────────────────────────────────────────
 // Stock Impact Modal – premium stock update display after sale
@@ -694,7 +694,6 @@ const ProductGrid = memo(function ProductGrid({
                   : 'border-slate-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
               } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
               whileTap={{ scale: 0.97 }}
-              layout
             >
               <div className="p-2 lg:p-3">
                 {/* Restock green glow */}
@@ -1267,9 +1266,11 @@ export default function POSView() {
   }, []);
 
   // Instant catalog search + category filter, always sorted A–Z.
-  // Memoized so unrelated state churn (e.g. the backdate input) never
-  // re-filters/re-sorts all ~300 catalog rows on every keystroke.
-  const queryTokens = useMemo(() => normalizeQuery(searchQuery), [searchQuery]);
+  // The query is deferred: keystrokes stay on the urgent lane (the input
+  // updates immediately) while the heavy grid re-filter/render happens in an
+  // interruptible lane afterwards — so typing never blocks the UI.
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const queryTokens = useMemo(() => normalizeQuery(deferredSearchQuery), [deferredSearchQuery]);
   const filteredProducts = useMemo(() => {
     return (activeCategory === 'All'
       ? products
@@ -1627,7 +1628,7 @@ export default function POSView() {
           addedToCart={addedToCart}
           stockChanges={stockChanges}
           restockedIds={restockedIds}
-          searchQuery={searchQuery}
+          searchQuery={deferredSearchQuery}
           onAdd={handleAddToCart}
           onClearSearch={clearSearch}
         />
