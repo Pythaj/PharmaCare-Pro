@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from 'react';
 import {
   Search,
   Plus,
@@ -627,6 +627,263 @@ function getCategoryIcon(catName: string) {
   return Package;
 }
 
+// FEFO stock helpers (pure — kept outside the component so the cart handlers
+// can stay reference-stable for the memoized grid).
+function isBatchExpired(expiryDate?: string | null) {
+  return !!expiryDate && new Date(expiryDate).getTime() < Date.now();
+}
+
+function eligibleBatchesFor(product: ProductWithStock) {
+  return product.batches
+    .filter(b => b.quantity > 0 && !isBatchExpired(b.expiryDate))
+    .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+}
+
+// ─────────────────────────────────────────────────────────────
+// Product grid — memoized as a unit so unrelated POS state (payment
+// method, backdate, notes, customer…) does not re-render every card.
+// ─────────────────────────────────────────────────────────────
+const ProductGrid = memo(function ProductGrid({
+  products,
+  tokens,
+  cartQtyMap,
+  addedToCart,
+  stockChanges,
+  restockedIds,
+  searchQuery,
+  onAdd,
+  onClearSearch,
+}: {
+  products: ProductWithStock[];
+  tokens: string[];
+  cartQtyMap: Map<string, number>;
+  addedToCart: Set<string>;
+  stockChanges: StockChange[];
+  restockedIds: Set<string>;
+  searchQuery: string;
+  onAdd: (product: ProductWithStock) => void;
+  onClearSearch: () => void;
+}) {
+  return (
+    <div className="flex-1 min-h-0 -mx-1 overflow-y-auto pos-product-scroll pr-1">
+      <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
+        {products.length > 0 ? products.map((product) => {
+          const isOutOfStock = product.totalStock === 0;
+          const isLowStock = product.totalStock > 0 && product.totalStock <= (product.reorderLevel || 10);
+          const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil((product.reorderLevel || 10) * 0.3);
+          const isInCart = cartQtyMap.has(product.id);
+          const cartCount = cartQtyMap.get(product.id) || 0;
+          const justAdded = addedToCart.has(product.id);
+          const stockChange = stockChanges.find(c => c.productId === product.id);
+          const effectiveStock = product.totalStock - cartCount;
+          const isRestocked = restockedIds.has(product.id);
+          const reservedPct = product.totalStock > 0 ? (cartCount / product.totalStock) * 100 : 0;
+          const availablePct = product.totalStock > 0 ? (effectiveStock / product.totalStock) * 100 : 0;
+
+          return (
+            <motion.button
+              key={product.id}
+              onClick={() => onAdd(product)}
+              className={`relative text-left rounded-xl border transition-all overflow-hidden bg-white ${
+                isOutOfStock
+                  ? 'border-dashed border-amber-300 bg-gradient-to-br from-white to-amber-50/50 hover:border-amber-400 hover:shadow-md hover:shadow-amber-100 cursor-pointer'
+                  : isCritical
+                  ? 'border-red-200 shadow-sm shadow-red-50/50 hover:border-red-400 hover:shadow-md cursor-pointer'
+                  : isLowStock
+                  ? 'border-amber-200 shadow-sm shadow-amber-50/50 hover:border-amber-400 hover:shadow-md cursor-pointer'
+                  : 'border-slate-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
+              } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
+              whileTap={{ scale: 0.97 }}
+              layout
+            >
+              <div className="p-2 lg:p-3">
+                {/* Restock green glow */}
+                <AnimatePresence>
+                  {isRestocked && (
+                    <motion.div
+                      className="absolute inset-0 rounded-xl border-2 border-emerald-400 pointer-events-none z-20"
+                      initial={{ opacity: 1, scale: 1.05 }}
+                      animate={{ opacity: 0, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 2, ease: 'easeOut' }}
+                      style={{
+                        boxShadow: '0 0 20px 4px rgba(16, 185, 129, 0.3), inset 0 0 20px 4px rgba(16, 185, 129, 0.1)',
+                      }}
+                    />
+                  )}
+                </AnimatePresence>
+
+                {/* Pulse effect on add to cart */}
+                <AnimatePresence>
+                  {justAdded && (
+                    <motion.div
+                      className="absolute inset-0 bg-emerald-100/50 rounded-xl pointer-events-none"
+                      initial={{ opacity: 1 }}
+                      animate={{ opacity: 0 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.8 }}
+                    />
+                  )}
+                </AnimatePresence>
+
+                {/* "1 reserved" floating animation */}
+                <AnimatePresence>
+                  {justAdded && (
+                    <motion.div
+                      className="absolute top-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+                      initial={{ opacity: 1, y: 0 }}
+                      animate={{ opacity: 0, y: -20 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.8 }}
+                    >
+                      <div className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap">
+                        1 reserved
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Stock reduced flash */}
+                <AnimatePresence>
+                  {stockChange && stockChange.type === 'sale' && (
+                    <motion.div
+                      className="absolute top-1 right-1 pointer-events-none z-10"
+                      initial={{ opacity: 1, y: 0 }}
+                      animate={{ opacity: 0, y: -12 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 1.5 }}
+                    >
+                      <div className="flex items-center gap-0.5 text-red-500 text-[10px] font-bold bg-red-50 px-1.5 py-0.5 rounded-full">
+                        <ArrowDownCircle className="h-2.5 w-2.5" />
+                        -{stockChange.oldStock - stockChange.newStock}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* Product Visual Container (AliExpress style) */}
+                <div className="h-16 lg:h-20 bg-slate-50/70 flex items-center justify-center relative overflow-hidden rounded-lg mb-2 border border-slate-100/80">
+                  <ProductIllustration category={product.category?.name} name={product.name} />
+
+                  {/* Cart quantity overlay badge */}
+                  {isInCart && (
+                    <div className="absolute top-1 left-1 bg-emerald-600 text-white text-[9px] font-black h-4.5 min-w-4.5 px-1 rounded-full flex items-center justify-center shadow-sm">
+                      {cartCount}
+                    </div>
+                  )}
+
+                  {/* Stock Gauge absolute overlay */}
+                  <div className="absolute top-1 right-1">
+                    <StockGauge
+                      stock={product.totalStock}
+                      reorderLevel={product.reorderLevel || 10}
+                      size={22}
+                      strokeWidth={2}
+                    />
+                  </div>
+
+                  {/* Out / Critical / Low stock tag overlay on bottom-left */}
+                  {isOutOfStock ? (
+                    <span className="absolute bottom-1 left-1 bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none flex items-center gap-0.5">
+                      <PackagePlus className="h-2.5 w-2.5" />
+                      Backorder
+                    </span>
+                  ) : isCritical ? (
+                    <span className="absolute bottom-1 left-1 bg-red-50 text-red-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none animate-pulse">
+                      Critical
+                    </span>
+                  ) : isLowStock ? (
+                    <span className="absolute bottom-1 left-1 bg-amber-50 text-amber-600 text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider leading-none">
+                      Low
+                    </span>
+                  ) : null}
+                </div>
+
+                {/* Product Name */}
+                <h4 className="font-semibold text-xs lg:text-sm leading-tight line-clamp-2 text-slate-800 h-8 mb-0.5">
+                  <HighlightName name={product.name} term={tokens[0] ?? ''} />
+                </h4>
+
+                {/* Category */}
+                <p className="text-[10px] text-slate-400 mb-1 truncate">
+                  {product.category?.name ?? 'Uncategorized'}
+                </p>
+
+                {/* Price & Unit */}
+                <div className="flex items-baseline gap-0.5 mb-1">
+                  <span className="text-xs lg:text-sm font-bold text-slate-900 leading-none">
+                    {formatGHS(product.minSellingPrice)}
+                  </span>
+                  <span className="text-[8px] lg:text-[9px] text-slate-400 leading-none">/{product.unit || 'unit'}</span>
+                </div>
+
+                {/* Available stock */}
+                <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
+                  <span>Stock:</span>
+                  <CountingNumber
+                    value={effectiveStock}
+                    direction={
+                      stockChange && stockChange.type === 'restock' ? 'up' :
+                      stockChange && stockChange.type === 'sale' ? 'down' : null
+                    }
+                    size="sm"
+                    className={`text-xs font-bold tabular-nums font-mono ${
+                      effectiveStock <= 0
+                        ? 'text-amber-600'
+                        : effectiveStock <= (product.reorderLevel || 10)
+                        ? 'text-amber-600'
+                        : 'text-emerald-600'
+                    }`}
+                  />
+                  {effectiveStock > 0 && (
+                    <span className="text-[8px] text-slate-400">/ {product.totalStock}</span>
+                  )}
+                </div>
+
+                {/* Mini bar progress */}
+                {!isOutOfStock && (
+                  <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden flex">
+                    <motion.div
+                      className="h-full bg-emerald-500 rounded-l-full"
+                      initial={false}
+                      animate={{ width: `${availablePct}%` }}
+                      transition={{ duration: 0.5, ease: 'easeOut' }}
+                    />
+                    <motion.div
+                      className="h-full bg-amber-300"
+                      initial={false}
+                      animate={{ width: `${reservedPct}%` }}
+                      transition={{ duration: 0.5, ease: 'easeOut' }}
+                    />
+                  </div>
+                )}
+              </div>
+            </motion.button>
+          );
+        }) : (
+          <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
+            <Search className="h-10 w-10 mb-3 opacity-30" />
+            <p className="text-sm font-medium">No products found</p>
+            <p className="text-xs mt-1">
+              {searchQuery
+                ? <>Nothing matches &ldquo;{searchQuery}&rdquo; — check the spelling or try a generic name</>
+                : 'Try a different search term or category'}
+            </p>
+            {searchQuery && (
+              <button
+                onClick={onClearSearch}
+                className="mt-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full transition-colors"
+              >
+                Clear search & show all
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
 // ─────────────────────────────────────────────────────────────
 // Main POSView Component
 // ─────────────────────────────────────────────────────────────
@@ -857,16 +1114,7 @@ export default function POSView() {
     setSearchQuery(value);
   };
 
-  const isBatchExpired = (expiryDate?: string | null) =>
-    !!expiryDate && new Date(expiryDate).getTime() < Date.now();
-
-  // FEFO ordering across ALL eligible (non-expired) in-stock batches.
-  const eligibleBatchesFor = (product: ProductWithStock) =>
-    product.batches
-      .filter(b => b.quantity > 0 && !isBatchExpired(b.expiryDate))
-      .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
-
-  const handleAddToCart = (product: ProductWithStock) => {
+  const handleAddToCart = useCallback((product: ProductWithStock) => {
     // Out of stock? The client still sells these (they replenish afterwards),
     // so the card is selectable and the line goes in as a BACKORDER — no
     // batch is reserved or deducted, and the receipt records it normally.
@@ -963,7 +1211,7 @@ export default function POSView() {
     } else {
       toast.success(`${product.name} added to cart`, { duration: 1500 });
     }
-  };
+  }, [cart, addToCart]);
 
   // "Quantity +" on a cart line: bump the line, and when THIS batch runs out,
   // cascade automatically into the next earliest-expiring batch instead of
@@ -1012,13 +1260,23 @@ export default function POSView() {
   // VAT is intentionally NOT added at the POS — retail prices are all-inclusive.
   const total = Math.max(0, subtotal - effectiveDiscount);
 
+  // Stable callback for the (memoized) grid's "no results" recovery action.
+  const clearSearch = useCallback(() => {
+    setSearchQuery('');
+    setActiveCategory('All');
+  }, []);
+
   // Instant catalog search + category filter, always sorted A–Z.
-  const queryTokens = normalizeQuery(searchQuery);
-  const filteredProducts = (activeCategory === 'All'
-    ? products
-    : products.filter(p => p.category?.name === activeCategory)
-  ).filter(p => queryTokens.length === 0 || productMatchesQuery(p, queryTokens))
-   .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+  // Memoized so unrelated state churn (e.g. the backdate input) never
+  // re-filters/re-sorts all ~300 catalog rows on every keystroke.
+  const queryTokens = useMemo(() => normalizeQuery(searchQuery), [searchQuery]);
+  const filteredProducts = useMemo(() => {
+    return (activeCategory === 'All'
+      ? products
+      : products.filter(p => p.category?.name === activeCategory)
+    ).filter(p => queryTokens.length === 0 || productMatchesQuery(p, queryTokens))
+     .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
+  }, [products, activeCategory, queryTokens]);
 
   const cartQtyMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -1360,225 +1618,19 @@ export default function POSView() {
           </div>
         </div>
 
-        {/* Product Grid - Premium scroll */}
-        <div className="flex-1 min-h-0 -mx-1 overflow-y-auto pos-product-scroll pr-1">
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
-            {filteredProducts.length > 0 ? (
-              filteredProducts.map((product) => {
-                const isOutOfStock = product.totalStock === 0;
-                const isLowStock = product.totalStock > 0 && product.totalStock <= (product.reorderLevel || 10);
-                const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil((product.reorderLevel || 10) * 0.3);
-                const isInCart = cartQtyMap.has(product.id);
-                const cartCount = cartQtyMap.get(product.id) || 0;
-                const justAdded = addedToCart.has(product.id);
-                const stockChange = stockChanges.find(c => c.productId === product.id);
-                const effectiveStock = product.totalStock - cartCount;
-                const isRestocked = restockedIds.has(product.id);
-                const reservedPct = product.totalStock > 0 ? (cartCount / product.totalStock) * 100 : 0;
-                const availablePct = product.totalStock > 0 ? (effectiveStock / product.totalStock) * 100 : 0;
-
-                return (
-                  <motion.button
-                    key={product.id}
-                    onClick={() => handleAddToCart(product)}
-                    className={`relative text-left rounded-xl border transition-all overflow-hidden bg-white ${
-                      isOutOfStock
-                        ? 'border-dashed border-amber-300 bg-gradient-to-br from-white to-amber-50/50 hover:border-amber-400 hover:shadow-md hover:shadow-amber-100 cursor-pointer'
-                        : isCritical
-                        ? 'border-red-200 shadow-sm shadow-red-50/50 hover:border-red-400 hover:shadow-md cursor-pointer'
-                        : isLowStock
-                        ? 'border-amber-200 shadow-sm shadow-amber-50/50 hover:border-amber-400 hover:shadow-md cursor-pointer'
-                        : 'border-slate-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
-                    } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
-                    whileTap={{ scale: 0.97 }}
-                    layout
-                  >
-                    <div className="p-2 lg:p-3">
-                      {/* Restock green glow */}
-                      <AnimatePresence>
-                        {isRestocked && (
-                          <motion.div
-                            className="absolute inset-0 rounded-xl border-2 border-emerald-400 pointer-events-none z-20"
-                            initial={{ opacity: 1, scale: 1.05 }}
-                            animate={{ opacity: 0, scale: 1 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 2, ease: 'easeOut' }}
-                            style={{
-                              boxShadow: '0 0 20px 4px rgba(16, 185, 129, 0.3), inset 0 0 20px 4px rgba(16, 185, 129, 0.1)',
-                            }}
-                          />
-                        )}
-                      </AnimatePresence>
-
-                      {/* Pulse effect on add to cart */}
-                      <AnimatePresence>
-                        {justAdded && (
-                          <motion.div
-                            className="absolute inset-0 bg-emerald-100/50 rounded-xl pointer-events-none"
-                            initial={{ opacity: 1 }}
-                            animate={{ opacity: 0 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.8 }}
-                          />
-                        )}
-                      </AnimatePresence>
-
-                      {/* "1 reserved" floating animation */}
-                      <AnimatePresence>
-                        {justAdded && (
-                          <motion.div
-                            className="absolute top-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
-                            initial={{ opacity: 1, y: 0 }}
-                            animate={{ opacity: 0, y: -20 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 0.8 }}
-                          >
-                            <div className="bg-emerald-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap">
-                              1 reserved
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* Stock reduced flash */}
-                      <AnimatePresence>
-                        {stockChange && stockChange.type === 'sale' && (
-                          <motion.div
-                            className="absolute top-1 right-1 pointer-events-none z-10"
-                            initial={{ opacity: 1, y: 0 }}
-                            animate={{ opacity: 0, y: -12 }}
-                            exit={{ opacity: 0 }}
-                            transition={{ duration: 1.5 }}
-                          >
-                            <div className="flex items-center gap-0.5 text-red-500 text-[10px] font-bold bg-red-50 px-1.5 py-0.5 rounded-full">
-                              <ArrowDownCircle className="h-2.5 w-2.5" />
-                              -{stockChange.oldStock - stockChange.newStock}
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* Product Visual Container (AliExpress style) */}
-                      <div className="h-16 lg:h-20 bg-slate-50/70 flex items-center justify-center relative overflow-hidden rounded-lg mb-2 border border-slate-100/80">
-                        <ProductIllustration category={product.category?.name} name={product.name} />
-
-                        {/* Cart quantity overlay badge */}
-                        {isInCart && (
-                          <div className="absolute top-1 left-1 bg-emerald-600 text-white text-[9px] font-black h-4.5 min-w-4.5 px-1 rounded-full flex items-center justify-center shadow-sm">
-                            {cartCount}
-                          </div>
-                        )}
-
-                        {/* Stock Gauge absolute overlay */}
-                        <div className="absolute top-1 right-1">
-                          <StockGauge
-                            stock={product.totalStock}
-                            reorderLevel={product.reorderLevel || 10}
-                            size={22}
-                            strokeWidth={2}
-                          />
-                        </div>
-
-                        {/* Out / Critical / Low stock tag overlay on bottom-left */}
-                        {isOutOfStock ? (
-                          <span className="absolute bottom-1 left-1 bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none flex items-center gap-0.5">
-                            <PackagePlus className="h-2.5 w-2.5" />
-                            Backorder
-                          </span>
-                        ) : isCritical ? (
-                          <span className="absolute bottom-1 left-1 bg-red-50 text-red-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none animate-pulse">
-                            Critical
-                          </span>
-                        ) : isLowStock ? (
-                          <span className="absolute bottom-1 left-1 bg-amber-50 text-amber-600 text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider leading-none">
-                            Low
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {/* Product Name */}
-                      <h4 className="font-semibold text-xs lg:text-sm leading-tight line-clamp-2 text-slate-800 h-8 mb-0.5">
-                        <HighlightName name={product.name} term={queryTokens[0] ?? ''} />
-                      </h4>
-
-                      {/* Category */}
-                      <p className="text-[10px] text-slate-400 mb-1 truncate">
-                        {product.category?.name ?? 'Uncategorized'}
-                      </p>
-
-                      {/* Price & Unit */}
-                      <div className="flex items-baseline gap-0.5 mb-1">
-                        <span className="text-xs lg:text-sm font-bold text-slate-900 leading-none">
-                          {formatGHS(product.minSellingPrice)}
-                        </span>
-                        <span className="text-[8px] lg:text-[9px] text-slate-400 leading-none">/{product.unit || 'unit'}</span>
-                      </div>
-
-                      {/* Available stock */}
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500 mb-1">
-                        <span>Stock:</span>
-                        <CountingNumber
-                          value={effectiveStock}
-                          direction={
-                            stockChange && stockChange.type === 'restock' ? 'up' :
-                            stockChange && stockChange.type === 'sale' ? 'down' : null
-                          }
-                          size="sm"
-                          className={`text-xs font-bold tabular-nums font-mono ${
-                            effectiveStock <= 0
-                              ? 'text-amber-600'
-                              : effectiveStock <= (product.reorderLevel || 10)
-                              ? 'text-amber-600'
-                              : 'text-emerald-600'
-                          }`}
-                        />
-                        {effectiveStock > 0 && (
-                          <span className="text-[8px] text-slate-400">/ {product.totalStock}</span>
-                        )}
-                      </div>
-
-                      {/* Mini bar progress */}
-                      {!isOutOfStock && (
-                        <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden flex">
-                          <motion.div
-                            className="h-full bg-emerald-500 rounded-l-full"
-                            initial={false}
-                            animate={{ width: `${availablePct}%` }}
-                            transition={{ duration: 0.5, ease: 'easeOut' }}
-                          />
-                          <motion.div
-                            className="h-full bg-amber-300"
-                            initial={false}
-                            animate={{ width: `${reservedPct}%` }}
-                            transition={{ duration: 0.5, ease: 'easeOut' }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </motion.button>
-                );
-              })
-            ) : (
-              <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
-                <Search className="h-10 w-10 mb-3 opacity-30" />
-                <p className="text-sm font-medium">No products found</p>
-                <p className="text-xs mt-1">
-                  {searchQuery
-                    ? <>Nothing matches &ldquo;{searchQuery}&rdquo; — check the spelling or try a generic name</>
-                    : 'Try a different search term or category'}
-                </p>
-                {searchQuery && (
-                  <button
-                    onClick={() => { setSearchQuery(''); setActiveCategory('All'); }}
-                    className="mt-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full transition-colors"
-                  >
-                    Clear search & show all
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        {/* Product Grid - Premium scroll (memoized: only re-renders when the
+            catalog/filter/cart data it depends on actually changes) */}
+        <ProductGrid
+          products={filteredProducts}
+          tokens={queryTokens}
+          cartQtyMap={cartQtyMap}
+          addedToCart={addedToCart}
+          stockChanges={stockChanges}
+          restockedIds={restockedIds}
+          searchQuery={searchQuery}
+          onAdd={handleAddToCart}
+          onClearSearch={clearSearch}
+        />
       </div>
 
       {/* Floating Cart FAB - Mobile Only */}
