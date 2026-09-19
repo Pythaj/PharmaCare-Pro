@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
 import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X, PackagePlus, Boxes, RefreshCcw, Package, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -644,7 +644,6 @@ export default function ProductsView() {
   const [deleting, setDeleting] = useState(false);
   const [showIncludedInactive, setShowIncludedInactive] = useState(false);
   const includeInactiveRef = useRef(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Edit Price dialog state
   const [showEditPriceDialog, setShowEditPriceDialog] = useState(false);
@@ -669,11 +668,13 @@ export default function ProductsView() {
   const [editActiveBatchKey, setEditActiveBatchKey] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
 
-  const fetchProducts = useCallback(async (query: string, cat: string) => {
+  // Fetches the full catalog (optionally including deactivated products) once;
+  // search + category filtering happen client-side so typing never re-queries
+  // the server. Callers may pass the old (query, category) args — they are
+  // ignored by design.
+  const fetchProducts = useCallback(async (_query?: string, _cat?: string) => {
     try {
-      let url = `/api/products?search=${encodeURIComponent(query)}`;
-      if (cat && cat !== 'all') url += `&categoryId=${cat}`;
-      if (includeInactiveRef.current) url += `&includeInactive=true`;
+      const url = includeInactiveRef.current ? '/api/products?includeInactive=true' : '/api/products';
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -706,21 +707,41 @@ export default function ProductsView() {
   const handleToggleInactive = (value: boolean) => {
     setShowIncludedInactive(value);
     includeInactiveRef.current = value;
-    fetchProducts(search, categoryFilter);
+    fetchProducts();
   };
 
   const handleSearch = (value: string) => {
     setSearch(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      fetchProducts(value, categoryFilter);
-    }, 300);
   };
 
   const handleCategoryChange = (value: string) => {
     setCategoryFilter(value);
-    fetchProducts(search, value);
   };
+
+  // Client-side filtering mirrors the server's /api/products contract:
+  // case-insensitive search across name/generic/description/category/batch
+  // numbers, exact category match and the active flag when "Deactivated"
+  // is not toggled.
+  const visibleProducts = useMemo(() => {
+    let list = showIncludedInactive ? products : products.filter((p) => p.active);
+    if (categoryFilter && categoryFilter !== 'all') {
+      list = list.filter((p) => p.categoryId === categoryFilter);
+    }
+    const q = search.trim().toLowerCase();
+    if (q) {
+      list = list.filter((p) => {
+        const haystack = [
+          p.name,
+          p.genericName,
+          p.description,
+          p.category?.name,
+          ...(p.batches ?? []).map((b) => b.batchNumber),
+        ];
+        return haystack.some((field) => field && field.toLowerCase().includes(q));
+      });
+    }
+    return list;
+  }, [products, search, categoryFilter, showIncludedInactive]);
 
   const getProductStatusBadges = (product: ProductWithStock) => {
     const badges: { label: string; className: string }[] = [];
@@ -1216,8 +1237,8 @@ export default function ProductsView() {
                       {canManageProducts && <TableCell><Skeleton className="h-4 w-20 mx-auto" /></TableCell>}
                     </TableRow>
                   ))
-                ) : products.length > 0 ? (
-                  products.map((product, index) => {
+                ) : visibleProducts.length > 0 ? (
+                  visibleProducts.map((product, index) => {
                     const badges = getProductStatusBadges(product);
                     const hasAlert = isAlertProduct(product);
                     const isExpanded = expandedRow === product.id;

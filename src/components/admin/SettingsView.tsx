@@ -89,6 +89,7 @@ import {
 import { toast } from 'sonner';
 import { useAccentTheme, THEME_SWATCHES, type AccentTheme } from '@/hooks/use-accent-theme';
 import { useAppStore } from '@/stores/app-store';
+import { invalidateSettingsCache } from '@/hooks/use-pharmacy-settings';
 import {
   defaultSettings,
   flattenSettings,
@@ -414,6 +415,9 @@ export default function SettingsView() {
       });
       if (res.ok) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
+        // Drop the memoized settings promise so already-mounted consumers
+        // re-fetch the freshly saved values on their next load.
+        invalidateSettingsCache();
         setSaved(true);
         toast.success('Settings saved successfully');
         setTimeout(() => setSaved(false), 2000);

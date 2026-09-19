@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Search,
   Package,
@@ -142,7 +142,6 @@ export default function InventoryView() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StockFilter>('all');
   const [loading, setLoading] = useState(true);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useAppStore((s) => s.navigate);
   const { canManageInventory } = usePermissions();
 
@@ -164,20 +163,6 @@ export default function InventoryView() {
       if (res.ok) {
         const data = await res.json();
         setAlerts(data);
-      }
-    } catch { /* silent */ }
-  }, []);
-
-  const fetchProducts = useCallback(async (query: string) => {
-    try {
-      const res = await fetch(`/api/products?search=${encodeURIComponent(query)}`);
-      if (res.ok) {
-        const data = await res.json();
-        const mapped = (data.products ?? []).map((p: any) => ({
-          ...p,
-          batches: p.batches?.map((b: any) => ({ ...b, currentQty: b.quantity })) ?? [],
-        }));
-        setProducts(mapped);
       }
     } catch { /* silent */ }
   }, []);
@@ -210,20 +195,35 @@ export default function InventoryView() {
 
   const handleSearch = (value: string) => {
     setSearch(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => fetchProducts(value), 300);
   };
 
-  // Filter products based on selected filter
-  const filteredProducts = products.filter((p) => {
-    switch (filter) {
-      case 'out_of_stock': return p.stockStatus === 'out_of_stock';
-      case 'low_stock': return p.stockStatus === 'low_stock';
-      case 'expiring_soon': return p.expiryStatus === 'expiring_soon' || p.hasExpiringBatches;
-      case 'expired': return p.expiryStatus === 'expired' || p.hasExpiredBatches;
-      default: return true;
+  // Case-insensitive search over the fields a cashier might type — mirrors the
+  // server-side /api/products filter (name, generic name, description,
+  // category and batch numbers) but runs against the already-fetched catalog,
+  // so typing never triggers a network round-trip.
+  const filteredProducts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = products;
+    if (q) {
+      list = list.filter((p) => {
+        const haystack = [
+          p.name,
+          p.genericName,
+          p.description,
+          p.category?.name,
+          ...(p.batches ?? []).map((b) => b.batchNumber),
+        ];
+        return haystack.some((field) => field && field.toLowerCase().includes(q));
+      });
     }
-  });
+    switch (filter) {
+      case 'out_of_stock': return list.filter((p) => p.stockStatus === 'out_of_stock');
+      case 'low_stock': return list.filter((p) => p.stockStatus === 'low_stock');
+      case 'expiring_soon': return list.filter((p) => p.expiryStatus === 'expiring_soon' || p.hasExpiringBatches);
+      case 'expired': return list.filter((p) => p.expiryStatus === 'expired' || p.hasExpiredBatches);
+      default: return list;
+    }
+  }, [products, search, filter]);
 
   const getBatchStatus = (batch: { expiryDate: string; currentQty: number }) => {
     const now = new Date();

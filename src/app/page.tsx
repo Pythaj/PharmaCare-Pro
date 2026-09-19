@@ -2,7 +2,7 @@
 
 import { lazy, Suspense, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { useAppStore } from '@/stores/app-store';
-import { unflattenSettings } from '@/lib/app-settings';
+import { fetchLatestSettings } from '@/hooks/use-pharmacy-settings';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { MobileBottomNav } from '@/components/layout/MobileBottomNav';
@@ -22,13 +22,8 @@ function useLoadAppSettings() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/settings');
-        if (res.ok) {
-          const data = await res.json();
-          // The settings API returns flat dot-notation keys ("pharmacy.appName").
-          // Unflatten before reading so branding loads from the server and not
-          // just the localStorage fallback.
-          const settings = data.settings ? unflattenSettings(data.settings) : {};
+        const settings = await fetchLatestSettings();
+        if (settings) {
           const name = settings.pharmacy?.appName?.trim();
           const tagline = settings.pharmacy?.tagline?.trim();
           if (name) setAppName(name);
@@ -137,8 +132,7 @@ export default function Home() {
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [logout]);
 
   // Role-based page access guard
   const resolvedPage = (() => {

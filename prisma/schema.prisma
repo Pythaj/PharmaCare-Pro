@@ -74,6 +74,8 @@ model Product {
   batches     Batch[]
   saleItems   SaleItem[]
 
+  @@index([active])
+  @@index([categoryId])
   @@map("products")
 }
 
@@ -150,6 +152,9 @@ model Sale {
   items         SaleItem[]
   returns       Return[]
 
+  @@index([createdAt])
+  @@index([customerId])
+  @@index([userId])
   @@map("sales")
 }
 
@@ -170,6 +175,9 @@ model SaleItem {
   batch     Batch?  @relation(fields: [batchId], references: [id])
   returnItems ReturnItem[]
 
+  @@index([saleId])
+  @@index([productId])
+  @@index([batchId])
   @@map("sale_items")
 }
 
@@ -215,6 +223,8 @@ model AuditLog {
 
   user      User?    @relation(fields: [userId], references: [id])
 
+  @@index([createdAt])
+  @@index([userId])
   @@map("audit_logs")
 }
 

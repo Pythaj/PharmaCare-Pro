@@ -7,6 +7,10 @@
  * a localStorage mirror (SETTINGS_STORAGE_KEY) provides instant offline
  * reads and is written through on every successful fetch. Consumers such
  * as POSView use this for VAT rate, receipt branding and behaviour flags.
+ *
+ * The API call is memoized at module level so mounting many consumers
+ * (POS, SalesHistory, the app shell) results in a single /api/settings
+ * round-trip per tab session instead of one fetch per mounted view.
  */
 
 import { useEffect, useState } from 'react';
@@ -41,25 +45,52 @@ function mergeSettings(partial: Partial<AllSettings> | null | undefined): AllSet
   return merged;
 }
 
+let settingsPromise: Promise<AllSettings | null> | null = null;
+
+/**
+ * Fetches the latest settings once per session — the promise is shared, so
+ * concurrent callers (multiple views mounting at once) dedupe into a single
+ * request. Returns null when the API is unreachable so the caller can keep
+ * its localStorage cache/defaults.
+ */
+export function fetchLatestSettings(): Promise<AllSettings | null> {
+  if (settingsPromise) return settingsPromise;
+  settingsPromise = (async () => {
+    try {
+      const res = await fetch('/api/settings');
+      if (!res.ok) return null;
+      const data = await res.json();
+      const flat: Record<string, string> = data.settings ?? {};
+      if (Object.keys(flat).length === 0) return null;
+      return mergeSettings(unflattenSettings(flat));
+    } catch {
+      return null;
+    }
+  })().finally(() => {
+    // Allow a later explicit refresh (e.g. after SettingsView saves) to refetch.
+    settingsPromise = null;
+  });
+  return settingsPromise;
+}
+
+/** Drops the memoized settings promise so the next fetchLatestSettings() re-queries. */
+export function invalidateSettingsCache() {
+  settingsPromise = null;
+}
+
 export function usePharmacySettings(): { settings: AllSettings } {
   const [settings, setSettings] = useState<AllSettings>(readCached);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      const merged = await fetchLatestSettings();
+      if (!merged || cancelled) return;
+      setSettings(merged);
       try {
-        const res = await fetch('/api/settings');
-        if (!res.ok || cancelled) return;
-        const data = await res.json();
-        const flat: Record<string, string> = data.settings ?? {};
-        if (Object.keys(flat).length === 0) return;
-        const merged = mergeSettings(unflattenSettings(flat));
-        if (!cancelled) {
-          setSettings(merged);
-          window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
-        }
+        window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(merged));
       } catch {
-        // Offline / API unavailable — cached values remain in use
+        // Storage full / blocked — in-memory value still applies
       }
     })();
     return () => {
