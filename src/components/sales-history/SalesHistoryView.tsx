@@ -104,8 +104,122 @@ function formatTime(dateStr: string): string {
   });
 }
 
+// ---- Audit grouping ---------------------------------------------------
+
+type GroupMode = 'all' | 'cashier' | 'payment' | 'shift';
+
+interface AuditGroup {
+  key: string;
+  label: string;
+  sales: Sale[];
+  count: number;
+  itemsSold: number;
+  revenue: number;
+  profit: number;
+  cash: number;
+  card: number;
+  momo: number;
+}
+
+const GROUP_BY_OPTIONS: { value: GroupMode; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'cashier', label: 'Cashier' },
+  { value: 'payment', label: 'Payment' },
+  { value: 'shift', label: 'Shift' },
+];
+
+const PAY_LABEL: Record<string, string> = {
+  cash: 'Cash',
+  card: 'Card',
+  mobile_money: 'Mobile Money',
+};
+
+function shiftLabelOf(date: Date): string {
+  const h = date.getHours();
+  if (h < 6) return 'Night (00:00–05:59)';
+  if (h < 12) return 'Morning (06:00–11:59)';
+  if (h < 17) return 'Afternoon (12:00–16:59)';
+  return 'Evening (17:00–23:59)';
+}
+
+function buildAuditGroups(sales: Sale[], mode: GroupMode): AuditGroup[] {
+  const summarize = (groupSales: Sale[]): AuditGroup => ({
+    key: groupSales[0]?.invoiceNo ?? 'all',
+    label: mode,
+    sales: groupSales,
+    count: groupSales.length,
+    itemsSold: groupSales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) ?? 0), 0),
+    revenue: groupSales.reduce((sum, s) => sum + Number(s.totalAmount), 0),
+    profit: groupSales.reduce((sum, s) => sum + Number(s.profit), 0),
+    cash: groupSales.filter((s) => s.paymentMethod === 'cash').reduce((sum, s) => sum + Number(s.totalAmount), 0),
+    card: groupSales.filter((s) => s.paymentMethod === 'card').reduce((sum, s) => sum + Number(s.totalAmount), 0),
+    momo: groupSales.filter((s) => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + Number(s.totalAmount), 0),
+  });
+
+  if (mode === 'all') return [summaryOfAll(sales, summarize)];
+
+  const map = new Map<string, Sale[]>();
+  for (const s of sales) {
+    const key =
+      mode === 'cashier'
+        ? (s.user?.name ?? 'Unknown cashier')
+        : mode === 'payment'
+        ? (s.paymentMethod ?? 'other')
+        : shiftLabelOf(new Date(s.createdAt));
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
+  }
+  return [...map.entries()].map(([key, list]) => ({
+    ...summarize(list),
+    key,
+    label: mode === 'payment' ? (PAY_LABEL[key] ?? key) : key,
+  }));
+}
+
+function summaryOfAll(sales: Sale[], summarize: (s: Sale[]) => AuditGroup): AuditGroup {
+  return { ...summarize(sales), key: 'all', label: 'All transactions' };
+}
+
+function GroupByControl({ value, onChange }: { value: GroupMode; onChange: (m: GroupMode) => void }) {
+  return (
+    <div className="flex items-center gap-0.5 bg-muted/70 rounded-lg p-0.5">
+      {GROUP_BY_OPTIONS.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => onChange(o.value)}
+          className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-all ${value === o.value ? 'bg-white text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function AuditGroupHeader({ group }: { group: AuditGroup }) {
+  return (
+    <div className="flex items-center justify-between gap-2 px-3 py-1.5 border-b border-slate-100 bg-gradient-to-r from-emerald-50/40 to-transparent">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <p className="text-xs font-semibold text-slate-700 truncate">{group.label}</p>
+        <Badge variant="secondary" className="text-[10px] h-4 px-1.5">
+          {group.count} tx
+        </Badge>
+        <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+          {group.itemsSold} items
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2 text-[10px] shrink-0">
+        {group.cash > 0 && <span className="text-green-600 font-semibold">Cash {formatGHS(group.cash)}</span>}
+        {group.card > 0 && <span className="text-blue-600 font-semibold">Card {formatGHS(group.card)}</span>}
+        {group.momo > 0 && <span className="text-purple-600 font-semibold">MoMo {formatGHS(group.momo)}</span>}
+        <span className="font-bold text-slate-800">{formatGHS(group.revenue)}</span>
+      </div>
+    </div>
+  );
+}
+
 export default function DailySalesRegister() {
-  const { currentUser, navigate } = useAppStore();
+  const { currentUser, navigate, setPosPresetDate } = useAppStore();
   // Receipt branding comes from system settings (single source of truth)
   const { settings } = usePharmacySettings();
   const { isAdmin } = usePermissions();
@@ -115,6 +229,10 @@ export default function DailySalesRegister() {
   const [todayRecord, setTodayRecord] = useState<DailySalesRecord | null>(null);
   const [todaySales, setTodaySales] = useState<Sale[]>([]);
   const [loadingToday, setLoadingToday] = useState(true);
+  const [todayGroupMode, setTodayGroupMode] = useState<GroupMode>('cashier');
+
+  // Memoized audit groups for today's feed
+  const todayGroups = useMemo(() => buildAuditGroups(todaySales, todayGroupMode), [todaySales, todayGroupMode]);
 
   // Past records
   const [pastRecords, setPastRecords] = useState<DailySalesRecord[]>([]);
@@ -608,52 +726,46 @@ export default function DailySalesRegister() {
                         {todaySales.length}
                       </Badge>
                     </CardTitle>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 text-xs"
-                      onClick={() => { fetchToday(); toast.success('Refreshed'); }}
-                    >
-                      <RefreshCw className="h-3.5 w-3.5 mr-1" />
-                      Refresh
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      <GroupByControl value={todayGroupMode} onChange={setTodayGroupMode} />
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 text-xs"
+                        onClick={() => { fetchToday(); toast.success('Refreshed'); }}
+                      >
+                        <RefreshCw className="h-3.5 w-3.5 mr-1" />
+                        Refresh
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="p-0">
                     {todaySales.length > 0 ? (
-                      <ScrollArea className="max-h-[500px]">
-                        <Table>
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead className="w-8" />
-                              <TableHead>Time</TableHead>
-                              <TableHead>Invoice#</TableHead>
-                              <TableHead>Customer</TableHead>
-                              <TableHead className="text-center">Items</TableHead>
-                              <TableHead className="text-right">Total</TableHead>
-                              <TableHead className="text-right hidden md:table-cell">Profit</TableHead>
-                              <TableHead className="hidden sm:table-cell">Payment</TableHead>
-                              <TableHead className="hidden lg:table-cell">Cashier</TableHead>
-                              <TableHead className="w-28 hidden sm:table-cell">Actions</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {todaySales.map((sale, idx) => (
-                              <SaleRow
-                                key={sale.id}
-                                sale={sale}
-                                index={idx}
-                                expanded={expandedSaleId === sale.id}
-                                expandedItems={expandedSaleItems}
-                                isAdmin={isAdmin}
-                                onExpand={handleExpandSale}
-                                onPrint={handlePrintReceipt}
-                                onDelete={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
-                                onRefund={() => { navigate('returns'); }}
-                              />
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </ScrollArea>
+                      <div className="max-h-[520px] overflow-y-auto">
+                        {todayGroups.map((group) => (
+                          <div key={group.key}>
+                            <AuditGroupHeader group={group} />
+                            <Table>
+                              <TableBody>
+                                {group.sales.map((sale, idx) => (
+                                  <SaleRow
+                                    key={sale.id}
+                                    sale={sale}
+                                    index={idx}
+                                    expanded={expandedSaleId === sale.id}
+                                    expandedItems={expandedSaleItems}
+                                    isAdmin={isAdmin}
+                                    onExpand={handleExpandSale}
+                                    onPrint={handlePrintReceipt}
+                                    onDelete={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
+                                    onRefund={() => { navigate('returns'); }}
+                                  />
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        ))}
+                      </div>
                     ) : (
                       <div className="py-16 text-center">
                         <Receipt className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
@@ -727,6 +839,7 @@ export default function DailySalesRegister() {
                   isAdmin={isAdmin}
                   onExpand={() => handleExpandRecord(record.id)}
                   onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
+                  onBackfill={() => { setPosPresetDate(record.date); navigate('pos'); }}
                   onVoid={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
                   formatGHS={formatGHS}
                   formatDate={formatDate}
@@ -1488,6 +1601,7 @@ function PastDayCard({
   onExpand,
   onReopen,
   onVoid,
+  onBackfill,
   formatGHS: fmtGHS,
   formatDate: fmtDate,
   onExpandSale,
@@ -1502,6 +1616,7 @@ function PastDayCard({
   onExpand: () => void;
   onReopen: () => void;
   onVoid: (sale: Sale) => void;
+  onBackfill: () => void;
   formatGHS: (v: number) => string;
   formatDate: (d: string) => string;
   onExpandSale: (saleId: string, items?: SaleItem[]) => void;
@@ -1512,6 +1627,10 @@ function PastDayCard({
   const profitMargin = record.totalRevenue > 0 ? (record.totalProfit / record.totalRevenue) * 100 : 0;
   const [itemTab, setItemTab] = useState<'sales' | 'items' | 'summary'>('sales');
   const [itemSearch, setItemSearch] = useState('');
+  const [salesGroupMode, setSalesGroupMode] = useState<GroupMode>('cashier');
+
+  // Memoized audit groups for this day's sales
+  const dayGroups = useMemo(() => buildAuditGroups(expandedSales, salesGroupMode), [expandedSales, salesGroupMode]);
 
   // Flatten all items from all sales, sorted by time
   const allItems = useMemo(() => {
@@ -1683,6 +1802,17 @@ function PastDayCard({
             {/* Action buttons */}
             {isExpanded && (
               <div className="flex items-center gap-2 mt-3 pt-3 border-t" onClick={(e) => e.stopPropagation()}>
+                {isAdmin && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 text-xs text-emerald-600 border-emerald-300 hover:bg-emerald-50"
+                    onClick={(e) => { e.stopPropagation(); onBackfill(); }}
+                  >
+                    <Receipt className="h-3 w-3 mr-1" />
+                    {isClosed ? 'Backfill sales' : 'Enter sales'}
+                  </Button>
+                )}
                 {isClosed && isAdmin && (
                   <Button
                     variant="outline"
@@ -1768,70 +1898,70 @@ function PastDayCard({
 
                       {/* Sales Tab */}
                       {itemTab === 'sales' && (
-                        <ScrollArea className="max-h-80">
-                          <Table>
-                            <TableHeader>
-                              <TableRow>
-                                <TableHead className="w-6" />
-                                <TableHead>Time</TableHead>
-                                <TableHead>Invoice#</TableHead>
-                                <TableHead>Customer</TableHead>
-                                <TableHead className="text-right">Total</TableHead>
-                                <TableHead>Payment</TableHead>
-                                {isAdmin && <TableHead className="w-12">Action</TableHead>}
-                              </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                              {expandedSales.map((sale) => (
-                                <Fragment key={sale.id}>
-                                <TableRow
-                                  className="cursor-pointer hover:bg-muted/50"
-                                  onClick={() => onExpandSale(sale.id, sale.items)}
-                                >
-                                  <TableCell className="w-6">
-                                    {expandedSaleId === sale.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-                                  </TableCell>
-                                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(sale.createdAt)}</TableCell>
-                                  <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
-                                  <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
-                                  <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
-                                  <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
-                                  {isAdmin && (
-                                    <TableCell className="w-12">
-                                      <Button
-                                        variant="ghost"
-                                        size="icon"
-                                        className="h-7 w-7"
-                                        title="Void Sale"
-                                        onClick={(e) => { e.stopPropagation(); onVoid(sale); }}
-                                      >
-                                        <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                                      </Button>
-                                    </TableCell>
-                                  )}
-                                </TableRow>
-                                {expandedSaleId === sale.id && (
-                                  <TableRow className="bg-muted/30">
-                                    <TableCell colSpan={isAdmin ? 7 : 6} className="px-8 py-2">
-                                      <table className="w-full text-xs">
-                                        <tbody>
-                                          {(sale.items ?? []).map((item) => (
-                                            <tr key={item.id} className="border-b border-dotted">
-                                              <td className="py-1">{item.product?.name ?? 'Product'}</td>
-                                              <td className="text-center py-1">{item.quantity}</td>
-                                              <td className="text-right py-1">{fmtGHS(item.total)}</td>
-                                            </tr>
-                                          ))}
-                                        </tbody>
-                                      </table>
-                                    </TableCell>
-                                  </TableRow>
-                                )}
-                                </Fragment>
-                              ))}
-                            </TableBody>
-                          </Table>
-                        </ScrollArea>
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-muted-foreground">{expandedSales.length} transaction(s) this day</p>
+                            <GroupByControl value={salesGroupMode} onChange={setSalesGroupMode} />
+                          </div>
+                          <ScrollArea className="max-h-80">
+                            {dayGroups.map((group) => (
+                              <div key={group.key}>
+                                <AuditGroupHeader group={group} />
+                                <Table>
+                                  <TableBody>
+                                    {group.sales.map((sale) => (
+                                      <Fragment key={sale.id}>
+                                        <TableRow
+                                          className="cursor-pointer hover:bg-muted/50"
+                                          onClick={() => onExpandSale(sale.id, sale.items)}
+                                        >
+                                          <TableCell className="w-6">
+                                            {expandedSaleId === sale.id ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                                          </TableCell>
+                                          <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(sale.createdAt)}</TableCell>
+                                          <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
+                                          <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
+                                          <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
+                                          <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
+                                          {isAdmin && (
+                                            <TableCell className="w-12">
+                                              <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-7 w-7"
+                                                title="Void Sale"
+                                                onClick={(e) => { e.stopPropagation(); onVoid(sale); }}
+                                              >
+                                                <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                                              </Button>
+                                            </TableCell>
+                                          )}
+                                        </TableRow>
+                                        {expandedSaleId === sale.id && (
+                                          <TableRow className="bg-muted/30">
+                                            <TableCell colSpan={isAdmin ? 7 : 6} className="px-8 py-2">
+                                              <table className="w-full text-xs">
+                                                <tbody>
+                                                  {(sale.items ?? []).map((item) => (
+                                                    <tr key={item.id} className="border-b border-dotted">
+                                                      <td className="py-1">{item.product?.name ?? 'Product'}</td>
+                                                      <td className="text-center py-1">{item.quantity}</td>
+                                                      <td className="text-right py-1">{fmtGHS(item.total)}</td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                            </TableCell>
+                                          </TableRow>
+                                        )}
+                                      </Fragment>
+                                    ))}
+                                  </TableBody>
+                                </Table>
+                              </div>
+                            ))}
+                          </ScrollArea>
+                        </div>
                       )}
 
                       {/* All Items Tab */}

@@ -22,6 +22,8 @@ interface AppState {
   // POS Cart
   cart: CartItem[];
   selectedCustomerId: string | null;
+  // Date the POS should pre-fill (used by the register's "backfill sales" deep-link)
+  posPresetDate: string | null;
   
   // UI State
   searchQuery: string;
@@ -44,6 +46,7 @@ interface AppState {
   updateCartQuantity: (productId: string, batchId: string, quantity: number) => void;
   clearCart: () => void;
   setSelectedCustomer: (id: string | null) => void;
+  setPosPresetDate: (date: string | null) => void;
   
   // Search
   setSearchQuery: (query: string) => void;
@@ -70,6 +73,7 @@ export const useAppStore = create<AppState>()(
   // POS Cart
   cart: [],
   selectedCustomerId: null,
+  posPresetDate: null,
   
   // UI State
   searchQuery: '',
@@ -154,6 +158,7 @@ export const useAppStore = create<AppState>()(
   
   clearCart: () => set({ cart: [] }),
   setSelectedCustomer: (id) => set({ selectedCustomerId: id }),
+  setPosPresetDate: (date) => set({ posPresetDate: date }),
   
   // Search
   setSearchQuery: (query) => set({ searchQuery: query }),

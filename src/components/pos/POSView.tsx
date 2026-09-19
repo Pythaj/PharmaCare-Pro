@@ -32,6 +32,7 @@ import {
   UserRoundPlus,
   UserRound,
   Zap,
+  Calendar,
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useTransform, animate, useSpring } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -58,6 +59,15 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/co
 
 function formatGHS(value: number): string {
   return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
+}
+
+function toDateKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function formatDateKey(key: string): string {
+  const d = new Date(key + 'T00:00:00');
+  return d.toLocaleDateString('en-GH', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 interface ProductWithStock extends Product {
@@ -590,7 +600,8 @@ function getCategoryIcon(catName: string) {
 // Main POSView Component
 // ─────────────────────────────────────────────────────────────
 export default function POSView() {
-  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer } = useAppStore();
+  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer, posPresetDate, setPosPresetDate } = useAppStore();
+  const isAdminUser = currentUser?.role === 'admin';
   // Configurable VAT rate + receipt branding come from system settings
   const { settings } = usePharmacySettings();
   const [searchQuery, setSearchQuery] = useState('');
@@ -618,6 +629,7 @@ export default function POSView() {
   const submittingRef = useRef(false);
   const searchQueryRef = useRef('');
   const [cashReceived, setCashReceived] = useState(0);
+  const [saleDate, setSaleDate] = useState(() => toDateKey(new Date()));
   const [loading, setLoading] = useState(true);
   const [cartOpen, setCartOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -628,6 +640,13 @@ export default function POSView() {
     window.addEventListener('resize', check);
     return () => window.removeEventListener('resize', check);
   }, []);
+  // Deep-link from the register: "enter sales for this date" pre-fills the date
+  useEffect(() => {
+    if (posPresetDate) {
+      setSaleDate(posPresetDate);
+      setPosPresetDate(null);
+    }
+  }, [posPresetDate, setPosPresetDate]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stockChanges, setStockChanges] = useState<StockChange[]>([]);
   const [addedToCart, setAddedToCart] = useState<Set<string>>(new Set());
@@ -1002,6 +1021,7 @@ export default function POSView() {
           tax: 0,
           paymentMethod,
           notes: notes || undefined,
+          saleDate,
         }),
       });
       if (!res.ok) {
@@ -1072,6 +1092,7 @@ export default function POSView() {
     setNotes('');
     setPaymentMethod('cash');
     setSelectedCustomer(null);
+    setSaleDate(toDateKey(new Date()));
   };
 
   // Reported-change display on the desktop/mobile payment sections. The
@@ -1098,6 +1119,34 @@ export default function POSView() {
         )}
       </div>
     ) : null;
+
+  // Admin-only "record date" for a sale — lets the owner backfill sales for any
+  // previous day straight from the POS. Hidden for cashiers (server enforces).
+  const renderSaleDatePicker = () => {
+    if (!isAdminUser) return null;
+    const isBackdated = saleDate !== toDateKey(new Date());
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-lg bg-slate-50/70 border border-slate-100 px-2.5 py-1.5">
+        <div className="flex items-center gap-1.5">
+          <Calendar className="h-3.5 w-3.5 text-slate-400" />
+          <Label htmlFor="pos-sale-date" className="text-[10px] text-slate-500 uppercase tracking-wide font-semibold">Sale date</Label>
+          {isBackdated && (
+            <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] px-1.5 h-4 normal-case tracking-normal">
+              {formatDateKey(saleDate)}
+            </Badge>
+          )}
+        </div>
+        <Input
+          id="pos-sale-date"
+          type="date"
+          max={toDateKey(new Date())}
+          value={saleDate}
+          onChange={(e) => setSaleDate(e.target.value || toDateKey(new Date()))}
+          className="h-6 w-[132px] text-[11px] text-right bg-white border-slate-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20 font-mono"
+        />
+      </div>
+    );
+  };
 
   const paymentIcons = {
     cash: Banknote,
@@ -1570,6 +1619,7 @@ export default function POSView() {
                 <div className="h-px bg-slate-200 my-1" />
                 <div className="flex justify-between items-baseline"><span className="font-bold text-sm text-slate-700">Total</span><span className="font-black text-lg text-emerald-600 font-mono">{formatGHS(total)}</span></div>
               </div>
+              {renderSaleDatePicker()}
               <div className="flex gap-2">
                 {(['cash', 'card', 'mobile_money'] as const).map((method) => {
                   const Icon = paymentIcons[method];
@@ -1760,6 +1810,7 @@ export default function POSView() {
               </div>
             </div>
 
+            {renderSaleDatePicker()}
             {/* Payment Method — pill selector */}
             <div className="flex gap-1">
               {(['cash', 'card', 'mobile_money'] as const).map((method) => {

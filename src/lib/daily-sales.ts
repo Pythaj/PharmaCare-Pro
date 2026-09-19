@@ -82,4 +82,37 @@ export async function recomputeDailyRecord(
   });
 }
 
+/**
+ * Ensures a daily register exists for a date, then recomputes its totals from
+ * the actual sales. Used when a sale is recorded against a past date that has
+ * no register yet (or one whose totals must reflect the new sale).
+ *
+ * - Missing record  -> created as an OPEN day (seeded with the opener)
+ * - Existing record -> left untouched on open/closed status (closure metadata
+ *   is never falsified); only totals are recomputed.
+ */
+export async function ensureDailyRecord(
+  date: string,
+  openedBy?: string | null
+): Promise<void> {
+  const existing = await db.dailySalesRecord.findUnique({ where: { date } });
+  if (!existing) {
+    const dayStart = new Date(date + 'T00:00:00');
+    const dayEnd = new Date(date + 'T00:00:00');
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const aggregates = await buildDailyAggregates(dayStart, dayEnd);
+
+    await db.dailySalesRecord.create({
+      data: {
+        date,
+        status: 'open',
+        openedBy: openedBy ?? null,
+        ...aggregates,
+      },
+    });
+  }
+
+  await recomputeDailyRecord(date);
+}
+
 export { buildDailyAggregates };

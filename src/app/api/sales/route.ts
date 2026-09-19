@@ -2,9 +2,54 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAdmin, requireAuth } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
-import { recomputeDailyRecord } from '@/lib/daily-sales'
+import { recomputeDailyRecord, ensureDailyRecord } from '@/lib/daily-sales'
 
 class ValidationError extends Error {}
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+/**
+ * Resolves the effective sale timestamp from an optional YYYY-MM-DD saleDate.
+ * Backdating is admin-only; the current time-of-day is preserved so intra-day
+ * ordering stays meaningful. Returns { dateKey, dayStart, dayEnd } helpers too.
+ */
+function resolveSaleDate(saleDate: unknown, role: string, now = new Date()) {
+  if (!saleDate) {
+    const ds = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
+    return { saleAt: now, dateKey: ds, dayStart, dayEnd }
+  }
+
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(saleDate))
+  if (!m) {
+    throw new ValidationError('saleDate must use the YYYY-MM-DD format')
+  }
+  const yyyy = Number(m[1])
+  const mm = Number(m[2])
+  const dd = Number(m[3])
+  const dt = new Date(yyyy, mm - 1, dd)
+  if (dt.getFullYear() !== yyyy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) {
+    throw new ValidationError('Invalid saleDate')
+  }
+
+  const dateKey = `${yyyy}-${pad2(mm)}-${pad2(dd)}`
+  const todayKey = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
+
+  if (dateKey !== todayKey && role !== 'admin') {
+    throw new ValidationError('Only the admin can record a sale for a past date')
+  }
+
+  const dayStart = new Date(yyyy, mm - 1, dd)
+  const dayEnd = new Date(yyyy, mm - 1, dd + 1)
+  const saleAt = dateKey === todayKey
+    ? now
+    : new Date(yyyy, mm - 1, dd, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds())
+
+  return { saleAt, dateKey, dayStart, dayEnd }
+}
 
 function normalizeSale(sale: any) {
   return {
@@ -103,7 +148,12 @@ export async function POST(request: NextRequest) {
       tax = 0,
       paymentMethod = 'cash',
       notes,
+      saleDate,
     } = body
+
+    // Admin-only backdating: the sale's recorded date is its invoice day and
+    // the day its register totals land on. Expiry checks use this same date.
+    const { saleAt, dateKey, dayStart, dayEnd } = resolveSaleDate(saleDate, auth.user!.role)
 
     if (!Array.isArray(items) || items.length === 0) {
       return NextResponse.json(
@@ -142,14 +192,12 @@ export async function POST(request: NextRequest) {
     // Prices are derived server-side from the cheapest-eligible or selected
     // batch — the client's unitPrice is never trusted (Rule 13/14).
     const sale = await db.$transaction(async (tx) => {
-      // Generate invoice number
-      const today = new Date()
-      const dateStr = today.toISOString().split('T')[0].replace(/-/g, '')
+      // Generate invoice number for the sale's recorded day (supports
+      // backdating: the next sequence continues that day's own invoices).
+      const dateStr = `${saleAt.getFullYear()}${pad2(saleAt.getMonth() + 1)}${pad2(saleAt.getDate())}`
       const count = await tx.sale.count({
         where: {
-          createdAt: {
-            gte: new Date(today.getFullYear(), today.getMonth(), today.getDate()),
-          },
+          createdAt: { gte: dayStart, lt: dayEnd },
         },
       })
       const invoiceNo = `INV-${dateStr}-${String(count + 1).padStart(4, '0')}`
@@ -173,7 +221,7 @@ export async function POST(request: NextRequest) {
           if (batch.productId !== item.productId) {
             throw new ValidationError(`Batch ${batch.batchNumber} does not belong to that product`)
           }
-          if (batch.expiryDate && new Date(batch.expiryDate) < today) {
+if (batch.expiryDate && new Date(batch.expiryDate) < saleAt) {
             throw new ValidationError(`Batch ${batch.batchNumber} is expired and cannot be sold — remove it from the sale.`)
           }
           if (batch.quantity < quantity) {
@@ -220,7 +268,7 @@ export async function POST(request: NextRequest) {
 
           for (const batch of availableBatches) {
             if (remainingQty <= 0) break
-            const isExpired = batch.expiryDate && new Date(batch.expiryDate) < today
+            const isExpired = batch.expiryDate && new Date(batch.expiryDate) < saleAt
             if (isExpired) {
               // Batch has stock but is expired — don't sell it. Note it so we
               // can give a precise error instead of a misleading "insufficient".
@@ -255,7 +303,7 @@ export async function POST(request: NextRequest) {
           }
 
           if (remainingQty > 0) {
-            if (reachedExpired || (hadExpiredOnly && availableBatches.every(b => b.expiryDate && new Date(b.expiryDate) < today))) {
+            if (reachedExpired || (hadExpiredOnly && availableBatches.every(b => b.expiryDate && new Date(b.expiryDate) < saleAt))) {
               throw new ValidationError(`"${product.name}" stock has expired and cannot be sold — receive a fresh batch first.`)
             }
             throw new ValidationError(`Insufficient stock for "${product.name}". Need ${quantity} but only ${quantity - remainingQty} available across all batches.`)
@@ -282,6 +330,7 @@ export async function POST(request: NextRequest) {
           profit,
           paymentMethod,
           notes: notes || null,
+          createdAt: saleAt,
           items: {
             create: saleItemsData,
           },
@@ -313,12 +362,10 @@ export async function POST(request: NextRequest) {
 
     // Keep the day's register totals in sync immediately (same pattern as the
     // sale-delete path). Runs after the transaction; a recompute failure must
-    // never rewrite a completed sale into an error response.
+    // never rewrite a completed sale into an error response. For backdated
+    // sales the register for that past date is auto-created if it is missing.
     try {
-      const saleDate = new Date(sale.createdAt)
-      await recomputeDailyRecord(
-        `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`
-      )
+      await ensureDailyRecord(dateKey, userId)
     } catch (error) {
       console.error('Daily record recompute after sale error:', error)
     }
