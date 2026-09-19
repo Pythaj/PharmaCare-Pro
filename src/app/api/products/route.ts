@@ -4,6 +4,11 @@ import { requireAdmin } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 
 export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request)
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
   try {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''

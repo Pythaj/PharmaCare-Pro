@@ -1,10 +1,15 @@
 import { db } from '@/lib/db';
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/require-auth';
+import { requireAuth, requireAdmin } from '@/lib/require-auth';
 import { logAudit, getClientIp } from '@/lib/audit';
 
-// GET /api/settings — fetch all settings as key-value pairs
-export async function GET() {
+// GET /api/settings — fetch all settings as key-value pairs (authenticated only)
+export async function GET(request: NextRequest) {
+  const auth = await requireAuth(request);
+  if (!auth.success) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
   try {
     const rows = await db.systemSetting.findMany({
       select: { key: true, value: true },
