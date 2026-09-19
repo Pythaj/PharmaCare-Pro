@@ -9,8 +9,13 @@ import { getAuthUser } from '@/lib/require-auth';
 // sessions on load instead of trusting localStorage indefinitely.
 export async function GET(request: NextRequest) {
   const payload = getAuthUser(request);
-  if (!payload) {
-    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+  if (!payload?.userId) {
+    // Also covers stale-but-validly-signed tokens that carry no usable user id
+    // — treat as unauthenticated and drop the offending cookie instead of
+    // hitting the DB with `id: undefined`.
+    const response = NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    response.cookies.set('auth_token', '', { httpOnly: true, maxAge: 0, path: '/' });
+    return response;
   }
 
   // Confirm the account still exists and is active (revocation support)
@@ -74,10 +79,13 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     );
 
-    // Set HttpOnly cookie for token
+    // Set HttpOnly cookie for token.
+    // Desktop: loopback HTTP must not require the Secure flag (localhost is a
+    // trustworthy origin, but the packaged Electron server is plain HTTP).
+    const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
     response.cookies.set('auth_token', token, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: secureCookie,
       sameSite: 'lax',
       maxAge: 60 * 60 * 24 * 7, // 7 days
       path: '/',
@@ -97,7 +105,7 @@ export async function DELETE() {
   const response = NextResponse.json({ message: 'Logged out' });
   response.cookies.set('auth_token', '', {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false',
     sameSite: 'lax',
     maxAge: 0,
     path: '/',

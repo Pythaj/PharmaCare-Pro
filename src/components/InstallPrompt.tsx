@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Smartphone, CheckCircle, Pill, ArrowDown, ExternalLink, Monitor, Zap, Wifi } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { isElectron } from '@/lib/electron';
 
 export type Platform = 'android' | 'ios' | 'desktop' | 'other';
 
@@ -112,7 +113,7 @@ export default function InstallPrompt() {
   const platform = detectPlatform();
 
   useEffect(() => {
-    if (canInstall && !installed && !dismissed) {
+    if (canInstall && !installed && !dismissed && !isElectron()) {
       const timer = setTimeout(() => setShow(true), 1000);
       return () => clearTimeout(timer);
     }
@@ -261,7 +262,7 @@ export function InstallFAB() {
   const { canInstall, installed, dismissed } = useInstallState();
   const [showPrompt, setShowPrompt] = useState(false);
 
-  if (!canInstall || installed) return null;
+  if (!canInstall || installed || isElectron()) return null;
 
   return (
     <>

@@ -257,6 +257,18 @@ export async function POST(request: NextRequest) {
       ipAddress: getClientIp(request),
     })
 
+    // Keep the day's register totals in sync immediately (same pattern as the
+    // sale-delete path). Runs after the transaction; a recompute failure must
+    // never rewrite a completed sale into an error response.
+    try {
+      const saleDate = new Date(sale.createdAt)
+      await recomputeDailyRecord(
+        `${saleDate.getFullYear()}-${String(saleDate.getMonth() + 1).padStart(2, '0')}-${String(saleDate.getDate()).padStart(2, '0')}`
+      )
+    } catch (error) {
+      console.error('Daily record recompute after sale error:', error)
+    }
+
     return NextResponse.json(sale, { status: 201 })
   } catch (error) {
     console.error('Sale create error:', error)

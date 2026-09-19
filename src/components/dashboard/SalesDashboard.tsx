@@ -31,6 +31,7 @@ function formatGHS(value: number): string {
 interface RecentSale {
   id: string;
   invoiceNo: string;
+  customer?: { name?: string | null } | null;
   customerName?: string;
   totalAmount: number;
   paymentMethod: string;
@@ -58,7 +59,14 @@ export default function SalesDashboard() {
         const res = await fetch('/api/dashboard/recent');
         if (res.ok) {
           const data = await res.json();
-          setRecentSales(data.recentSales ?? []);
+          setRecentSales((data.recentSales ?? []).map((s: any) => ({
+            id: s.id,
+            invoiceNo: s.invoiceNo,
+            customerName: s.customer?.name,
+            totalAmount: s.totalAmount,
+            paymentMethod: s.paymentMethod,
+            createdAt: s.createdAt,
+          })));
         }
       } catch { /* silent */ }
 

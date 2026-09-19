@@ -56,3 +56,21 @@ server.log
 /skills/
 # Local Netlify folder
 .netlify
+
+# --- Desktop build artifacts ---
+/desktop/nextapp/
+/release/
+/desktop/build/icon.ico
+/desktop/build/icon.png
+
+# --- Local database backups ---
+/Backups/
+
+# --- Runtime databases (contain business/personal data + credential hashes) ---
+/prisma/db/
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# --- Credentials / secrets ---
+/ngrok authtoken.docx

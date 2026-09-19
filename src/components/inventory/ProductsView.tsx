@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X, PackagePlus, Boxes, RefreshCcw, Package } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -76,6 +76,225 @@ interface ProductWithStock extends Product {
   hasExpiredBatches?: boolean;
   stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
   expiryStatus?: 'good' | 'expiring_soon' | 'expired';
+}
+
+/** A batch row being edited inside the Edit Drug dialog. */
+interface BatchEditRow {
+  key: string;
+  id?: string;
+  batchNumber: string;
+  quantity: number;
+  costPrice: number;
+  sellingPrice: number;
+  expiryDate: string;
+}
+
+/** Converts a date (ISO string or Date) into a YYYY-MM-DD value for <input type="date">. */
+function toDateInputValue(value: string | Date): string {
+  const d = typeof value === 'string' ? new Date(value) : value;
+  if (isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// ─── Drug Auto-Detect Knowledge Base ───
+// Maps a recognised drug (or keyword) to its therapeutic category, generic
+// name and recommended unit. This powers the "Add Product" auto-detection so
+// the right category + generic name are selected automatically as the owner
+// types. Normalised keys (UPPER + no spaces/punctuation) are matched loosely.
+// Curated from the pharmacy's standard catalogue categories.
+
+interface DrugKnowledge {
+  category: string;
+  genericName: string;
+  unit: string;
+}
+
+const DRUG_KNOWLEDGE: Record<string, DrugKnowledge> = {
+  PARACETAMOL: { category: 'Analgesics', genericName: 'Acetaminophen', unit: 'pcs' },
+  ACETAMINOPHEN: { category: 'Analgesics', genericName: 'Acetaminophen', unit: 'pcs' },
+  IBUPROFEN: { category: 'Analgesics', genericName: 'Ibuprofen', unit: 'pcs' },
+  DICLOFENAC: { category: 'Analgesics', genericName: 'Diclofenac', unit: 'tablets' },
+  NAPROXEN: { category: 'Analgesics', genericName: 'Naproxen', unit: 'pcs' },
+  ASPIRIN: { category: 'Analgesics', genericName: 'Acetylsalicylic acid', unit: 'pcs' },
+  MORPHINE: { category: 'Analgesics', genericName: 'Morphine', unit: 'pcs' },
+  TRAMADOL: { category: 'Analgesics', genericName: 'Tramadol', unit: 'tablets' },
+  PREDNISOLONE: { category: 'Analgesics', genericName: 'Prednisolone', unit: 'pcs' },
+  ARFEN: { category: 'Analgesics', genericName: 'Artenam/Paracetamol', unit: 'pcs' },
+  PINOYCAM: { category: 'Analgesics', genericName: 'Piroxicam', unit: 'pcs' },
+  LETACAM: { category: 'Analgesics', genericName: 'Antimalarial/analgesic', unit: 'pcs' },
+  HYDROCORTISONE: { category: 'Analgesics', genericName: 'Hydrocortisone', unit: 'tablets' },
+  INDOMETHACIN: { category: 'Analgesics', genericName: 'Indomethacin', unit: 'capsules' },
+
+  AMOXICILLIN: { category: 'Antibiotics', genericName: 'Amoxicillin', unit: 'capsules' },
+  AMPICILLIN: { category: 'Antibiotics', genericName: 'Ampicillin', unit: 'capsules' },
+  AMOXYCLAV: { category: 'Antibiotics', genericName: 'Amoxicillin/Clavulanate', unit: 'capsules' },
+  CEFUROXIME: { category: 'Antibiotics', genericName: 'Cefuroxime', unit: 'tablets' },
+  CEFTRIAXONE: { category: 'Antibiotics', genericName: 'Ceftriaxone', unit: 'pcs' },
+  CEFIXIME: { category: 'Antibiotics', genericName: 'Cefixime', unit: 'tablets' },
+  CHLORAMPHENICOL: { category: 'Antibiotics', genericName: 'Chloramphenicol', unit: 'capsules' },
+  CLOXACILLIN: { category: 'Antibiotics', genericName: 'Cloxacillin', unit: 'capsules' },
+  COTRIMOXAZOLE: { category: 'Antibiotics', genericName: 'Co-trimoxazole', unit: 'tablets' },
+  DOXYCYCLINE: { category: 'Antibiotics', genericName: 'Doxycycline', unit: 'capsules' },
+  FLUCLOXACILLIN: { category: 'Antibiotics', genericName: 'Flucloxacillin', unit: 'capsules' },
+  CIPROFLOXACIN: { category: 'Antibiotics', genericName: 'Ciprofloxacin', unit: 'tablets' },
+  CIPRO: { category: 'Antibiotics', genericName: 'Ciprofloxacin', unit: 'tablets' },
+  METRONIDAZOLE: { category: 'Antibiotics', genericName: 'Metronidazole', unit: 'tablets' },
+  PENICILLIN: { category: 'Antibiotics', genericName: 'Penicillin V', unit: 'tablets' },
+  TETRACYCLINE: { category: 'Antibiotics', genericName: 'Tetracycline', unit: 'capsules' },
+  AZITHROMYCIN: { category: 'Antibiotics', genericName: 'Azithromycin', unit: 'tablets' },
+  ERYTHROMYCIN: { category: 'Antibiotics', genericName: 'Erythromycin', unit: 'tablets' },
+  ZYFLOXACIN: { category: 'Antibiotics', genericName: 'Ofloxacin', unit: 'tablets' },
+
+  FLUCONAZOLE: { category: 'Antifungals', genericName: 'Fluconazole', unit: 'capsules' },
+  GRISEOFULVIN: { category: 'Antifungals', genericName: 'Griseofulvin', unit: 'tablets' },
+  KETOCONAZOLE: { category: 'Antifungals', genericName: 'Ketoconazole', unit: 'tablets' },
+  NYSTATIN: { category: 'Antifungals', genericName: 'Nystatin', unit: 'pcs' },
+  CLOTRIMAZOLE: { category: 'Antifungals', genericName: 'Clotrimazole', unit: 'tube' },
+
+  ALBENDAZOLE: { category: 'Anthelmintics', genericName: 'Albendazole', unit: 'tablets' },
+  MEBENDAZOLE: { category: 'Anthelmintics', genericName: 'Mebendazole', unit: 'tablets' },
+  VERMOX: { category: 'Anthelmintics', genericName: 'Mebendazole', unit: 'tablets' },
+
+  ARTEMETHER: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'tablets' },
+  LUMEFANTRINE: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'tablets' },
+  QUININE: { category: 'Antimalarials', genericName: 'Quinine', unit: 'tablets' },
+  CHLOROQUINE: { category: 'Antimalarials', genericName: 'Chloroquine', unit: 'tablets' },
+  LONGART: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'tablets' },
+  LYART: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'tablets' },
+  VIMOL: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'tablets' },
+  ARJAN: { category: 'Antimalarials', genericName: 'Artemether/Lumefantrine', unit: 'bottle' },
+
+  OMEPRAZOLE: { category: 'Gastrointestinal', genericName: 'Omeprazole', unit: 'capsules' },
+  LANSOPRAZOLE: { category: 'Gastrointestinal', genericName: 'Lansoprazole', unit: 'capsules' },
+  PANTOPRAZOLE: { category: 'Gastrointestinal', genericName: 'Pantoprazole', unit: 'tablets' },
+  RANITIDINE: { category: 'Gastrointestinal', genericName: 'Ranitidine', unit: 'tablets' },
+  ANTACID: { category: 'Gastrointestinal', genericName: 'Antacid', unit: 'tablets' },
+  ENTERA: { category: 'Gastrointestinal', genericName: 'Enzyme supplement', unit: 'tablets' },
+  SENNA: { category: 'Gastrointestinal', genericName: 'Senna', unit: 'bottle' },
+  BUSCOPAN: { category: 'Gastrointestinal', genericName: 'Hyoscine butylbromide', unit: 'tablets' },
+
+  ATS: { category: 'Injections', genericName: 'Tetanus antitoxin (ATS)', unit: 'units' },
+  INJECTIONS: { category: 'Injections', genericName: 'Injectable medication', unit: 'units' },
+
+  FAMILYPLANNING: { category: 'Hormonal & Reproductive Health', genericName: 'Contraceptive (family planning)', unit: 'pack' },
+  FAMILY: { category: 'Hormonal & Reproductive Health', genericName: 'Contraceptive (family planning)', unit: 'pack' },
+
+  METFORMIN: { category: 'Cardiovascular', genericName: 'Metformin', unit: 'tablets' },
+  NIFEDIPINE: { category: 'Cardiovascular', genericName: 'Nifedipine', unit: 'tablets' },
+  NETIDIPINE: { category: 'Cardiovascular', genericName: 'Nifedipine', unit: 'tablets' },
+  AMLODIPINE: { category: 'Cardiovascular', genericName: 'Amlodipine', unit: 'tablets' },
+  ATENOLOL: { category: 'Cardiovascular', genericName: 'Atenolol', unit: 'tablets' },
+  LISINOPRIL: { category: 'Cardiovascular', genericName: 'Lisinopril', unit: 'tablets' },
+  ATORVASTATIN: { category: 'Cardiovascular', genericName: 'Atorvastatin', unit: 'tablets' },
+  ENAPROST: { category: 'Cardiovascular', genericName: 'Enalapril', unit: 'tablets' },
+
+  VITAMIN: { category: 'Vitamins & Supplements', genericName: 'Multivitamin', unit: 'tablets' },
+  MULTIVITAMIN: { category: 'Vitamins & Supplements', genericName: 'Multivitamin', unit: 'tablets' },
+  ABYLITE: { category: 'Vitamins & Supplements', genericName: 'Multivitamin', unit: 'tablets' },
+  FOLIC: { category: 'Vitamins & Supplements', genericName: 'Folic acid', unit: 'tablets' },
+  IRON: { category: 'Vitamins & Supplements', genericName: 'Iron supplement', unit: 'tablets' },
+  CALCIUM: { category: 'Vitamins & Supplements', genericName: 'Calcium supplement', unit: 'tablets' },
+  ZINC: { category: 'Vitamins & Supplements', genericName: 'Zinc supplement', unit: 'tablets' },
+  APETAMIN: { category: 'Vitamins & Supplements', genericName: 'Multivitamin', unit: 'tablets' },
+  POLYFER: { category: 'Vitamins & Supplements', genericName: 'Iron/folate syrup', unit: 'syrup' },
+  RONAC: { category: 'Vitamins & Supplements', genericName: 'Multivitamin', unit: 'capsules' },
+  BEECROFT: { category: 'Vitamins & Supplements', genericName: 'Multivitamin tonic', unit: 'bottle' },
+  BONGPLEX: { category: 'Vitamins & Supplements', genericName: 'Vitamin B complex', unit: 'bottle' },
+
+  SALBUTAMOL: { category: 'Respiratory', genericName: 'Salbutamol', unit: 'bottle' },
+  BRONCHOLIN: { category: 'Respiratory', genericName: 'Bronchodilator', unit: 'bottle' },
+  EPHEDRINE: { category: 'Respiratory', genericName: 'Ephedrine', unit: 'bottle' },
+  LINCTUS: { category: 'Respiratory', genericName: 'Cough linctus', unit: 'bottle' },
+  SAMALIN: { category: 'Respiratory', genericName: 'Cough syrup', unit: 'bottle' },
+  BILNCTUS: { category: 'Respiratory', genericName: 'Cough syrup', unit: 'bottle' },
+  COUGH: { category: 'Respiratory', genericName: 'Cough syrup', unit: 'bottle' },
+  KOFFEE: { category: 'Respiratory', genericName: 'Cough syrup', unit: 'bottle' },
+
+  PRETERM: { category: 'Hormonal & Reproductive Health', genericName: 'Hormonal contraceptive', unit: 'tablets' },
+  POSTINOR: { category: 'Hormonal & Reproductive Health', genericName: 'Levonorgestrel', unit: 'tablets' },
+  LEVON: { category: 'Hormonal & Reproductive Health', genericName: 'Levonorgestrel', unit: 'tablets' },
+  LEVONORGESTREL: { category: 'Hormonal & Reproductive Health', genericName: 'Levonorgestrel', unit: 'tablets' },
+  EMERGENCY: { category: 'Hormonal & Reproductive Health', genericName: 'Levonorgestrel', unit: 'tablets' },
+
+  HYDROCORTISONE_CREAM: { category: 'Skin Care', genericName: 'Hydrocortisone', unit: 'tube' },
+  CREAM: { category: 'Skin Care', genericName: 'Skin care cream', unit: 'tube' },
+  OINTMENT: { category: 'Skin Care', genericName: 'Skin ointment', unit: 'tube' },
+  OINT: { category: 'Skin Care', genericName: 'Skin ointment', unit: 'tube' },
+  BALM: { category: 'Skin Care', genericName: 'Analgesic balm', unit: 'tube' },
+  GENTIAN: { category: 'Skin Care', genericName: 'Gentian violet', unit: 'bottle' },
+  DERMON: { category: 'Skin Care', genericName: 'Skin care lotion', unit: 'tube' },
+  GRINSTMENT: { category: 'Skin Care', genericName: 'Skin ointment', unit: 'tube' },
+
+  HERBAL: { category: 'Herbal Remedies', genericName: 'Herbal preparation', unit: 'bottle' },
+  MIXTURE: { category: 'Herbal Remedies', genericName: 'Herbal preparation', unit: 'bottle' },
+  ABONKYI: { category: 'Herbal Remedies', genericName: 'Herbal tonic', unit: 'bottle' },
+
+  BANDAGE: { category: 'Medical Supplies', genericName: 'Bandage', unit: 'roll' },
+  GAUZE: { category: 'Medical Supplies', genericName: 'Gauze', unit: 'roll' },
+  PLASTER: { category: 'Medical Supplies', genericName: 'Plaster', unit: 'roll' },
+  SYRINGE: { category: 'Medical Supplies', genericName: 'Syringe', unit: 'pcs' },
+  GLOVES: { category: 'Medical Supplies', genericName: 'Disposable gloves', unit: 'box' },
+  ELASTIC: { category: 'Medical Supplies', genericName: 'Elastic bandage', unit: 'roll' },
+  PREGNANCY: { category: 'Medical Supplies', genericName: 'Pregnancy test kit', unit: 'pack' },
+  ENVELOPE: { category: 'Medical Supplies', genericName: 'Envelope', unit: 'pack' },
+  PAD: { category: 'Medical Supplies', genericName: 'Sanitary pad', unit: 'pack' },
+
+  EYEDROP: { category: 'Eye Care', genericName: 'Eye drops', unit: 'bottle' },
+  EYEDROPS: { category: 'Eye Care', genericName: 'Eye drops', unit: 'bottle' },
+  EYE: { category: 'Eye Care', genericName: 'Eye drops', unit: 'bottle' },
+  MOUTHWASH: { category: 'Oral Care', genericName: 'Mouthwash', unit: 'bottle' },
+  MOUTH: { category: 'Oral Care', genericName: 'Mouthwash', unit: 'bottle' },
+};
+
+/** Normalise a name for fuzzy matching: UPPER + strip everything non-alphanumeric. */
+function normalizeKey(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/**
+ * Auto-detects the category, generic name and unit for a typed product name.
+ * Resolution order (single source of truth):
+ *   1. The existing products already loaded from the DB (exact normalised name).
+ *   2. The curated drug knowledge base (normalised keyword match).
+ * Returns null when nothing confident is found.
+ */
+function detectDrugInfo(
+  name: string,
+  products: ProductWithStock[],
+  categories: Category[]
+): { categoryId: string; genericName: string; unit: string } | null {
+  const key = normalizeKey(name);
+  if (!key) return null;
+
+  // 1) Exact match against an existing product in the DB — reuse its real
+  //    category + generic name + unit.
+  const dbHit = products.find((p) => normalizeKey(p.name) === key);
+  if (dbHit) {
+    return {
+      categoryId: dbHit.categoryId ?? '',
+      genericName: dbHit.genericName ?? '',
+      unit: dbHit.unit || 'pcs',
+    };
+  }
+
+  // 2) Curated knowledge base — try full key, then progressively shorter prefix.
+  for (let len = key.length; len >= 3; len--) {
+    const sub = key.slice(0, len);
+    const hit = DRUG_KNOWLEDGE[sub];
+    if (hit) {
+      const cat = categories.find((c) => c.name === hit.category);
+      return {
+        categoryId: cat?.id ?? '',
+        genericName: hit.genericName,
+        unit: hit.unit,
+      };
+    }
+  }
+
+  return null;
 }
 
 // ─── Premium Margin Badge ───
@@ -416,6 +635,9 @@ export default function ProductsView() {
     defaultCostPrice: 0,
     defaultSellingPrice: 0,
   });
+  // Track an auto-detected category/generic so we can show a clear "auto-filled"
+  // affordance without clobbering deliberate edits by the owner.
+  const [addAutoDetected, setAddAutoDetected] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [productToDelete, setProductToDelete] = useState<ProductWithStock | null>(null);
@@ -429,6 +651,21 @@ export default function ProductsView() {
   const [editSellingPrice, setEditSellingPrice] = useState(0);
   const [editApplyToBatches, setEditApplyToBatches] = useState(false);
   const [updatingPrice, setUpdatingPrice] = useState(false);
+
+  // Edit Drug dialog state — full product + batch/stock management
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [editProduct, setEditProduct] = useState<ProductWithStock | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    genericName: '',
+    categoryId: '',
+    unit: 'pcs',
+    reorderLevel: 10,
+  });
+  const [editBatches, setEditBatches] = useState<BatchEditRow[]>([]);
+  const [editBatchesOriginal, setEditBatchesOriginal] = useState<BatchEditRow[]>([]);
+  const [editActiveBatchKey, setEditActiveBatchKey] = useState<string>('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const fetchProducts = useCallback(async (query: string, cat: string) => {
     try {
@@ -502,6 +739,27 @@ export default function ProductsView() {
     return product.stockStatus !== 'in_stock' || product.hasExpiredBatches || product.hasExpiringBatches;
   };
 
+  // ─── Auto-detect category + generic name from the typed product name ───
+  const handleAddNameChange = (value: string) => {
+    setAddForm((cur) => ({
+      ...cur,
+      name: value,
+      // Fill any gaps (empty category / generic) from the scan; never clobber a
+      // deliberate owner entry.
+      categoryId: cur.categoryId || detectDrugInfo(value, products, categories)?.categoryId || '',
+      genericName: cur.genericName.trim()
+        ? cur.genericName
+        : (detectDrugInfo(value, products, categories)?.genericName ?? ''),
+      unit: cur.unit === 'pcs'
+        ? (detectDrugInfo(value, products, categories)?.unit ?? cur.unit)
+        : cur.unit,
+    }));
+
+    const suggestion = detectDrugInfo(value, products, categories);
+    const isNewInput = !addForm.categoryId && !addForm.genericName.trim();
+    setAddAutoDetected(Boolean(suggestion) && value.trim().length > 0 && isNewInput);
+  };
+
   const handleAddProduct = async () => {
     if (!addForm.name.trim()) { toast.error('Product name is required'); return; }
     setSubmitting(true);
@@ -517,6 +775,7 @@ export default function ProductsView() {
       }
       toast.success(`"${addForm.name}" added with price ${formatGHS(addForm.defaultSellingPrice)}`);
       setShowAddDialog(false);
+      setAddAutoDetected(false);
       setAddForm({
         name: '',
         genericName: '',
@@ -612,6 +871,171 @@ export default function ProductsView() {
     }
   };
 
+  // ---- Edit Drug handlers (product info + batch/stock) ----
+  const openEditDialog = async (product: ProductWithStock) => {
+    setEditProduct(product);
+    setEditForm({
+      name: product.name,
+      genericName: product.genericName ?? '',
+      categoryId: product.categoryId ?? '',
+      unit: product.unit,
+      reorderLevel: product.reorderLevel,
+    });
+    setEditBatches([]);
+    setEditBatchesOriginal([]);
+    setEditActiveBatchKey('');
+    setShowEditDialog(true);
+
+    try {
+      const res = await fetch(`/api/products/${product.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        const rows: BatchEditRow[] = (Array.isArray(data.batches) ? data.batches : []).map(
+          (b: Batch & { currentQty?: number }, i: number) => ({
+            key: `existing-${b.id ?? i}`,
+            id: b.id,
+            batchNumber: b.batchNumber,
+            quantity: Number(b.quantity) || 0,
+            costPrice: Number(b.costPrice) || 0,
+            sellingPrice: Number(b.sellingPrice) || 0,
+            expiryDate: toDateInputValue(b.expiryDate),
+          })
+        );
+        setEditBatches(rows);
+        setEditBatchesOriginal(rows);
+        if (rows.length > 0) setEditActiveBatchKey(rows[0].key);
+      }
+    } catch { /* silent */ }
+  };
+
+  const updateBatchRow = (key: string, patch: Partial<BatchEditRow>) => {
+    setEditBatches((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
+  };
+
+  const addBatchRow = () => {
+    const exp = new Date();
+    exp.setMonth(exp.getMonth() + 24);
+    const row: BatchEditRow = {
+      key: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      batchNumber: `BATCH-${String(editBatches.length + 1).padStart(3, '0')}`,
+      quantity: 0,
+      costPrice: 0,
+      sellingPrice: 0,
+      expiryDate: toDateInputValue(exp),
+    };
+    setEditBatches((prev) => [...prev, row]);
+    setEditActiveBatchKey(row.key);
+  };
+
+  const removeBatchRow = (key: string) => {
+    setEditBatches((prev) => {
+      const next = prev.filter((r) => r.key !== key);
+      setEditActiveBatchKey((active) =>
+        active === key ? (next.length > 0 ? next[0].key : '') : active
+      );
+      return next;
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editProduct) return;
+    if (!editForm.name.trim()) { toast.error('Product name is required'); return; }
+
+    const activeBatch = editBatches.find((r) => r.key === editActiveBatchKey);
+
+    if (editBatches.length === 0) {
+      toast.error('Add at least one stock batch for this drug before saving.');
+      return;
+    }
+    if (activeBatch?.quantity != null && Number(activeBatch.quantity) < 0) {
+      toast.error('Stock quantity cannot be negative.');
+      return;
+    }
+    if (!activeBatch?.batchNumber.trim()) {
+      toast.info('Leave batch number blank to auto-generate one.');
+    }
+
+    setSavingEdit(true);
+    const errors: string[] = [];
+    try {
+      // 1) Update the product's core information
+      const prodRes = await fetch(`/api/products/${editProduct.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: editForm.name.trim(),
+          genericName: editForm.genericName || null,
+          categoryId: editForm.categoryId || null,
+          unit: editForm.unit,
+          reorderLevel: editForm.reorderLevel,
+        }),
+      });
+      if (!prodRes.ok) {
+        const data = await prodRes.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update product');
+      }
+
+      // 2) Delete batches that were removed from the list
+      const originalIds = new Set(editBatchesOriginal.map((r) => r.id).filter(Boolean));
+      const currentIds = new Set(editBatches.map((r) => r.id).filter(Boolean));
+      for (const id of originalIds) {
+        if (!currentIds.has(id)) {
+          const res = await fetch(`/api/batches/${id}`, { method: 'DELETE' });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            errors.push(data.error || 'Failed to delete a batch');
+          }
+        }
+      }
+
+      // 3) Update existing batches and create new ones
+      for (const row of editBatches) {
+        const payload = {
+          batchNumber: row.batchNumber.trim(),
+          quantity: Number(row.quantity) || 0,
+          costPrice: Number(row.costPrice) || 0,
+          sellingPrice: Number(row.sellingPrice) || 0,
+          expiryDate: row.expiryDate,
+        };
+
+        if (row.id) {
+          const res = await fetch(`/api/batches/${row.id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            errors.push(data.error || `Failed to update batch ${row.batchNumber}`);
+          }
+        } else {
+          const res = await fetch('/api/batches', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ productId: editProduct.id, ...payload }),
+          });
+          if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            errors.push(data.error || `Failed to create batch ${row.batchNumber}`);
+          }
+        }
+      }
+
+      if (errors.length > 0) {
+        toast.warning(`${errors.length} issue(s) saving — review the batches below. First issue: ${errors[0]}`);
+      } else {
+        toast.success(`"${editForm.name.trim()}" updated successfully`);
+      }
+      setShowEditDialog(false);
+      setEditProduct(null);
+      fetchProducts(search, categoryFilter);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update product');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   // Price stats
   const productsWithPrice = products.filter(p => p.defaultSellingPrice > 0).length;
   const productsWithoutPrice = products.length - productsWithPrice;
@@ -641,7 +1065,7 @@ export default function ProductsView() {
             </SelectContent>
           </Select>
           {canManageProducts && (
-            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => setShowAddDialog(true)}>
+            <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { setShowAddDialog(true); setAddAutoDetected(false); }}>
               <Plus className="h-4 w-4 mr-1" />
               Add Product
             </Button>
@@ -849,6 +1273,15 @@ export default function ProductsView() {
                                 <Button
                                   variant="ghost"
                                   size="icon"
+                                  className="h-8 w-8 text-slate-600 hover:text-emerald-700 hover:bg-emerald-50"
+                                  onClick={(e) => { e.stopPropagation(); openEditDialog(product); }}
+                                  title="Edit Drug — info, stock, prices & expiry"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
                                   className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
                                   onClick={(e) => { e.stopPropagation(); openEditPriceDialog(product); }}
                                   title="Edit Price"
@@ -1003,6 +1436,7 @@ export default function ProductsView() {
             defaultCostPrice: 0,
             defaultSellingPrice: 0,
           });
+          setAddAutoDetected(false);
         }
         setShowAddDialog(open);
       }}>
@@ -1025,22 +1459,47 @@ export default function ProductsView() {
               </div>
               <div>
                 <Label className="text-xs font-medium">Product Name <span className="text-red-500">*</span></Label>
-                <Input value={addForm.name} onChange={(e) => setAddForm({ ...addForm, name: e.target.value })} placeholder="e.g. Paracetamol 500mg" className="mt-1" />
+                <div className="relative">
+                  <Input value={addForm.name} onChange={(e) => handleAddNameChange(e.target.value)} placeholder="e.g. Paracetamol 500mg" className="mt-1 pr-24" />
+                  {addAutoDetected && (
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-0.5">
+                      <Zap className="h-2.5 w-2.5" /> Auto-detected
+                    </span>
+                  )}
+                </div>
+                <p className="text-[10px] text-slate-400 mt-1">Category & generic name are auto-filled as you type — adjust if needed.</p>
               </div>
               <div>
                 <Label className="text-xs font-medium">Generic Name</Label>
-                <Input value={addForm.genericName} onChange={(e) => setAddForm({ ...addForm, genericName: e.target.value })} placeholder="e.g. Acetaminophen" className="mt-1" />
+                <div className="relative">
+                  <Input value={addForm.genericName} onChange={(e) => {
+                    setAddForm({ ...addForm, genericName: e.target.value });
+                    setAddAutoDetected(false);
+                  }} placeholder="e.g. Acetaminophen" className="mt-1" />
+                </div>
               </div>
               <div>
                 <Label className="text-xs font-medium">Category</Label>
-                <Select value={addForm.categoryId} onValueChange={(v) => setAddForm({ ...addForm, categoryId: v })}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select category" /></SelectTrigger>
-                  <SelectContent>
-                    {categories.map((cat) => (
-                      <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="flex items-center gap-2 mt-1">
+                  <div className="flex-1">
+                    <Select value={addForm.categoryId} onValueChange={(v) => {
+                      setAddForm({ ...addForm, categoryId: v });
+                      setAddAutoDetected(false);
+                    }}>
+                      <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
+                      <SelectContent>
+                        {categories.map((cat) => (
+                          <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  {addAutoDetected && addForm.categoryId && (
+                    <span className="shrink-0 text-[10px] font-semibold text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-full px-2 py-1.5 flex items-center gap-1">
+                      <Check className="h-2.5 w-2.5" /> Auto
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -1297,6 +1756,320 @@ export default function ProductsView() {
                 <span className="flex items-center gap-2"><span className="h-3 w-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Updating...</span>
               ) : (
                 <><Check className="h-4 w-4 mr-1" /> Update Prices</>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ═══════════════════════════════════════════════════════ */}
+      {/* ─── EDIT DRUG DIALOG (Info + Stock + Prices) ─── */}
+      {/* ═══════════════════════════════════════════════════════ */}
+      <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
+        <DialogContent className="sm:max-w-3xl max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2.5">
+              <div className="h-9 w-9 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 shadow shadow-emerald-200 flex items-center justify-center shrink-0">
+                <Pencil className="h-4 w-4 text-white" />
+              </div>
+              <div className="min-w-0">
+                <span className="block">Edit Drug</span>
+                <span className="text-sm font-normal text-slate-500 truncate block">{editProduct?.name}</span>
+              </div>
+              {editProduct?.category?.name && (
+                <Badge variant="outline" className="ml-auto text-[10px] px-2 bg-emerald-50 text-emerald-700 border-emerald-200">
+                  {editProduct.category.name}
+                </Badge>
+              )}
+            </DialogTitle>
+            <DialogDescription>
+              Update the drug's information, then set the real stock, prices and expiry for each batch.
+            </DialogDescription>
+          </DialogHeader>
+
+          {editProduct && (
+            <div className="space-y-5">
+              {/* ── Live stock summary chips ── */}
+              <div className="flex flex-wrap gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
+                  <Boxes className="h-3.5 w-3.5 text-slate-400" />
+                  {editBatches.length} batch{editBatches.length !== 1 ? 'es' : ''}
+                </span>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-600">
+                  <Package className="h-3.5 w-3.5 text-slate-400" />
+                  Total stock: <strong className="text-slate-800">{editBatches.reduce((s, r) => s + (Number(r.quantity) || 0), 0)}</strong>
+                </span>
+                {editBatches.length > 0 && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-600 border border-amber-200">
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    Edition mode
+                  </span>
+                )}
+              </div>
+
+              {/* ── Section 1: Drug Information ── */}
+              <div className="space-y-3.5">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <div className="h-1 w-4 rounded-full bg-emerald-400" />
+                  Drug Information
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-xs font-medium">Product Name <span className="text-red-500">*</span></Label>
+                    <Input
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Generic Name</Label>
+                    <Input
+                      value={editForm.genericName}
+                      onChange={(e) => setEditForm({ ...editForm, genericName: e.target.value })}
+                      placeholder="e.g. Acetaminophen"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium">Category</Label>
+                    <Select value={editForm.categoryId} onValueChange={(v) => setEditForm({ ...editForm, categoryId: v })}>
+                      <SelectTrigger className="mt-1"><SelectValue placeholder="Select category" /></SelectTrigger>
+                      <SelectContent>
+                        {categories.map((cat) => (
+                          <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label className="text-xs font-medium">Unit</Label>
+                      <Select value={editForm.unit} onValueChange={(v) => setEditForm({ ...editForm, unit: v })}>
+                        <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="pcs">Pieces</SelectItem>
+                          <SelectItem value="box">Box</SelectItem>
+                          <SelectItem value="strip">Strip</SelectItem>
+                          <SelectItem value="bottle">Bottle</SelectItem>
+                          <SelectItem value="sachet">Sachet</SelectItem>
+                          <SelectItem value="tube">Tube</SelectItem>
+                          <SelectItem value="pack">Pack</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs font-medium">Reorder Level</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={editForm.reorderLevel}
+                        onChange={(e) => setEditForm({ ...editForm, reorderLevel: Number(e.target.value) || 0 })}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Section 2: Stock & Pricing (batches) ── */}
+              <div className="space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <div className="h-1 w-4 rounded-full bg-emerald-400" />
+                    Real Stock, Prices & Expiry
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-emerald-700 border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50"
+                    onClick={addBatchRow}
+                  >
+                    <PackagePlus className="h-3.5 w-3.5 mr-1" />
+                    Add Batch
+                  </Button>
+                </div>
+
+                {editBatches.length === 0 ? (
+                  <div className="rounded-xl border-2 border-dashed border-slate-200 p-6 text-center">
+                    <Boxes className="h-6 w-6 text-slate-300 mx-auto mb-2" />
+                    <p className="text-sm text-slate-500">No stock batches yet.</p>
+                    <p className="text-xs text-slate-400 mt-1">Click <span className="font-medium text-emerald-600">Add Batch</span> to create the first stock entry for this drug.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {editBatches.map((row, idx) => {
+                      const isActive = editActiveBatchKey === row.key;
+                      const rowMargin = calcMargin(row.costPrice, row.sellingPrice);
+                      return (
+                        <div
+                          key={row.key}
+                          className={`rounded-xl border transition-all ${
+                            isActive
+                              ? 'border-emerald-300 ring-2 ring-emerald-100 bg-gradient-to-br from-emerald-50/40 via-white to-teal-50/20'
+                              : 'border-slate-200 bg-white'
+                          }`}
+                          onClick={() => setEditActiveBatchKey(row.key)}
+                        >
+                          {/* Batch header */}
+                          <div className="flex items-center justify-between px-4 pt-3 pb-2 border-b border-dashed border-slate-100">
+                            <div className="flex items-center gap-2">
+                              <span className={`h-5 w-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                                isActive ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-500'
+                              }`}>
+                                {idx + 1}
+                              </span>
+                              <span className="text-[11px] font-medium text-slate-500 uppercase tracking-wide">Batch #{idx + 1}</span>
+                              {row.id && (
+                                <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-slate-50 text-slate-400 border-slate-200">
+                                  existing
+                                </Badge>
+                              )}
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-slate-400 hover:text-red-500 hover:bg-red-50"
+                              onClick={(e) => { e.stopPropagation(); removeBatchRow(row.key); }}
+                              title="Remove batch"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+
+                          <div className="p-4 space-y-3">
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                              <div className="md:col-span-1">
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">
+                                  Batch # <span className="normal-case text-slate-300">(optional — auto)</span>
+                                </Label>
+                                <Input
+                                  value={row.batchNumber}
+                                  onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { batchNumber: e.target.value }); }}
+                                  placeholder="auto-generate"
+                                  className="mt-1 font-mono text-sm h-9"
+                                />
+                              </div>
+                              <div className="md:col-span-1">
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">
+                                  Expiry Date <span className="normal-case text-slate-300">(optional)</span>
+                                </Label>
+                                <Input
+                                  type="date"
+                                  value={row.expiryDate}
+                                  onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { expiryDate: e.target.value }); }}
+                                  className="mt-1 text-sm h-9"
+                                />
+                              </div>
+                              <div className="md:col-span-2 grid grid-cols-2 gap-3">
+                                <div>
+                                  <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">
+                                    Real Quantity <span className="text-emerald-500">●</span>
+                                  </Label>
+                                  <div className="relative">
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      value={row.quantity || ''}
+                                      onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { quantity: parseInt(e.target.value || '0', 10) || 0 }); }}
+                                      className="mt-1 font-mono font-bold text-emerald-700 text-sm h-9 pl-8 border-emerald-200/70"
+                                    />
+                                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-emerald-500 font-semibold">{editForm.unit}</span>
+                                  </div>
+                                </div>
+                                <div>
+                                  <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Total Value</Label>
+                                  <div className="mt-1 h-9 rounded-md bg-slate-50 border border-slate-200 px-2 flex items-center">
+                                    <span className="text-sm font-mono text-slate-600">
+                                      {formatGHS((Number(row.costPrice) || 0) * (Number(row.quantity) || 0))}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Prices row */}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Cost Price (GHS)</Label>
+                                <div className="relative">
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={row.costPrice || ''}
+                                    onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { costPrice: parseFloat(e.target.value) || 0 }); }}
+                                    className="mt-1 font-mono text-sm h-9 pl-8"
+                                  />
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-medium">GHS</span>
+                                </div>
+                              </div>
+                              <div>
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Selling Price (GHS)</Label>
+                                <div className="relative">
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={row.sellingPrice || ''}
+                                    onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { sellingPrice: parseFloat(e.target.value) || 0 }); }}
+                                    className="mt-1 font-mono font-bold text-emerald-700 text-sm h-9 pl-8"
+                                  />
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-emerald-500 font-medium">GHS</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Live margin badge */}
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10px] text-slate-400">
+                                Profit per {editForm.unit}: {formatGHS((Number(row.sellingPrice) || 0) - (Number(row.costPrice) || 0))}
+                              </span>
+                              <MarginBadge cost={row.costPrice} selling={row.sellingPrice} />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Markup calculator — applies to the active batch */}
+                {editActiveBatchKey && editBatches.find((r) => r.key === editActiveBatchKey) && (() => {
+                  const active = editBatches.find((r) => r.key === editActiveBatchKey)!;
+                  return (
+                    <div className="rounded-xl border border-slate-200 p-4 bg-slate-50/30">
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-1.5">
+                        <Calculator className="h-3 w-3" />
+                        Quick Markup Calculator
+                        <span className="ml-auto normal-case font-medium text-slate-500">
+                          Applies to batch {active.batchNumber || `#${editBatches.findIndex((r) => r.key === editActiveBatchKey) + 1}`}
+                        </span>
+                      </p>
+                      <MarkupCalculator
+                        costPrice={active.costPrice}
+                        sellingPrice={active.sellingPrice}
+                        onCostChange={(v) => updateBatchRow(editActiveBatchKey, { costPrice: v })}
+                        onSellingChange={(v) => updateBatchRow(editActiveBatchKey, { sellingPrice: v })}
+                      />
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 pt-2 border-t border-slate-100">
+            <Button variant="outline" onClick={() => setShowEditDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-700 text-white min-w-[130px]"
+              onClick={handleSaveEdit}
+              disabled={savingEdit || !editProduct}
+            >
+              {savingEdit ? (
+                <span className="flex items-center gap-2"><span className="h-3 w-3 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving...</span>
+              ) : (
+                <><Check className="h-4 w-4 mr-1" /> Save Drug</>
               )}
             </Button>
           </DialogFooter>

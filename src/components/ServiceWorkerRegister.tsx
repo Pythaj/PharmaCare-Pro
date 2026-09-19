@@ -2,13 +2,18 @@
 
 import { useEffect } from 'react';
 import { captureInstallPrompt } from './InstallPrompt';
+import { isElectron } from '@/lib/electron';
 
 export default function ServiceWorkerRegister() {
   useEffect(() => {
-    // Capture the beforeinstallprompt event globally
-    captureInstallPrompt();
+    // Capture the beforeinstallprompt event globally (skipped in Electron —
+    // the packaged desktop app has no browser install flow and must not cache
+    // API responses via a service worker, which would serve stale data).
+    if (!isElectron()) {
+      captureInstallPrompt();
+    }
 
-    if ('serviceWorker' in navigator) {
+    if (!isElectron() && 'serviceWorker' in navigator) {
       const registerSW = async () => {
         try {
           const reg = await navigator.serviceWorker.register('/sw.js');

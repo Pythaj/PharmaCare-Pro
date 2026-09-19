@@ -1,9 +1,13 @@
+// PostgreSQL schema for cloud deployments (Vercel / Netlify).
+// Mirrors prisma/schema.prisma (SQLite) exactly — same models, same @@map names.
+// Generate the client with:  prisma generate --schema prisma/schema.postgres.prisma
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

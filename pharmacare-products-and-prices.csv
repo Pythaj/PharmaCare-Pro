@@ -1,0 +1,316 @@
+name	category	genericName	unit	stockQuantity	reorderLevel	costPrice	sellingPrice	expiryDate	active
+3P			pcs	2	1	40	45	9/13/2028	yes
+ABONIKI	Herbal Remedies		bottle	11	2	10	13	9/6/2028	yes
+ABYVITA SYRUP	Vitamins & Supplements		bottle	1	50	25	30	9/6/2028	yes
+ADOM KOO MIXTURE	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+ADULT SUPER APEH	Analgesics		tablets	0	40	0	0	9/6/2028	yes
+ADUSA CAP			pcs	4	11	30	35	9/13/2028	yes
+ADUSA MIXTURE	Herbal Remedies		bottle	3	1	30	35	9/6/2028	yes
+AGAEEN PREKESE GARLIC			pcs	4	2	60	65	9/13/2028	yes
+ALBENDAZOLE	Anthelmintics		tablets	0	20	0	0	9/6/2028	yes
+ALUDROX	Gastrointestinal		pcs	5	2	1	2	9/13/2028	yes
+ALUSIL PLUS ANTACID	Gastrointestinal		tablets	0	40	0	0	9/6/2028	yes
+AMOXY CLAV	Antibiotics		capsules	0	30	0	0	9/6/2028	yes
+AMPICILLIN	Antibiotics		capsules	38	5	3	4	9/6/2028	yes
+AMUZU GARLIC MIXTURE			pcs	8	2	40	45	9/13/2028	yes
+AMUZU PEE	Herbal Remedies		pcs	5	1	35	40	9/13/2028	yes
+ANDIGEL	Gastrointestinal		tube	0	20	0	0	9/6/2028	yes
+ANNUAL GARLIC	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+ANNUAL PE	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+APETAMIN	Vitamins & Supplements		tablets	0	50	0	0	9/6/2028	no
+APETAMIN	Vitamins & Supplements		bottle	5	2	43	50	9/6/2028	yes
+APETATRUST JUNIOR	Vitamins & Supplements		bottle	1	20	20	25	9/6/2028	yes
+ARJAN SUSP	Antimalarials		bottle	0	20	0	0	9/6/2028	yes
+ARTEMETHER	Antimalarials		units	10	20	8	10	9/6/2028	yes
+ASCOBIN TAB	Vitamins & Supplements		strip	30	10	1	2	9/12/2028	yes
+ASMADRIN	Cardiovascular		pcs	20	2	0	2	9/13/2028	yes
+ASMANOL	Cardiovascular		pcs	10	2	0	3	9/13/2028	yes
+ATS	Injections		units	14	3	15	20	9/6/2028	yes
+B'CO SYRUP	Vitamins & Supplements		pcs	8	2	8	10	9/12/2028	yes
+BANDAGE (3 INCHES)	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+BANDAGE (8 INCHES)	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+BCO	Vitamins & Supplements		pcs	48	5	0	1	9/13/2028	yes
+BILLINTUS	Respiratory		pcs	3	2	10	15	9/12/2028	yes
+BILNCTUS BABY	Respiratory		bottle	0	20	0	0	9/6/2028	yes
+BOAFO ONITMENT	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+BONADOL INHALER	Respiratory		units	18	4	4	5	9/6/2028	yes
+BORES SMALL	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+BRONCHOLIN	Respiratory		bottle	0	20	0	0	9/6/2028	yes
+BUNTEM SUSP	Antimalarials		bottle	0	20	0	0	9/6/2028	yes
+BUSCOPAN	Gastrointestinal		tablets	0	20	8	10	9/6/2028	yes
+BX FORTIFIED	Vitamins & Supplements		bottle	2	30	15	20	9/6/2028	yes
+CALCIUM B-12	Vitamins & Supplements		bottle	5	20	8	10	9/6/2028	yes
+CAP ABYVITA	Vitamins & Supplements		tablets	17	2	3	5	9/6/2028	yes
+CAP AMOXICILLIN	Antibiotics		pcs	80	5	0	3	9/13/2028	yes
+CAP BECOATIN	Vitamins & Supplements		pack	10	40	8	10	9/6/2028	yes
+CAP DYNWELL	Vitamins & Supplements		pcs	9	10	0.5	1	9/12/2028	yes
+CAP ESKARON	Vitamins & Supplements		pack	10	10	8	12	9/12/2028	yes
+CAP FLUCLOXACIN	Antibiotics		pcs	10	4	5	6	9/13/2028	yes
+CAP LETACAM	Analgesics		strip	65	30	1	2	9/6/2028	yes
+CAP POLIFER	Vitamins & Supplements		pack	3	3	3	5	9/13/2028	yes
+CAPS LEENA	Vitamins & Supplements		pcs	8	10	7	10	9/12/2028	yes
+CARBON 16 ADULT	Gastrointestinal		bottle	2	2	10	15	9/6/2028	yes
+CARBON 16 JNR	Gastrointestinal		bottle	23	3	10	15	9/6/2028	yes
+CARTREF DS 80/40	Analgesics		tablets	10	3	13	15	9/6/2028	yes
+CATACOLD	Analgesics		pcs	1	1	7	8	9/13/2028	yes
+CEFUROXIME	Antibiotics		tablets	0	30	0	0	9/6/2028	yes
+CETRIZINE	Antifungals		pcs	18	5	0	2	9/13/2028	yes
+CHLORAMPHENICOL CAP	Antibiotics		capsules	65	30	4	5	9/6/2028	yes
+CHLORAMPHINICOL EAR DROP	Antibiotics		bottle	6	3	8	10	9/13/2028	yes
+CHLORAMPHINICOL EYE DROP	Antibiotics		bottle	10	3	8	10	9/13/2028	yes
+CHLORDIAZEPOXIDE	Analgesics		pcs	15	7	0	4	9/13/2028	yes
+CHOJO CREAM/SOAP	Skin Care		tube	2	1	12	13	9/6/2028	yes
+CINTAMIN	Vitamins & Supplements		tablets	0	40	0	0	9/6/2028	no
+CIPRO	Antibiotics		strip	18	5	8	10	9/6/2028	yes
+CITY BLOOD TONIC	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+CLASSIC OINT	Skin Care		tube	0	30	0	0	9/6/2028	yes
+CLODOL	Analgesics		pack	46	5	4	5	9/13/2028	yes
+CLOXACILLIN	Antibiotics		capsules	34	5	3	4	9/6/2028	yes
+CO-THO SYRUP	Respiratory		bottle	0	20	0	0	9/6/2028	yes
+CO-TRIMOXAZOLE	Antibiotics		tablets	0	30	0	0	9/6/2028	yes
+COLDRID	Analgesics		pcs	34	5	1	2	9/13/2028	yes
+COLDRID SYRUP	Respiratory		bottle	3	20	16	20	9/6/2028	yes
+CORRANGE DROP	Vitamins & Supplements		bottle	0	20	0	0	9/6/2028	yes
+CYFEN SYRUP	Vitamins & Supplements		bottle	5	1	30	35	9/6/2028	yes
+DAUD CAPSULES	Herbal Remedies		capsules	0	30	0	0	9/6/2028	yes
+DAUD OINTMENT			pcs	5	1	0	15	9/13/2028	yes
+DEEP HEAT	Skin Care		tube	0	30	0	0	9/6/2028	yes
+DELIVERY PAD	Medical Supplies		pack	3	30	20	25	9/6/2028	yes
+DEMOCOT	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+DERMIRON PLUS	Skin Care		tube	4	1	10	12	9/6/2028	yes
+DEXON	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+DICLO GEL	Analgesics		tube	6	2	12	15	9/6/2028	yes
+DICLOFENAC INJ	Analgesics		tablets	25	3	15	20	9/6/2028	yes
+DIPEX	Analgesics		pcs	7	2	5	7	9/13/2028	yes
+DOCTOR COT'VOA	Herbal Remedies		bottle	10	2	13	15	9/6/2028	yes
+DOXYCYCLINE	Antibiotics		capsules	10	3	4	5	9/6/2028	yes
+DREZ GEL SOLUTION	Skin Care		bottle	0	20	0	0	9/6/2028	yes
+DREZ OINT			pcs	1	1	0	50	9/13/2028	yes
+DYNWELL SYRUP	Vitamins & Supplements		bottle	18	40	10	15	9/6/2028	yes
+EASYCARE PLASTER			pcs	160	10	0.3	0.5	9/13/2028	yes
+EBONY	Herbal Remedies		bottle	0	30	8	10	9/6/2028	yes
+ECL-ANTACID	Gastrointestinal		pcs	10	10	20	25	9/12/2028	yes
+EFPAC			pcs	12	6	0	5	9/13/2028	yes
+ENTERA 5	Gastrointestinal		tablets	3	30	20	25	9/6/2028	yes
+ENVELOPES	Medical Supplies		pack	0	50	0	0	9/6/2028	yes
+EPHEDRINE 1%	Respiratory		bottle	10	2	8	10	9/6/2028	yes
+EPHEDRINE O.5%	Respiratory		bottle	10	2	8	10	9/6/2028	yes
+EPIDERM CREAM	Skin Care		tube	8	2	10	12	9/6/2028	yes
+EPPAC JNR	Analgesics		bottle	0	20	0	0	9/6/2028	yes
+EYE CLEAR	Eye Care		bottle	0	20	0	0	9/6/2028	yes
+EYE DROP	Eye Care		bottle	0	20	0	0	9/6/2028	yes
+FAMILY PLANNING	Hormonal & Reproductive Health		pack	12	20	25	30	9/6/2028	yes
+FENQLIBIN	Analgesics		tablets	0	30	0	0	9/6/2028	yes
+FLUCONAZOLE	Antifungals		capsules	6	3	4	5	9/6/2028	yes
+FOLIMON TONIC	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+FONG BALM	Skin Care		tube	0	30	0	0	9/6/2028	yes
+FRANCO HERBAL			pcs	5	0	25	30	9/13/2028	yes
+FUNBACT A	Herbal Remedies		bottle	5	2	12	15	9/6/2028	yes
+GANA BALM	Analgesics		pcs	0	10	10	12		yes
+GARLIC MIXTURE	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+GASTRACID	Gastrointestinal		pcs	10	10	15	20	9/12/2028	yes
+GAUZE BANDAGE (10CM)	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+GAUZE BANDAGE (15CM)	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+GEBEDOL	Analgesics		pcs	60	12	4	5	9/13/2028	yes
+GEBEDOL EXTRA	Analgesics		pack	9	8	8	10	9/13/2028	yes
+GEBEDOL PLUS	Analgesics		pcs	8	3	7	8	9/13/2028	yes
+GENFYNO TONIC	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	no
+GENTIAN VIOLET	Skin Care		bottle	0	20	0	0	9/6/2028	yes
+GIFAS CAPSULES	Herbal Remedies		capsules	7	2	35	40	9/6/2028	yes
+GIFAS MIXTURE	Herbal Remedies		bottle	7	2	30	40	9/6/2028	yes
+GINKELASTIC BANDAGE	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+GLOPOWER CAPS	Vitamins & Supplements		pcs	5	10	8	10	9/12/2028	yes
+GML-APETI	Vitamins & Supplements		pcs	44	5	3	5	9/13/2028	yes
+GOGYNAX CREAM	Skin Care		tube	0	30	0	0	9/6/2028	yes
+GOGYNAX PESSERY	Antifungals		tablets	0	30	0	0	9/6/2028	yes
+GOOD MORNING	Herbal Remedies		bottle	8	30	35	40	9/6/2028	yes
+GRENST OINT	Skin Care		tube	0	30	0	0	9/6/2028	yes
+GRIPE WATER	Gastrointestinal		pcs	7	2	8	10	9/12/2028	yes
+GRISEOFULVIN (125)	Antifungals		tablets	0	20	0	0	9/6/2028	yes
+GRISEOFULVIN 250	Antifungals		tablets	0	20	0	0	9/6/2028	yes
+GROFYN	Herbal Remedies		pcs	2	1	25	30	9/13/2028	yes
+GWOSE	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+GYNO-MYCOLEX	Antifungals		pcs	1	1	50	55	9/13/2028	yes
+HAC-CER MIXTURE	Herbal Remedies		bottle	1	1	35	40	9/6/2028	yes
+HEGMOLOBIN	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+HEPA PLUS			pcs	2	0	20	25	9/13/2028	yes
+HERBASOUL	Herbal Remedies		bottle	1	30	20	25	9/6/2028	yes
+HIT MAN	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+HYDRA CREAM	Skin Care		tube	0	30	0	0	9/6/2028	yes
+HYDROCORTISONE	Injections		tablets	4	20	8	10	9/6/2028	yes
+IBUCAP	Analgesics		pcs	32	5	4	5	9/13/2028	yes
+IMBOOST MIXTURE	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+INDOCID	Analgesics		capsules	112	10	1	2	9/6/2028	yes
+INJECTIONS	Injections		units	0	20	0	0	9/6/2028	no
+JARIFAN 2 DROPS	Vitamins & Supplements		pcs	1	1	20	25	9/12/2028	yes
+JOY GRINTMENT	Skin Care		tube	0	30	0	0	9/6/2028	yes
+JOY OINTMENT	Skin Care		tube	0	30	0	0	9/6/2028	yes
+KIDIVIT  SYRUP	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+KOFFEE ADULT	Respiratory		bottle	0	20	0	0	9/6/2028	yes
+KOFFEX  COUGH SYRUP ADULT	Respiratory		bottle	1	20	17	20	9/6/2028	yes
+KUMADADA BIG	Herbal Remedies		bottle	10	3	8	10	9/6/2028	yes
+KUMADADA SMALL			pcs	1	1	3	5	9/13/2028	yes
+KWIK ACTION	Analgesics		pcs	16	10	1	2	9/13/2028	yes
+LAW-CARE MIXTURE	Herbal Remedies		bottle	4	1	30	35	9/6/2028	yes
+LETADIUM	Gastrointestinal		pcs	33	10	0	3	9/13/2028	yes
+LETAMOX	Anthelmintics		pcs	40	10	0	5	9/13/2028	yes
+LEVON	Hormonal & Reproductive Health		tablets	10	2	17	20	9/6/2028	yes
+LINCTUS ADULT	Respiratory		bottle	16	4	10	15	9/6/2028	yes
+LOFNAC-100	Analgesics		pcs	32	10	0	5	9/13/2028	yes
+LONGART	Antimalarials		tablets	0	30	0	0	9/6/2028	yes
+LY DIG EMERGENCY	Hormonal & Reproductive Health		tablets	0	20	0	0	9/6/2028	yes
+LYART DS	Antimalarials		tablets	0	30	0	0	9/6/2028	yes
+MAAME DAGOMBA	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+MADAM CATERRINE	Herbal Remedies		bottle	3	1	20	25	9/6/2028	yes
+MALGR 2 SUSP	Vitamins & Supplements		bottle	0	20	0	0	9/6/2028	yes
+MARINS LIVER	Vitamins & Supplements		bottle	35	5	1	2	9/6/2028	no
+MCGRAPOLUFUNC	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	no
+MEBENDAZOLE SUSP	Anthelmintics		bottle	0	20	0	0	9/6/2028	yes
+MEDISOFT MOSQUITO	Skin Care		tube	0	30	0	0	9/6/2028	yes
+MENSTEK	Medical Supplies		pack	0	30	0	0	9/6/2028	yes
+MERCY CREAM & SOAP	Skin Care		tube	0	30	0	0	9/6/2028	yes
+METFORMIN	Cardiovascular	Metformin	tablets	38	2	0	5	9/13/2028	yes
+METHATHOS CUTH MIXTURE	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+METHOTREXATE	Analgesics		tablets	0	20	0	0	9/6/2028	no
+MIST SENNACO	Gastrointestinal		bottle	0	20	8	10	9/6/2028	yes
+MIX+EB SYRUP	Vitamins & Supplements		bottle	0	20	0	0	9/6/2028	yes
+MIX+GS	Vitamins & Supplements		bottle	0	20	0	0	9/6/2028	no
+MIXTAB	Analgesics		pcs	18	10	2	3	9/13/2028	yes
+MMT	Vitamins & Supplements		bottle	7	20	5	10	9/6/2028	yes
+MOUTH WASH	Oral Care		bottle	0	20	0	0	9/6/2028	yes
+NAZO			pcs	1	1	0	6	9/13/2028	yes
+NBA	Herbal Remedies		bottle	2	2	10	12	9/6/2028	yes
+NBA	Herbal Remedies		bottle	2	2	11	12	9/13/2028	yes
+NEFIDIPINE	Cardiovascular		tablets	0	30	4	5	9/6/2028	yes
+NIFEDIPINE	Cardiovascular	Nifedipine	pcs	0	10	4	5		yes
+NQZO	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+NUGEL O	Gastrointestinal		bottle	4	1	55	60	9/6/2028	yes
+OBAATANPA CREAM	Skin Care		pcs	10	2	0	10	9/13/2028	yes
+ODYUMIN	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+OLIVE OIL	Skin Care		bottle	0	20	0	0	9/6/2028	yes
+OMELIN BABY	Analgesics		bottle	0	20	0	0	9/6/2028	yes
+OMEPRAZOLE	Gastrointestinal		capsules	23	3	6	7	9/6/2028	yes
+ORS	Gastrointestinal		sachet	62	5	1	1	9/6/2028	yes
+OSTEOQRE (VITABIOTIC)	Vitamins & Supplements		capsules	0	30	0	0	9/6/2028	yes
+OSTEOQRE ORIGINAL	Vitamins & Supplements		capsules	0	30	0	0	9/6/2028	yes
+PAVI MIXTURE			pcs	2	0	20	25	9/13/2028	yes
+PAYL	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+PELGDAL EXTRA	Vitamins & Supplements		box	28	5	3	5	9/6/2028	yes
+PELGDAL FORTE	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+PENICILLIN V	Antibiotics		tablets	0	30	0	0	9/6/2028	no
+PENICILLIN-V	Antibiotics	Penicillin V	tablets	87	20	0	2	9/13/2028	yes
+PIMOL	Analgesics		bottle	0	20	0	0	9/6/2028	yes
+PIROXICAM	Analgesics		tablets	20	5	4	5	9/6/2028	yes
+PLASMOX			pcs	2	1	20	25	9/13/2028	yes
+PLASTER ROLL	Medical Supplies		roll	0	30	0	0	9/6/2028	yes
+PLGSMOS	Herbal Remedies		bottle	0	30	0	0	9/6/2028	no
+POLYCHLOROM	Medical Supplies		bottle	0	30	0	0	9/6/2028	no
+POLYFER CAP	Vitamins & Supplements		syrup	3	30	4	5	9/6/2028	yes
+POLYTENE	Medical Supplies		pack	0	50	0	0	9/6/2028	no
+POSTINOR	Hormonal & Reproductive Health		tablets	20	5	4	5	9/6/2028	yes
+PREDNISOLONE	Analgesics		tablets	40	15	1	1	9/6/2028	yes
+PREGNANCY TEST	Medical Supplies		pack	0	30	0	0	9/6/2028	yes
+QUININE SYRUP	Antimalarials		bottle	0	20	0	0	9/6/2028	yes
+RAPINOL	Analgesics		pcs	15	5	1	2	9/13/2028	yes
+REDSUN	Herbal Remedies		sachet	73	6	3	5	9/6/2028	yes
+RIDDLES ADULT	Respiratory		pcs	10	2	10	15	9/12/2028	yes
+RIDDLES INFANT	Respiratory		bottle	10	2	10	15	9/6/2028	yes
+ROBB	Vitamins & Supplements		bottle	12	5	1	2	9/6/2028	yes
+RONAC	Vitamins & Supplements		capsules	0	40	0	0	9/6/2028	yes
+RONFIT FORTE	Vitamins & Supplements		bottle	16	5	7	8	9/6/2028	yes
+S.O.B.	Respiratory		bottle	0	20	0	0	9/6/2028	no
+SALINE DROP	Eye Care		bottle	0	20	0	0	9/6/2028	yes
+SALO	Medical Supplies		bottle	0	30	0	0	9/6/2028	yes
+SAMALIN 2%	Respiratory		bottle	0	20	0	0	9/6/2028	yes
+SAMALIN ADULT	Respiratory		bottle	4	2	15	20	9/6/2028	yes
+SAMALIN JNR	Respiratory		bottle	10	4	15	20	9/6/2028	yes
+SANITORY PAD	Skin Care		pcs	2	10	15	20	9/12/2028	yes
+SECURE	Hormonal & Reproductive Health		pcs	3	2	5	7	9/13/2028	yes
+SEMEN CAPS	Vitamins & Supplements		capsules	0	30	0	0	9/6/2028	yes
+SEQUAZOL ABENDAZOLE 40MG	Anthelmintics		tablets	0	20	0	0	9/6/2028	yes
+SEQUIZOL	Anthelmintics		pcs	10	3	8	10	9/13/2028	yes
+SERMENS CAP			pcs	9	2	50	55	9/13/2028	yes
+SERMENS MIXTURE	Herbal Remedies		bottle	9	30	50	55	9/6/2028	yes
+SHAWLROSE	Vitamins & Supplements		capsules	0	40	0	0	9/6/2028	yes
+SOLDIER BALM	Skin Care		tube	3	30	12	15	9/6/2028	yes
+SPANISH HERBAL	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+SPEROFONTMENT	Skin Care		tube	0	20	0	0	9/6/2028	yes
+SUPP DICLOFENAC	Analgesics		pcs	27	5	0	3	9/13/2028	yes
+SUPP PARACETAMOL125MG	Analgesics		pcs	35	5	0	2	9/13/2028	yes
+SUPPRIMOL 125	Analgesics		tablets	0	40	0	0	9/6/2028	yes
+SUPPRIMOL 250	Analgesics		tablets	0	40	0	0	9/6/2028	yes
+SUSP AMOXYCILLIN	Antibiotics		bottle	9	3	8	10	9/6/2028	yes
+SUSP COTRIMAZOLE			pcs	2	2	8	10	9/12/2028	yes
+SUSP FLUCLOXACILLIN	Antibiotics		capsules	12	3	8	10	9/6/2028	yes
+SUSP GRISEOFULVIN	Antifungals		bottle	6	1	20	25	9/6/2028	yes
+SUSP MALAR 2			bottle	7	2	20	25	9/12/2028	yes
+SUSP METRONIDAZOLE	Antibiotics		bottle	12	3	8	10	9/6/2028	yes
+SYMUTIVITE	Vitamins & Supplements		tablets	0	50	0	0	9/6/2028	yes
+SYR ARFAN 20/120MG	Analgesics		tablets	12	5	8	10	9/6/2028	yes
+SYR CIROTAMIN	Vitamins & Supplements		pcs	3	1	25	30	9/12/2028	yes
+SYR CYTOMOGEN	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+SYR ZINCOFER	Vitamins & Supplements		pcs	2	1	40	50	9/12/2028	yes
+SYRUP ABYTONE FORTE	Vitamins & Supplements		pcs	7	10	25	30	9/12/2028	yes
+SYRUP AMCOF	Respiratory		pcs	1	1	15	20	9/12/2028	yes
+SYRUP BECOATIN	Vitamins & Supplements		bottle	2	30	25	30	9/6/2028	yes
+SYRUP BONAPLEX	Vitamins & Supplements		bottle	2	30	50	60	9/6/2028	yes
+SYRUP ESKARON	Vitamins & Supplements		bottle	6	30	20	25	9/6/2028	yes
+SYRUP GLO POWER GP	Vitamins & Supplements		bottle	1	50	25	30	9/6/2028	yes
+SYRUP HEPTOLIF ADULT	Vitamins & Supplements		bottle	4	30	20	25	9/6/2028	yes
+SYRUP HEPTOLIF JUNIOR	Vitamins & Supplements		bottle	4	30	8	10	9/6/2028	yes
+SYRUP IBUPROFEN LETAP	Analgesics		tablets	3	40	8	10	9/6/2028	yes
+SYRUP IBUZAP	Analgesics		pcs	3	10	10	15	9/12/2028	yes
+SYRUP KIDI CARE	Vitamins & Supplements		bottle	1	20	25	30	9/6/2028	yes
+SYRUP LEENA	Vitamins & Supplements		bottle	3	30	20	25	9/6/2028	yes
+SYRUP LETALIN	Vitamins & Supplements		bottle	26	5	8	10	9/6/2028	yes
+SYRUP LUFART	Antimalarials		pcs	4	2	25	30	9/12/2028	yes
+SYRUP PARACETAMOL			pcs	14	10	8	10	9/12/2028	yes
+SYRUP PHOPAIN	Analgesics		pcs	4	10	15	20	9/12/2028	yes
+SYRUP POLYFER SMALL	Vitamins & Supplements		pcs	2	10	7	10	9/12/2028	yes
+SYRUP TANZOL	Anthelmintics		pcs	20	3	7	10	9/12/2028	yes
+SYRUP VITAMIN C	Vitamins & Supplements		bottle	7	10	8	10	9/12/2028	yes
+SYRUP VITARICH ADULT	Vitamins & Supplements		tablets	1	40	20	30	9/6/2028	yes
+SYRUP VITARICH JUNIOR	Vitamins & Supplements		bottle	2	10	15	20	9/12/2028	yes
+TAB ARFAN	Antimalarials		pcs	19	5	8	10	9/13/2028	yes
+TAB BRUFEN 400	Analgesics		pcs	23	5	1	2	9/13/2028	yes
+TAB CITRO C	Vitamins & Supplements		pcs	12	10	4	5	9/12/2028	yes
+TAB COTRIMOXAZOLE	Antibiotics		pcs	18	5	0	2	9/13/2028	yes
+TAB CYFEN	Analgesics		tablets	44	40	3	5	9/6/2028	yes
+TAB HEPTOLIF	Vitamins & Supplements		pcs	34	10	3	5	9/12/2028	yes
+TAB LUFART	Antimalarials		pcs	10	4	25	30	9/13/2028	yes
+TAB METRONIDAZOLE	Antibiotics		pcs	31	10	0	2	9/13/2028	yes
+TAB MULTIVITE	Vitamins & Supplements		pcs	50	10	0	1	9/13/2028	yes
+TAB PARACETAMOL			pcs	181	10	1	2	9/12/2028	yes
+TAB PARACETAMOL UK	Analgesics		pcs	14	10	3	5	9/12/2028	yes
+TAB PHOPAIN	Analgesics		pcs	9	5	1	2	9/13/2028	yes
+TAB ZUBES	Respiratory		pcs	5	3	2	3	9/6/2028	yes
+TABEEA HERBAL	Herbal Remedies		bottle	2	1	25	30	9/6/2028	yes
+TB B'CO	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	yes
+TB FOLIC ACID	Vitamins & Supplements		tablets	10	5	0.5	1	9/6/2028	yes
+TB MULTIVITAMIN	Vitamins & Supplements		tablets	0	40	0	0	9/6/2028	no
+TB TANAZOLE	Anthelmintics		tablets	0	30	0	0	9/6/2028	yes
+TEEDAR	Vitamins & Supplements		tablets	5	40	15	20	9/6/2028	yes
+TETRACYCLINE	Antibiotics		capsules	25	10	0	2	9/6/2028	yes
+TIME HERBAL	Herbal Remedies		bottle	3	1	30	35	9/6/2028	yes
+TO'THEMA	Herbal Remedies		bottle	0	30	0	0	9/6/2028	yes
+TRAMADOL	Analgesics		tablets	4	20	10	15	9/6/2028	yes
+TRES-ONIX	Vitamins & Supplements		capsules	3	1	55	60	9/6/2028	yes
+TS AWDUX	Vitamins & Supplements		bottle	0	30	0	0	9/6/2028	no
+UPT	Herbal Remedies		bottle	50	3	3	5	9/6/2028	yes
+VERMOX	Anthelmintics		tablets	10	2	20	25	9/6/2028	yes
+VICTORY			pcs	1	1	40	45	9/13/2028	yes
+VIGORIX FORTE	Vitamins & Supplements		bottle	1	30	25	30	9/6/2028	yes
+VIKIL 20	Herbal Remedies		bottle	0	30	30	35	9/6/2028	yes
+VIMOL	Antimalarials		tablets	0	30	0	0	9/6/2028	yes
+VIT B	Vitamins & Supplements		tablets	0	40	0	0	9/6/2028	no
+VIT C SYRUP	Vitamins & Supplements		bottle	7	3	8	10	9/6/2028	yes
+WELL BABY	Vitamins & Supplements		bottle	0	20	0	0	9/6/2028	yes
+WIP	Medical Supplies		pack	0	50	0	0	9/6/2028	yes
+ZINC TAB	Vitamins & Supplements		strip	3	30	1	2	9/6/2028	yes
+ZINCOVIT DROP	Vitamins & Supplements		bottle	1	20	25	30	9/6/2028	yes
+ZINCOYL + CAPS	Vitamins & Supplements		capsules	0	30	0	0	9/6/2028	no
+ZINOL SUSP	Vitamins & Supplements		bottle	1	20	15	20	9/6/2028	yes
+ZIPFERON	Vitamins & Supplements		pcs	4	10	20	25	9/12/2028	yes
+ZULU-100	Analgesics		box	28	5	8	10	9/13/2028	yes
+ZYFLOXACIN	Antibiotics		tablets	0	30	0	0	9/6/2028	yes
+syr cyprodine			pcs	2	10	110	130	9/17/2028	yes

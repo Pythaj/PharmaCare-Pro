@@ -87,9 +87,12 @@ export default function AdminDashboard() {
   } | null>(null);
 
   const [loading, setLoading] = useState(true);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
 
   useEffect(() => {
-    async function fetchData() {
+    let cancelled = false;
+
+    async function load() {
       try {
         const [statsRes, chartsRes, recentRes, auditRes] = await Promise.allSettled([
           fetch('/api/dashboard/stats'),
@@ -97,6 +100,8 @@ export default function AdminDashboard() {
           fetch('/api/dashboard/recent'),
           fetch('/api/audit-logs'),
         ]);
+
+        if (cancelled) return;
 
         if (statsRes.status === 'fulfilled' && statsRes.value.ok) {
           const data = await statsRes.value.json();
@@ -173,13 +178,17 @@ export default function AdminDashboard() {
               : prev,
           );
         }
+        setLastRefresh(new Date());
       } catch {
         // Silent fail for dashboard
       } finally {
         setLoading(false);
       }
     }
-    fetchData();
+
+    load();
+    const timer = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
   const overviewCards = [
@@ -234,6 +243,21 @@ export default function AdminDashboard() {
 
   return (
     <div className="space-y-6 p-6">
+      {/* Live-refresh banner */}
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background/70 backdrop-blur px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+          </span>
+          <span className="text-sm font-semibold text-emerald-600">LIVE</span>
+          <span className="text-xs text-muted-foreground">Auto-refreshing every 30s</span>
+        </div>
+        <span className="text-xs tabular-nums text-muted-foreground">
+          {lastRefresh ? `Updated ${lastRefresh.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}` : ''}
+        </span>
+      </div>
+
       {/* Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {overviewCards.map((card) => {

@@ -31,7 +31,24 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json({ customers })
+    // Attach each customer's total spend so the list can show real purchase
+    // totals without making a query per row (matches GET /api/customers/[id]).
+    const customerIds = customers.map((c) => c.id)
+    const totals = customerIds.length > 0
+      ? await db.sale.groupBy({
+          by: ['customerId'],
+          where: { customerId: { in: customerIds } },
+          _sum: { totalAmount: true },
+        })
+      : []
+    const spendMap = new Map(totals.map((t) => [t.customerId, t._sum.totalAmount ?? 0]))
+
+    const customersWithTotals = customers.map((customer) => ({
+      ...customer,
+      totalPurchases: spendMap.get(customer.id) ?? 0,
+    }))
+
+    return NextResponse.json({ customers: customersWithTotals })
   } catch (error) {
     console.error('Customers list error:', error)
     return NextResponse.json(

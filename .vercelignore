@@ -1,0 +1,23 @@
+# Vercel upload ignores (applies to `vercel --upload`; for Git deploys .gitignore applies)
+node_modules
+.next/
+.next/**/*
+out/
+build/
+
+# Desktop-only assets (Electron payloads, installers)
+desktop/
+release/
+
+# Local database files (SQLite lives only on the desktop; cloud uses PostgreSQL)
+prisma/db/
+**/*.db
+**/*.sqlite
+
+# Machine-local backups and scratch data
+Backups/
+*.docx
+*.pdf
+.env
+
+.vercel

@@ -1,0 +1,74 @@
+{
+  "name": "pharma-care-pro",
+  "version": "1.0.0",
+  "description": "PharmaCare Pro — Pharmacy Management System (Desktop Edition)",
+  "main": "main.cjs",
+  "author": "PharmaCare Pro",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.pharmacare.desktop",
+    "productName": "PharmaCare Pro",
+    "copyright": "Copyright © 2026 PharmaCare Pro",
+    "asar": true,
+    "npmRebuild": false,
+    "compression": "maximum",
+    "directories": {
+      "output": "../release",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "remote.cjs",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "nextapp",
+        "to": "nextapp",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "afterPack": "desktop/after-pack.cjs",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PharmaCare Pro",
+      "artifactName": "PharmaCare-Pro-Setup-${version}.exe",
+      "uninstallDisplayName": "PharmaCare Pro",
+      "deleteAppDataOnUninstall": false
+    },
+    "portable": {
+      "artifactName": "PharmaCare-Pro-${version}-Portable.exe",
+      "requestExecutionLevel": "user"
+    }
+  }
+}

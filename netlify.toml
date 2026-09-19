@@ -5,7 +5,9 @@
   # route crashed on production ("Cannot find module @prisma/client-<hash>").
   # Webpack emits plain require('@prisma/client') externals — resolvable from
   # the node_modules shipped via [functions].included_files below.
-  command = "npm install --legacy-peer-deps && prisma generate && next build --webpack && node scripts/fix-turbopack-junctions.mjs"
+  # --schema postgres: serverless filesystems can't persist SQLite, so the
+  # cloud deployment always generates the PostgreSQL client.
+  command = "npm install --legacy-peer-deps && prisma generate --schema prisma/schema.postgres.prisma && next build --webpack && node scripts/fix-turbopack-junctions.mjs"
   publish = ".next"
 
 [functions]

@@ -2,8 +2,10 @@
 
 import { lazy, Suspense, useMemo, useEffect, useSyncExternalStore } from 'react';
 import { useAppStore } from '@/stores/app-store';
+import { unflattenSettings } from '@/lib/app-settings';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
+import { MobileBottomNav } from '@/components/layout/MobileBottomNav';
 import LoginPage from '@/components/auth/LoginPage';
 import InstallPrompt, { InstallFAB } from '@/components/InstallPrompt';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
@@ -23,8 +25,12 @@ function useLoadAppSettings() {
         const res = await fetch('/api/settings');
         if (res.ok) {
           const data = await res.json();
-          const name = data.pharmacy?.appName?.trim();
-          const tagline = data.pharmacy?.tagline?.trim();
+          // The settings API returns flat dot-notation keys ("pharmacy.appName").
+          // Unflatten before reading so branding loads from the server and not
+          // just the localStorage fallback.
+          const settings = data.settings ? unflattenSettings(data.settings) : {};
+          const name = settings.pharmacy?.appName?.trim();
+          const tagline = settings.pharmacy?.tagline?.trim();
           if (name) setAppName(name);
           if (tagline) setAppTagline(tagline);
           if (name) localStorage.setItem('pharmacare_app_name', name);
@@ -191,13 +197,17 @@ export default function Home() {
       >
         <Header />
         <main className="flex-1 overflow-hidden">
-          <div className={isSelfScrolling ? 'h-full' : 'h-full overflow-y-auto scroll-smooth'}>
+          <div
+            className={isSelfScrolling ? 'h-full' : 'h-full overflow-y-auto scroll-smooth'}
+            style={isDesktop ? undefined : { paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
             <Suspense fallback={<PageLoader />}>
               {ActivePage && <ActivePage key={currentPage} />}
             </Suspense>
           </div>
         </main>
       </div>
+      <MobileBottomNav />
       <InstallPrompt />
       <InstallFAB />
     </div>

@@ -30,7 +30,6 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
-    setValue,
     formState: { errors },
   } = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -67,13 +66,6 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const fillDemo = (email: string, password: string) => {
-    // Use react-hook-form's setValue — reacts to form state reliably
-    // instead of fragile DOM value setter manipulation.
-    setValue('email', email, { shouldValidate: true });
-    setValue('password', password, { shouldValidate: true });
   };
 
   return (
@@ -278,36 +270,6 @@ export default function LoginPage() {
                 </details>
               </div>
 
-              {/* Demo credentials */}
-              <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3.5">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Demo Credentials
-                </p>
-                <div className="space-y-1.5">
-                  <button
-                    type="button"
-                    onClick={() => fillDemo('admin@pharmacy.com', 'admin123')}
-                    className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100 transition-colors"
-                  >
-                    <div>
-                      <span className="font-medium text-slate-700">Admin</span>
-                      <span className="text-slate-400"> · </span>
-                      <span className="text-slate-500">admin@pharmacy.com / admin123</span>
-                    </div>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => fillDemo('cashier@pharmacy.com', 'sales123')}
-                    className="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm hover:bg-slate-100 transition-colors"
-                  >
-                    <div>
-                      <span className="font-medium text-slate-700">Sales</span>
-                      <span className="text-slate-400"> · </span>
-                      <span className="text-slate-500">cashier@pharmacy.com / sales123</span>
-                    </div>
-                  </button>
-                </div>
-              </div>
             </CardContent>
           </Card>
 
