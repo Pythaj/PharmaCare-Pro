@@ -254,49 +254,6 @@ function normalizeKey(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
-/**
- * Auto-detects the category, generic name and unit for a typed product name.
- * Resolution order (single source of truth):
- *   1. The existing products already loaded from the DB (exact normalised name).
- *   2. The curated drug knowledge base (normalised keyword match).
- * Returns null when nothing confident is found.
- */
-function detectDrugInfo(
-  name: string,
-  products: ProductWithStock[],
-  categories: Category[]
-): { categoryId: string; genericName: string; unit: string } | null {
-  const key = normalizeKey(name);
-  if (!key) return null;
-
-  // 1) Exact match against an existing product in the DB — reuse its real
-  //    category + generic name + unit.
-  const dbHit = products.find((p) => normalizeKey(p.name) === key);
-  if (dbHit) {
-    return {
-      categoryId: dbHit.categoryId ?? '',
-      genericName: dbHit.genericName ?? '',
-      unit: dbHit.unit || 'pcs',
-    };
-  }
-
-  // 2) Curated knowledge base — try full key, then progressively shorter prefix.
-  for (let len = key.length; len >= 3; len--) {
-    const sub = key.slice(0, len);
-    const hit = DRUG_KNOWLEDGE[sub];
-    if (hit) {
-      const cat = categories.find((c) => c.name === hit.category);
-      return {
-        categoryId: cat?.id ?? '',
-        genericName: hit.genericName,
-        unit: hit.unit,
-      };
-    }
-  }
-
-  return null;
-}
-
 // ─── Premium Margin Badge ───
 function MarginBadge({ cost, selling }: { cost: number; selling: number }) {
   const margin = calcMargin(cost, selling);
@@ -668,6 +625,53 @@ export default function ProductsView() {
   const [editActiveBatchKey, setEditActiveBatchKey] = useState<string>('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Memoized product name → product lookup for O(1) exact matches
+  const productNameMap = useMemo(() => {
+    const map = new Map<string, ProductWithStock>();
+    for (const p of products) {
+      const key = p.name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (key && !map.has(key)) map.set(key, p);
+    }
+    return map;
+  }, [products]);
+
+  // Debounced auto-detect: only runs after user pauses typing (150ms)
+  const detectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const detectDrugInfo = useCallback((name: string) => {
+    const key = name.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!key) return null;
+
+    // 1) Exact DB match via Map (O(1))
+    const dbHit = productNameMap.get(key);
+    if (dbHit) {
+      return {
+        categoryId: dbHit.categoryId ?? '',
+        genericName: dbHit.genericName ?? '',
+        unit: dbHit.unit || 'pcs',
+      };
+    }
+
+    // 2) Knowledge base prefix match
+    for (let len = key.length; len >= 3; len--) {
+      const sub = key.slice(0, len);
+      const hit = DRUG_KNOWLEDGE[sub];
+      if (hit) {
+        const cat = categories.find((c) => c.name === hit.category);
+        return {
+          categoryId: cat?.id ?? '',
+          genericName: hit.genericName,
+          unit: hit.unit,
+        };
+      }
+    }
+    return null;
+  }, [productNameMap, categories]);
+
+  const debouncedDetect = useCallback((name: string, cb: (res: ReturnType<typeof detectDrugInfo>) => void) => {
+    if (detectRef.current) clearTimeout(detectRef.current);
+    detectRef.current = setTimeout(() => cb(detectDrugInfo(name)), 150);
+  }, [detectDrugInfo]);
+
   // Fetches the full catalog (optionally including deactivated products) once;
   // search + category filtering happen client-side so typing never re-queries
   // the server. Callers may pass the old (query, category) args — they are
@@ -771,23 +775,23 @@ export default function ProductsView() {
 
   // ─── Auto-detect category + generic name from the typed product name ───
   const handleAddNameChange = (value: string) => {
-    setAddForm((cur) => ({
-      ...cur,
-      name: value,
-      // Fill any gaps (empty category / generic) from the scan; never clobber a
-      // deliberate owner entry.
-      categoryId: cur.categoryId || detectDrugInfo(value, products, categories)?.categoryId || '',
-      genericName: cur.genericName.trim()
-        ? cur.genericName
-        : (detectDrugInfo(value, products, categories)?.genericName ?? ''),
-      unit: cur.unit === 'pcs'
-        ? (detectDrugInfo(value, products, categories)?.unit ?? cur.unit)
-        : cur.unit,
-    }));
+    setAddForm((cur) => ({ ...cur, name: value }));
 
-    const suggestion = detectDrugInfo(value, products, categories);
-    const isNewInput = !addForm.categoryId && !addForm.genericName.trim();
-    setAddAutoDetected(Boolean(suggestion) && value.trim().length > 0 && isNewInput);
+    debouncedDetect(value, (suggestion) => {
+      if (!suggestion) return;
+      setAddForm((cur) => ({
+        ...cur,
+        categoryId: cur.categoryId || suggestion.categoryId || '',
+        genericName: cur.genericName.trim()
+          ? cur.genericName
+          : (suggestion.genericName ?? ''),
+        unit: cur.unit === 'pcs'
+          ? (suggestion.unit ?? cur.unit)
+          : cur.unit,
+      }));
+      const isNewInput = !addForm.categoryId && !addForm.genericName.trim();
+      setAddAutoDetected(Boolean(suggestion) && value.trim().length > 0 && isNewInput);
+    });
   };
 
   const handleAddProduct = async () => {
