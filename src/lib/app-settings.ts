@@ -110,7 +110,9 @@ export const defaultSettings: AllSettings = {
     autoPrintReceipt: true,
     defaultDiscount: 0,
     requireCustomer: false,
-    allowNegativeStock: false,
+    // Out-of-stock drugs stay sellable (recorded as backorders) so the client
+    // can keep making sales while waiting on replenishment.
+    allowNegativeStock: true,
     maxLineItems: 50,
   },
   notifications: {

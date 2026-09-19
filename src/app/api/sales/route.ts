@@ -139,6 +139,18 @@ export async function POST(request: NextRequest) {
   }
   const userId = auth.user!.userId
 
+  // Backorders: when the pharmacy allows negative stock, an out-of-stock item
+  // may still be sold (the client hands over goods / records the sale now and
+  // replenishes later). Read the live toggle from system settings each time so
+  // a Settings change applies immediately without a redeploy.
+  const allowNegSetting = await db.systemSetting.findFirst({
+    where: { key: 'pos.allowNegativeStock' },
+  })
+  // Mirror the client-side default (src/lib/app-settings.ts) so backorders
+  // work out of the box even before a Settings row is persisted. An explicit
+  // 'false' stored by the admin disables them.
+  const allowNegativeStock = allowNegSetting ? allowNegSetting.value === 'true' : true
+
   try {
     const body = await request.json()
     const {
@@ -224,9 +236,11 @@ export async function POST(request: NextRequest) {
 if (batch.expiryDate && new Date(batch.expiryDate) < saleAt) {
             throw new ValidationError(`Batch ${batch.batchNumber} is expired and cannot be sold — remove it from the sale.`)
           }
-          if (batch.quantity < quantity) {
+          if (batch.quantity < quantity && !allowNegativeStock) {
             throw new ValidationError(`Insufficient stock for batch "${batch.batchNumber}". Only ${batch.quantity} available, but ${quantity} requested.`)
           }
+          // When backorders are allowed, the batch balance may go negative.
+          // Its (possibly zero) balance is what gets decremented below.
 
           const unitPrice = Number(batch.sellingPrice)
           const costPrice = Number(batch.costPrice)
@@ -303,10 +317,38 @@ if (batch.expiryDate && new Date(batch.expiryDate) < saleAt) {
           }
 
           if (remainingQty > 0) {
-            if (reachedExpired || (hadExpiredOnly && availableBatches.every(b => b.expiryDate && new Date(b.expiryDate) < saleAt))) {
+            const expiredOnly = reachedExpired || (hadExpiredOnly && availableBatches.every(b => b.expiryDate && new Date(b.expiryDate) < saleAt))
+            if (expiredOnly) {
               throw new ValidationError(`"${product.name}" stock has expired and cannot be sold — receive a fresh batch first.`)
             }
-            throw new ValidationError(`Insufficient stock for "${product.name}". Need ${quantity} but only ${quantity - remainingQty} available across all batches.`)
+            if (!allowNegativeStock) {
+              throw new ValidationError(`Insufficient stock for "${product.name}". Need ${quantity} but only ${quantity - remainingQty} available across all batches.`)
+            }
+
+            // Backorder: record the remaining units without touching any batch.
+            // The drug is sold even though stock is at zero (client replenishes
+            // after the fact), so the SaleItem simply carries no batchId and the
+            // balance stays at 0 rather than going artificially negative.
+            const unitPrice = Number(product.defaultSellingPrice) > 0
+              ? Number(product.defaultSellingPrice)
+              : (
+                  availableBatches.length > 0
+                    ? Number(availableBatches[0].sellingPrice)
+                    : 0
+                )
+            const costPrice = Number(product.defaultCostPrice) || 0
+            const total = unitPrice * remainingQty
+            subtotal += total
+            profit += (unitPrice - costPrice) * remainingQty
+            saleItemsData.push({
+              productId: item.productId,
+              batchId: null,
+              quantity: remainingQty,
+              unitPrice,
+              costPrice,
+              total,
+              expiryDate: null,
+            })
           }
         }
       }

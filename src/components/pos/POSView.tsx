@@ -17,7 +17,7 @@ import {
   AlertTriangle,
   TrendingDown,
   ArrowDownCircle,
-  PackageX,
+  PackagePlus,
   BarChart3,
   Clock,
   ArrowUp,
@@ -68,6 +68,37 @@ function toDateKey(d: Date): string {
 function formatDateKey(key: string): string {
   const d = new Date(key + 'T00:00:00');
   return d.toLocaleDateString('en-GH', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// ── Instant search helpers (client-side, provider-safe, zero latency) ──
+function normalizeQuery(s: string): string[] {
+  return s.toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function productMatchesQuery(p: ProductWithStock, tokens: string[]): boolean {
+  const haystack = [
+    p.name,
+    p.genericName,
+    p.category?.name,
+    ...(p.batches || []).map((b) => b.batchNumber),
+  ].filter(Boolean).join(' ').toLowerCase();
+  return tokens.every((t) => haystack.includes(t));
+}
+
+// Renders the product name with the first matching term highlighted.
+function HighlightName({ name, term }: { name: string; term: string }) {
+  const lower = name.toLowerCase();
+  const t = term.trim().toLowerCase();
+  if (!t || !lower.includes(t)) return <>{name}</>;
+  const start = lower.indexOf(t);
+  const end = start + t.length;
+  return (
+    <>
+      {name.slice(0, start)}
+      <mark className="bg-emerald-100 text-emerald-800 rounded-[3px] px-0.5 font-bold">{name.slice(start, end)}</mark>
+      {name.slice(end)}
+    </>
+  );
 }
 
 interface ProductWithStock extends Product {
@@ -627,7 +658,6 @@ export default function POSView() {
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
-  const searchQueryRef = useRef('');
   const [cashReceived, setCashReceived] = useState(0);
   const [saleDate, setSaleDate] = useState(() => toDateKey(new Date()));
   const [loading, setLoading] = useState(true);
@@ -647,7 +677,6 @@ export default function POSView() {
       setPosPresetDate(null);
     }
   }, [posPresetDate, setPosPresetDate]);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [stockChanges, setStockChanges] = useState<StockChange[]>([]);
   const [addedToCart, setAddedToCart] = useState<Set<string>>(new Set());
   const prevProductsRef = useRef<Map<string, number>>(new Map());
@@ -795,11 +824,10 @@ export default function POSView() {
     }
     init();
 
-    // 30-second auto-refresh — always uses the LATEST search term via a ref,
-    // so the interval (created once) never gets stuck on a stale query.
-    searchQueryRef.current = searchQueryRef.current || '';
+    // 30-second auto-refresh — refetches the full catalog, then the client-side
+    // search/filter re-applies instantly. No round-trip per keystroke.
     refreshIntervalRef.current = setInterval(() => {
-      fetchProducts(searchQueryRef.current);
+      fetchProducts('');
     }, 30000);
 
     return () => {
@@ -807,20 +835,26 @@ export default function POSView() {
         clearInterval(refreshIntervalRef.current);
       }
     };
-  }, [fetchProducts]); // intentionally not including searchQuery to avoid re-creating interval
+  }, [fetchProducts]);
 
+  // "/" focuses the search box anywhere on the POS floor
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/') return;
+      const el = document.activeElement;
+      if (el && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)) return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // Search is instant and local: it filters the already-loaded catalog in
+  // memory (case-insensitive) instead of firing a server round-trip per key.
   const handleSearch = (value: string) => {
-    searchQueryRef.current = value;
     setSearchQuery(value);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (value === '') {
-      // Clearing the search must fetch immediately, never after a debounce
-      fetchProducts('');
-      return;
-    }
-    debounceRef.current = setTimeout(() => {
-      fetchProducts(value);
-    }, 300);
   };
 
   const isBatchExpired = (expiryDate?: string | null) =>
@@ -833,8 +867,32 @@ export default function POSView() {
       .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
 
   const handleAddToCart = (product: ProductWithStock) => {
+    // Out of stock? The client still sells these (they replenish afterwards),
+    // so the card is selectable and the line goes in as a BACKORDER — no
+    // batch is reserved or deducted, and the receipt records it normally.
     if (product.totalStock === 0) {
-      toast.error(`${product.name} is out of stock!`, { icon: <PackageX className="h-4 w-4 text-red-500" /> });
+      addToCart({
+        productId: product.id,
+        productName: product.name,
+        batchId: '',
+        batchNumber: '-',
+        quantity: 1,
+        unitPrice: product.minSellingPrice || product.defaultSellingPrice || 0,
+        costPrice: product.defaultCostPrice || 0,
+        availableQty: Number.MAX_SAFE_INTEGER,
+        expiryDate: '',
+        isBackorder: true,
+      });
+      setAddedToCart(prev => {
+        const next = new Set(prev);
+        next.add(product.id);
+        setTimeout(() => { setAddedToCart(p => { const n = new Set(p); n.delete(product.id); return n; }); }, 800);
+        return next;
+      });
+      toast.info(`${product.name} added as a backorder`, {
+        description: 'No stock is deducted — replenish this drug to keep up.',
+        icon: <PackagePlus className="h-4 w-4 text-amber-500" />,
+      });
       return;
     }
 
@@ -954,9 +1012,13 @@ export default function POSView() {
   // VAT is intentionally NOT added at the POS — retail prices are all-inclusive.
   const total = Math.max(0, subtotal - effectiveDiscount);
 
-  const filteredProducts = activeCategory === 'All'
+  // Instant catalog search + category filter, always sorted A–Z.
+  const queryTokens = normalizeQuery(searchQuery);
+  const filteredProducts = (activeCategory === 'All'
     ? products
-    : products.filter(p => p.category?.name === activeCategory);
+    : products.filter(p => p.category?.name === activeCategory)
+  ).filter(p => queryTokens.length === 0 || productMatchesQuery(p, queryTokens))
+   .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }));
 
   const cartQtyMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -990,15 +1052,18 @@ export default function POSView() {
       // Capture pre-sale stock for impact display
       const preSaleStock = cart.map(item => {
         const product = products.find(p => p.id === item.productId);
+        const oldStock = product?.totalStock ?? 0;
+        // Backorder lines don't move the balance — stock was already 0.
+        const newStock = item.isBackorder ? oldStock : oldStock - item.quantity;
         return {
           productName: item.productName,
           productId: item.productId,
-          oldStock: product?.totalStock ?? 0,
-          newStock: (product?.totalStock ?? 0) - item.quantity,
+          oldStock,
+          newStock,
           quantitySold: item.quantity,
           reorderLevel: product?.reorderLevel ?? 10,
-          hitZero: (product?.totalStock ?? 0) - item.quantity === 0,
-          hitLow: (product?.totalStock ?? 0) - item.quantity > 0 && (product?.totalStock ?? 0) - item.quantity <= (product?.reorderLevel ?? 10),
+          hitZero: newStock === 0,
+          hitLow: newStock > 0 && newStock <= (product?.reorderLevel ?? 10),
         };
       });
 
@@ -1049,8 +1114,8 @@ export default function POSView() {
         changeDue: paymentMethod === 'cash' ? Math.max(0, cashReceived - Number(data.totalAmount)) : 0,
       };
 
-      // Refresh products to show updated stock
-      await fetchProducts(searchQuery);
+      // Refresh products to show updated stock (search re-applies client-side)
+      await fetchProducts('');
 
       toast.success('Sale completed successfully!');
 
@@ -1219,19 +1284,26 @@ export default function POSView() {
         <div className="relative mb-2">
           <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
           <Input
-            placeholder="Search medicines..."
+            ref={searchInputRef}
+            placeholder="Search medicines, generic, category, batch…"
             value={searchQuery}
             onChange={(e) => handleSearch(e.target.value)}
-            className="pl-10 h-10 lg:h-10 bg-white border-slate-200 focus-visible:ring-emerald-500/20 text-sm"
+            className="pl-10 pr-16 h-10 lg:h-10 bg-white border-slate-200 focus-visible:ring-emerald-500/20 text-sm"
           />
-          {searchQuery && (
-            <button
-              onClick={() => handleSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
+          <div className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1.5 pointer-events-none">
+            {searchQuery ? (
+              <button
+                onClick={() => handleSearch('')}
+                className="pointer-events-auto text-slate-400 hover:text-slate-600 p-0.5 flex items-center"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            ) : (
+              <span className="text-[9px] font-semibold text-slate-300 border border-slate-200 rounded px-1.5 py-0.5 leading-none">
+                /
+              </span>
+            )}
+          </div>
         </div>
 
         {/* Stock Movement Ticker */}
@@ -1273,13 +1345,13 @@ export default function POSView() {
             <AlertTriangle className="h-3 w-3 text-amber-600" />
             <span>{filteredProducts.filter(p => p.totalStock > 0 && p.totalStock <= (p.reorderLevel || 10)).length} low</span>
           </div>
-          <div className="flex items-center gap-1 bg-red-50 text-red-700 px-2.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
-            <PackageX className="h-3 w-3 text-red-500" />
-            <span>{filteredProducts.filter(p => p.totalStock === 0).length} out</span>
+          <div className="flex items-center gap-1 bg-amber-50 text-amber-700 px-2.5 py-0.5 rounded-full text-[10px] font-semibold shrink-0">
+            <PackagePlus className="h-3 w-3 text-amber-600" />
+            <span>{filteredProducts.filter(p => p.totalStock === 0).length} backorder</span>
           </div>
           <div className="ml-auto shrink-0 pl-1">
             <button
-              onClick={() => fetchProducts(searchQuery)}
+              onClick={() => fetchProducts('')}
               className="flex items-center justify-center h-5 w-5 rounded-full bg-slate-100 text-slate-400 hover:text-emerald-600 transition-colors"
               title="Refresh stock"
             >
@@ -1302,25 +1374,23 @@ export default function POSView() {
                 const stockChange = stockChanges.find(c => c.productId === product.id);
                 const effectiveStock = product.totalStock - cartCount;
                 const isRestocked = restockedIds.has(product.id);
-                const maxDisplay = Math.max((product.reorderLevel || 10) * 3, 20);
                 const reservedPct = product.totalStock > 0 ? (cartCount / product.totalStock) * 100 : 0;
                 const availablePct = product.totalStock > 0 ? (effectiveStock / product.totalStock) * 100 : 0;
 
                 return (
                   <motion.button
                     key={product.id}
-                    onClick={() => !isOutOfStock && handleAddToCart(product)}
-                    disabled={isOutOfStock}
+                    onClick={() => handleAddToCart(product)}
                     className={`relative text-left rounded-xl border transition-all overflow-hidden bg-white ${
                       isOutOfStock
-                        ? 'border-slate-100 opacity-60 cursor-not-allowed'
+                        ? 'border-dashed border-amber-300 bg-gradient-to-br from-white to-amber-50/50 hover:border-amber-400 hover:shadow-md hover:shadow-amber-100 cursor-pointer'
                         : isCritical
                         ? 'border-red-200 shadow-sm shadow-red-50/50 hover:border-red-400 hover:shadow-md cursor-pointer'
                         : isLowStock
                         ? 'border-amber-200 shadow-sm shadow-amber-50/50 hover:border-amber-400 hover:shadow-md cursor-pointer'
                         : 'border-slate-200 hover:border-emerald-400 hover:shadow-md cursor-pointer'
                     } ${justAdded ? 'ring-2 ring-emerald-400 ring-offset-1' : ''}`}
-                    whileTap={!isOutOfStock ? { scale: 0.97 } : undefined}
+                    whileTap={{ scale: 0.97 }}
                     layout
                   >
                     <div className="p-2 lg:p-3">
@@ -1411,8 +1481,9 @@ export default function POSView() {
 
                         {/* Out / Critical / Low stock tag overlay on bottom-left */}
                         {isOutOfStock ? (
-                          <span className="absolute bottom-1 left-1 bg-red-150 text-red-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none">
-                            Out
+                          <span className="absolute bottom-1 left-1 bg-amber-100 text-amber-700 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none flex items-center gap-0.5">
+                            <PackagePlus className="h-2.5 w-2.5" />
+                            Backorder
                           </span>
                         ) : isCritical ? (
                           <span className="absolute bottom-1 left-1 bg-red-50 text-red-600 text-[8px] font-black px-1.5 py-0.5 rounded uppercase tracking-wider leading-none animate-pulse">
@@ -1427,7 +1498,7 @@ export default function POSView() {
 
                       {/* Product Name */}
                       <h4 className="font-semibold text-xs lg:text-sm leading-tight line-clamp-2 text-slate-800 h-8 mb-0.5">
-                        {product.name}
+                        <HighlightName name={product.name} term={queryTokens[0] ?? ''} />
                       </h4>
 
                       {/* Category */}
@@ -1455,7 +1526,7 @@ export default function POSView() {
                           size="sm"
                           className={`text-xs font-bold tabular-nums font-mono ${
                             effectiveStock <= 0
-                              ? 'text-red-500'
+                              ? 'text-amber-600'
                               : effectiveStock <= (product.reorderLevel || 10)
                               ? 'text-amber-600'
                               : 'text-emerald-600'
@@ -1491,7 +1562,19 @@ export default function POSView() {
               <div className="col-span-full flex flex-col items-center justify-center py-16 text-slate-400">
                 <Search className="h-10 w-10 mb-3 opacity-30" />
                 <p className="text-sm font-medium">No products found</p>
-                <p className="text-xs mt-1">Try a different search term or category</p>
+                <p className="text-xs mt-1">
+                  {searchQuery
+                    ? <>Nothing matches &ldquo;{searchQuery}&rdquo; — check the spelling or try a generic name</>
+                    : 'Try a different search term or category'}
+                </p>
+                {searchQuery && (
+                  <button
+                    onClick={() => { setSearchQuery(''); setActiveCategory('All'); }}
+                    className="mt-3 text-xs font-medium text-emerald-600 hover:text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full transition-colors"
+                  >
+                    Clear search & show all
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -1569,9 +1652,16 @@ export default function POSView() {
                           <span className="font-bold text-sm text-slate-800 tabular-nums shrink-0">{formatGHS(item.unitPrice * item.quantity)}</span>
                         </div>
                         <div className="flex items-center justify-between mt-2">
-                          <p className={`text-[10px] font-semibold ${stockAfterSale <= 0 ? 'text-red-500' : stockAfterSale <= reorderLevel ? 'text-amber-600' : 'text-slate-300'}`}>
-                            {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
-                          </p>
+                          {item.isBackorder ? (
+                            <p className="text-[10px] font-semibold text-amber-600 flex items-center gap-1">
+                              <PackagePlus className="h-3 w-3" />
+                              Backorder — sells ahead of stock
+                            </p>
+                          ) : (
+                            <p className={`text-[10px] font-semibold ${stockAfterSale <= 0 ? 'text-red-500' : stockAfterSale <= reorderLevel ? 'text-amber-600' : 'text-slate-300'}`}>
+                              {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
+                            </p>
+                          )}
                           <div className="flex items-center gap-2">
                             <button
                               className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
@@ -1720,13 +1810,20 @@ export default function POSView() {
                         </span>
                       </div>
                       <div className="flex items-center justify-between mt-1.5">
-                        <p className={`text-[9px] font-semibold tracking-wide uppercase ${
-                          stockAfterSale <= 0 ? 'text-red-500' :
-                          stockAfterSale <= reorderLevel ? 'text-amber-600' :
-                          'text-slate-300'
-                        }`}>
-                          {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
-                        </p>
+                        {item.isBackorder ? (
+                          <p className="text-[9px] font-semibold tracking-wide uppercase text-amber-600 flex items-center gap-1">
+                            <PackagePlus className="h-3 w-3" />
+                            Backorder
+                          </p>
+                        ) : (
+                          <p className={`text-[9px] font-semibold tracking-wide uppercase ${
+                            stockAfterSale <= 0 ? 'text-red-500' :
+                            stockAfterSale <= reorderLevel ? 'text-amber-600' :
+                            'text-slate-300'
+                          }`}>
+                            {stockAfterSale > 0 ? `${stockAfterSale} left` : 'Last unit!'}
+                          </p>
+                        )}
                         <div className="flex items-center gap-1">
                           <button
                             className="h-8 w-8 rounded-md flex items-center justify-center text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all"

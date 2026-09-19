@@ -193,6 +193,8 @@ export interface DashboardStats {
 export interface CartItem {
   productId: string;
   productName: string;
+  // batchId === '' marks a backorder line: the drug is sold while out of
+  // stock, so no batch is reserved/deducted.
   batchId: string;
   batchNumber: string;
   quantity: number;
@@ -200,6 +202,7 @@ export interface CartItem {
   costPrice: number;
   availableQty: number;
   expiryDate: string;
+  isBackorder?: boolean;
 }
 
 // ===== Daily Sales Record =====

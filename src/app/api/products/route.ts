@@ -20,15 +20,6 @@ export async function GET(request: NextRequest) {
     if (!includeInactive) {
       conditions.push({ active: true })
     }
-    if (search) {
-      conditions.push({
-        OR: [
-          { name: { contains: search } },
-          { genericName: { contains: search } },
-          { description: { contains: search } },
-        ],
-      })
-    }
     if (categoryId && categoryId !== 'all') {
       conditions.push({ categoryId })
     }
@@ -46,7 +37,10 @@ export async function GET(request: NextRequest) {
           orderBy: { expiryDate: 'asc' },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      // A–Z by default. Products are cheap to enumerate for a pharmacy and the
+      // search below runs in-memory for case-insensitive correctness on every
+      // provider (SQLite/Postgres alike).
+      orderBy: { name: 'asc' },
     })
 
     const now = new Date()
@@ -121,7 +115,30 @@ export async function GET(request: NextRequest) {
       };
     })
 
-    return NextResponse.json({ products: productsWithStock })
+    // Case-insensitive search across every field a cashier might type — name,
+    // generic name, description, category and even a batch number. Runs
+    // in-memory so casing never hides a drug on any database provider.
+    let results = productsWithStock
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase()
+      results = productsWithStock.filter((p) => {
+        const haystack = [
+          p.name,
+          p.genericName,
+          p.description,
+          p.category?.name,
+          ...p.batches.map((b) => b.batchNumber),
+        ]
+        return haystack.some((field) => field && field.toLowerCase().includes(q))
+      })
+    }
+
+    // Stable A–Z (case-insensitive natural ordering) so the shelf always looks tidy
+    results.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true })
+    )
+
+    return NextResponse.json({ products: results })
   } catch (error) {
     console.error('Products list error:', error)
     return NextResponse.json(
