@@ -106,3 +106,42 @@ UPDATE "daily_sales_records" SET "branchId" = 'brh_legacy_main' WHERE "branchId"
 --    salesperson to their real location from the Branches screen.
 -- ----------------------------------------------------------------------------
 UPDATE "users" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL AND "role" <> 'admin';
+
+
+-- ----------------------------------------------------------------------------
+-- 6. PREFLIGHT: prove the new unique keys cannot be violated.
+--
+--    `prisma db push` refuses to run without --accept-data-loss when it adds a
+--    unique constraint, because it cannot know whether duplicates already
+--    exist. Rather than passing that flag on faith, assert it here: this is the
+--    last statement before db push, so if a duplicate DOES exist the build
+--    aborts here with a clear message and the schema is left untouched.
+--
+--    In practice neither can collide, because every row was just pointed at the
+--    same single branch:
+--      * batches were already unique on (productId, batchNumber), and adding a
+--        constant third column cannot introduce a duplicate.
+--      * daily_sales_records were already unique on `date`, likewise.
+--    The check is here so that stays a verified fact rather than an assumption.
+-- ----------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM "batches"
+    GROUP BY "productId", "batchNumber", "branchId"
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION
+      'Backfill aborted: duplicate (productId, batchNumber, branchId) in batches would violate the new unique key. Resolve the duplicate batch numbers by hand.';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM "daily_sales_records"
+    GROUP BY "date", "branchId"
+    HAVING COUNT(*) > 1
+  ) THEN
+    RAISE EXCEPTION
+      'Backfill aborted: duplicate (date, branchId) in daily_sales_records would violate the new unique key. Merge the duplicate till records by hand.';
+  END IF;
+END $$;
+
