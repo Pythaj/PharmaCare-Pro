@@ -51,6 +51,19 @@ if (isCloud) {
 
   console.log('[build] Applying schema to cloud database (prisma db push)');
   run('prisma db push --schema prisma/schema.postgres.prisma --skip-generate --accept-data-loss');
+
+  // MUST run AFTER db push. This inserts the quantity-0 starter batches that
+  // make every product reachable from every active branch, and it relies on both
+  // the NOT NULL branchId and the compound unique
+  // (productId, batchNumber, branchId) that db push has just created.
+  //
+  // Additive and idempotent: no DELETE, no DROP, existing batches are never
+  // updated, and a second run inserts nothing. It ends in a verification block
+  // that RAISEs if any product/branch pair is still uncovered, so a silent
+  // partial repair fails the deploy instead of shipping a drug that is missing
+  // from a till.
+  console.log('[build] Backfilling catalogue coverage across all active branches');
+  run('prisma db execute --schema prisma/schema.postgres.prisma --file scripts/backfill-catalogue.sql');
 } else {
   console.log('[build] Local target detected — generating SQLite Prisma client');
   run('prisma generate');

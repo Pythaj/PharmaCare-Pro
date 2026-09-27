@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { requireAdmin, requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { classifyProductExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
+import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding'
 import {
   parseProductName,
   parseOptionalGenericName,
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest) {
     // other building, and drives that branch's quantity negative.
     const branchId = auth.scope!.branchId
     const batchScope = branchId ? { branchId } : {}
+    const now = new Date()
 
     const products = await db.product.findMany({
       where,
@@ -57,7 +59,17 @@ export async function GET(request: NextRequest) {
           },
         },
         batches: {
-          where: { ...batchScope, quantity: { gt: 0 } },
+          // SELLABLE batches only, and this is the single definition of that
+          // used by the whole product list, the POS and the dashboards.
+          //
+          // Expiry was missing here, so a batch sitting past its expiry date
+          // still contributed to `totalStock`, still set the price the till
+          // charged (via the min below), and still made the product read as
+          // "in stock". A cashier could therefore sell expired medicine and see
+          // it counted as available. Expired stock is not sellable stock; the
+          // inventory-alerts screen remains where expiry is surfaced, so it is
+          // not hidden from the owner by filtering it out of the sell list.
+          where: { ...batchScope, quantity: { gt: 0 }, expiryDate: { gt: now } },
           select: { id: true, batchNumber: true, quantity: true, costPrice: true, sellingPrice: true, expiryDate: true },
           orderBy: { expiryDate: 'asc' },
         },
@@ -68,7 +80,59 @@ export async function GET(request: NextRequest) {
       orderBy: { name: 'asc' },
     })
 
-    const now = new Date()
+    // Expired stock is excluded from the sellable set above, but the owner still
+    // has to be warned about it — filtering it away would hide a real problem
+    // behind a "no stock" badge. So expired quantities are counted separately in
+    // one query and surfaced as a distinct flag, rather than being mixed into
+    // `totalStock` or dropped altogether.
+    const expiredGroups = await db.batch.groupBy({
+      by: ['productId'],
+      where: { ...batchScope, quantity: { gt: 0 }, expiryDate: { lte: now } },
+      _count: { _all: true },
+    })
+    const expiredProductIds = new Set(expiredGroups.map((g) => g.productId))
+
+    // PER-BRANCH AVAILABILITY (admin only)
+    //
+    // The owner managing several branches needs one question answered at a
+    // glance: "where can I actually sell this?" That cannot be derived from the
+    // branch-scoped batches above, which only ever describe the caller's branch.
+    // So admins get an all-branch roll-up; everyone else is refused it.
+    //
+    // Only QUANTITY crosses the boundary, never costPrice: a branch's purchase
+    // cost is that branch's business, and leaking it to another branch's admin
+    // (or, via the all-branches owner view, being the only number that reveals
+    // what a supplier charged) is not needed to answer "is it in stock there".
+    const isAdmin = auth.scope?.isAdmin ?? false
+    const includeBranchAvailability = isAdmin
+
+    let branchAvailability: Record<string, { branchId: string; branchName: string; branchCode: string; quantity: number }[]> = {}
+    if (includeBranchAvailability) {
+      const activeBranches = await db.branch.findMany({
+        where: { active: true },
+        select: { id: true, name: true, code: true },
+        orderBy: { name: 'asc' },
+      })
+      const availabilityRows = await db.batch.groupBy({
+        by: ['productId', 'branchId'],
+        where: { quantity: { gt: 0 }, expiryDate: { gt: now } },
+        _sum: { quantity: true },
+      })
+      const totals = new Map(
+        availabilityRows.map((r) => [`${r.productId}::${r.branchId}`, r._sum.quantity ?? 0])
+      )
+      branchAvailability = Object.fromEntries(
+        products.map((p) => [
+          p.id,
+          activeBranches.map((b) => ({
+            branchId: b.id,
+            branchName: b.name,
+            branchCode: b.code,
+            quantity: totals.get(`${p.id}::${b.id}`) ?? 0,
+          })),
+        ])
+      )
+    }
 
     const productsWithStock = products.map((p) => {
       const totalStock = p.batches.reduce((sum, b) => sum + b.quantity, 0);
@@ -94,12 +158,19 @@ export async function GET(request: NextRequest) {
         ? daysUntil(earliestExpiry, now)
         : null;
 
-      const expiryStatus = classifyProductExpiry(
+      // `p.batches` now holds only SELLABLE batches, so it can never yield
+      // 'expired'. Expired stock is counted separately, and a product that has
+      // any is reported as expired here so `expiryStatus` and `hasExpiredBatches`
+      // cannot disagree — otherwise a future consumer reading only the status
+      // string would be told "no expiry problem" about a drug that has none
+      // sellable.
+      const hasExpiredBatches = expiredProductIds.has(p.id);
+      const sellableExpiryStatus = classifyProductExpiry(
         p.batches.map((b) => b.expiryDate),
         now
       );
-      const hasExpiredBatches = expiryStatus === 'expired';
-      const hasExpiringBatches = expiryStatus === 'expiring_soon';
+      const hasExpiringBatches = sellableExpiryStatus === 'expiring_soon';
+      const expiryStatus = hasExpiredBatches ? 'expired' : sellableExpiryStatus;
 
       // Combined stock status, from the shared classifier.
       const stockStatus = classifyStock(totalStock, p.reorderLevel);
@@ -128,6 +199,10 @@ export async function GET(request: NextRequest) {
         hasExpiredBatches,
         stockStatus,
         expiryStatus,
+        // Admin-only; absent entirely for a salesperson rather than sent as an
+        // empty array, so a sales client cannot mistake "not shown" for "no
+        // branches".
+        ...(includeBranchAvailability ? { branchAvailability: branchAvailability[p.id] } : {}),
       };
     })
 
@@ -227,20 +302,32 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const product = await db.product.create({
-      data: {
-        name: parsedName.value,
-        genericName: parsedGenericName.value,
-        categoryId: parsedCategoryId.value,
-        description: parsedDescription.value,
-        unit: parsedUnit.value,
-        reorderLevel: parsedReorderLevel.value,
-        defaultCostPrice: parsedCost.value,
-        defaultSellingPrice: parsedSelling.value,
-      },
-      include: {
-        category: { select: { id: true, name: true } },
-      },
+    // Create the product AND materialise its per-branch catalogue rows in one
+    // transaction. Seeding separately would leave a window where the product
+    // exists but is sellable nowhere — the exact state that made a freshly added
+    // drug invisible at every branch.
+    const product = await db.$transaction(async (tx) => {
+      const created = await tx.product.create({
+        data: {
+          name: parsedName.value,
+          genericName: parsedGenericName.value,
+          categoryId: parsedCategoryId.value,
+          description: parsedDescription.value,
+          unit: parsedUnit.value,
+          reorderLevel: parsedReorderLevel.value,
+          defaultCostPrice: parsedCost.value,
+          defaultSellingPrice: parsedSelling.value,
+        },
+        include: {
+          category: { select: { id: true, name: true } },
+        },
+      })
+
+      // Every branch gets a quantity-0 starter batch, so the drug shows up on
+      // every till straight away while real quantities stay owner-entered.
+      await seedCatalogueForAllBranches(tx, [created.id])
+
+      return created
     })
 
     await logAudit({

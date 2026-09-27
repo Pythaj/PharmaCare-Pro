@@ -39,18 +39,37 @@ async function main() {
 
     console.log(`    admin@pharmacare.com (${owner.role})`);
 
+    // A branch must exist before any stock can. Stock is owned by exactly one
+    // branch, so without this the drug import has nowhere to put a batch — which
+    // is precisely how the shipped template ended up with a catalogue and no
+    // stock rows at all.
+    const mainBranch = await db.branch.upsert({
+      where: { code: 'MAIN' },
+      update: { active: true },
+      create: { name: 'Main Branch', code: 'MAIN', active: true },
+    });
+    console.log(`    branch: ${mainBranch.name} (${mainBranch.code})`);
+
     // Full drug catalog — the same routine that populates the dev database, so
     // both environments ship identical standard stock (Rule 18). Idempotent.
-    const { created, skipped, categoriesCreated, errors } = await importDrugCatalog(db);
+    const { created, skipped, updated, categoriesCreated, branchesSeeded, errors } =
+      await importDrugCatalog(db);
     console.log(`  Drug catalog seeder:`);
     console.log(`    ${created} drugs created`);
-    console.log(`    ${skipped} already existed (skipped)`);
+    console.log(`    ${skipped} already existed (stock preserved)`);
+    if (updated > 0) console.log(`    ${updated} existing drugs repaired`);
     console.log(`    ${categoriesCreated} categories created`);
+    console.log(`    ${branchesSeeded} starter batches placed`);
     if (errors.length > 0) {
-      console.log(`    ⚠️  ${errors.length} error(s):`);
+      console.log(`    ❌ ${errors.length} row(s) FAILED:`);
       for (const e of errors.slice(0, 10)) {
         console.log(`       - ${e.name}: ${e.message}`);
       }
+      // Fail the build. A template that reports success while shipping an empty
+      // catalogue is how this defect reached users in the first place.
+      throw new Error(
+        `Drug catalog import produced ${errors.length} error(s); refusing to ship an incomplete template.`
+      );
     }
 
     console.log('  Seed complete.\n');

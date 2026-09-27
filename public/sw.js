@@ -6,10 +6,14 @@
 // never evicted: the installed PWA keeps serving the previous build's
 // manifest, assets and cached API responses, so the app silently looks and
 // behaves like the old version even though the server has the new code.
-const CACHE_NAME = 'pharmacare-v6';
-const STATIC_CACHE = 'pharmacare-static-v6';
-const DYNAMIC_CACHE = 'pharmacare-dynamic-v6';
-const API_CACHE = 'pharmacare-api-v6';
+//
+// NOTE: there is deliberately NO api cache any more. Authenticated /api/
+// responses are never written to the Cache API (see the fetch handler), so the
+// allow-list below holds only the two caches that can actually exist. That also
+// means every pre-v7 `pharmacare-api-*` cache is evicted on this upgrade.
+const CACHE_NAME = 'pharmacare-v7';
+const STATIC_CACHE = 'pharmacare-static-v7';
+const DYNAMIC_CACHE = 'pharmacare-dynamic-v7';
 
 const STATIC_ASSETS = [
   '/manifest.json',
@@ -37,7 +41,7 @@ self.addEventListener('activate', (event) => {
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter((k) => k !== STATIC_CACHE && k !== DYNAMIC_CACHE && k !== API_CACHE)
+          .filter((k) => k !== STATIC_CACHE && k !== DYNAMIC_CACHE)
           .map((k) => caches.delete(k))
       );
       await self.clients.claim();
@@ -54,7 +58,23 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (url.pathname.startsWith('/api/')) {
-    event.respondWith(networkFirst(request, API_CACHE, 15000));
+    // NEVER cache, and never serve from cache, an authenticated API response.
+    //
+    // Every /api/ route in this app is scoped by the caller's session: the same
+    // URL returns a different body for a cashier at Branch A than for one at
+    // Branch B. The Cache API keys entries on URL + method + `Vary`, and nothing
+    // here varies on the session cookie, so `GET /api/products` is ONE cache
+    // entry shared by every branch and every user. Caching it therefore meant
+    // that whenever the network dropped, the `caches.match` fallback in
+    // networkFirst() below could hand Branch B the exact stock levels, prices
+    // and totals that Branch A had loaded — a silent cross-branch data leak in
+    // the one situation the owner least expects to be reading stale data.
+    //
+    // Letting these requests bypass the service worker entirely means the
+    // browser handles them normally: no cache to poison, and a real network
+    // error surfaces as a real network error. The app already degrades to an
+    // offline notice, and stale-but-wrong branch data is far worse than an
+    // honest "you are offline".
     return;
   }
 

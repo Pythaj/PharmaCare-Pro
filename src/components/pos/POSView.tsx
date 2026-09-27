@@ -42,6 +42,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { useCatalogueSync } from '@/lib/use-catalogue-sync';
 import {
   Dialog,
   DialogContent,
@@ -1110,9 +1111,6 @@ export default function POSView() {
     branchName?: string;
   } | null>(null);
 
-  // Auto-refresh interval ref
-  const refreshIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // ── Customer selection (restored Walk-In flow) ──
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [showWalkInDialog, setShowWalkInDialog] = useState(false);
@@ -1226,25 +1224,30 @@ export default function POSView() {
     } catch { /* silent */ }
   }, []);
 
+  // Stable, argument-free wrapper for useCatalogueSync. Search stays local and
+  // in-memory (see handleSearch), so a freshness refetch always wants the whole
+  // catalogue with an empty query.
+  const fetchProductsCallback = useCallback(() => {
+    void fetchProducts('');
+  }, [fetchProducts]);
+
   useEffect(() => {
     async function init() {
       await fetchProducts('');
       setLoading(false);
     }
     init();
-
-    // 30-second auto-refresh — refetches the full catalog, then the client-side
-    // search/filter re-applies instantly. No round-trip per keystroke.
-    refreshIntervalRef.current = setInterval(() => {
-      fetchProducts('');
-    }, 30000);
-
-    return () => {
-      if (refreshIntervalRef.current) {
-        clearInterval(refreshIntervalRef.current);
-      }
-    };
   }, [fetchProducts]);
+
+  // Freshness is handled by useCatalogueSync, which supersedes the old blind
+  // 30-second refetch:
+  //   * a same-browser edit (another tab) invalidates instantly via
+  //     BroadcastChannel, with no wait and no request;
+  //   * an edit made on ANOTHER device is caught by polling a small revision
+  //     token, and the full catalogue is refetched only when that token moved —
+  //     so a quiet till costs one tiny request per tick rather than a full
+  //     product list every 30 seconds.
+  useCatalogueSync(fetchProductsCallback, 10000);
 
   // "/" focuses the search box anywhere on the POS floor
   const searchInputRef = useRef<HTMLInputElement | null>(null);

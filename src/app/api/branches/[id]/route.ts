@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAdmin } from '@/lib/require-auth';
 import { logAudit, getClientIp } from '@/lib/audit';
 import { isValidBranchCode, normalizeBranchCode } from '@/lib/branches';
+import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding';
 
 /**
  * PUT /api/branches/[id] — rename, re-code, or (de)activate a branch.
@@ -126,7 +127,19 @@ export async function PUT(
       return NextResponse.json({ error: 'Nothing to update' }, { status: 400 });
     }
 
-    const updated = await db.branch.update({ where: { id }, data });
+    const updated = await db.$transaction(async (tx) => {
+      const result = await tx.branch.update({ where: { id }, data });
+
+      // Reopening a closed shop must give it a working catalogue, exactly like
+      // creating it does. Without this, a branch created inactive (or closed and
+      // later reopened) came back with an empty shelf, because its catalogue rows
+      // are only seeded for active branches.
+      if (result.active && !branch.active) {
+        await seedCatalogueForAllBranches(tx);
+      }
+
+      return result;
+    });
 
     await logAudit({
       userId: auth.user!.userId,

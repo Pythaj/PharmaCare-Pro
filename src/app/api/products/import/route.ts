@@ -1,7 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding'
+
+/**
+ * Case-insensitive product lookup that behaves the same on SQLite and
+ * PostgreSQL. Prisma's `mode: 'insensitive'` is PostgreSQL-only, so it cannot be
+ * used in a route that the desktop build also runs.
+ */
+async function findProductCaseInsensitive(
+  tx: Prisma.TransactionClient,
+  name: string
+) {
+  const candidates = await tx.product.findMany({
+    where: { name: { contains: name } },
+    select: { id: true, name: true },
+  })
+  const target = name.trim().toLowerCase()
+  return candidates.find((c) => c.name.trim().toLowerCase() === target) ?? null
+}
 
 interface ImportRow {
   name?: string
@@ -78,6 +97,9 @@ export async function POST(request: NextRequest) {
     const result = await db.$transaction(async (tx) => {
       const counts = { created: 0, updated: 0, skipped: 0 }
       const errors: { row: number; name: string; message: string }[] = []
+      // Every product the import touched, so they can be given catalogue rows at
+      // all branches once the loop finishes.
+      const touchedProductIds: string[] = []
 
       for (let i = 0; i < items.length; i++) {
         const row = items[i]
@@ -125,12 +147,22 @@ export async function POST(request: NextRequest) {
             defaultSellingPrice,
           }
 
-          const existing = await tx.product.findFirst({ where: { name } })
+          // Name is not unique in the schema, so match case-insensitively before
+          // deciding to create. A plain `findFirst({ name })` is case-sensitive on
+          // PostgreSQL, so uploading a spreadsheet whose header row says
+          // "Paracetamol" against an existing "paracetamol" would silently create
+          // a second drug. `contains` narrows the candidates on every provider and
+          // the JS comparison settles the match.
+          const existing = await findProductCaseInsensitive(tx, name)
 
           let productId: string
           if (existing) {
             if (onDuplicate === 'skip') {
               counts.skipped += 1
+              // Even a skipped row must still get catalogue rows at every branch:
+              // "skip" means "don't overwrite the product's details", not "leave
+              // the drug invisible at other branches".
+              touchedProductIds.push(existing.id)
               continue
             }
             const updated = await tx.product.update({
@@ -144,6 +176,7 @@ export async function POST(request: NextRequest) {
             productId = created.id
             counts.created += 1
           }
+          touchedProductIds.push(productId)
 
           // Optional starting batch for stock on hand.
           const batchNumber =
@@ -197,6 +230,19 @@ export async function POST(request: NextRequest) {
             message: err instanceof Error ? err.message : 'Unknown error',
           })
         }
+      }
+
+      // Imported quantities above landed ONLY in the branch running the import —
+      // that is deliberate, copying real stock to every shop would invent units
+      // nobody counted. The catalogue rows below are different: they are
+      // quantity-0 placeholders that make the drug *visible and sellable-ready*
+      // at every other branch without claiming any stock is there.
+      //
+      // Guarded on the list being non-empty: the helper reads an empty/absent
+      // list as "seed EVERY product", so calling it after a wholly-failed import
+      // would sweep the entire catalogue for no reason.
+      if (touchedProductIds.length > 0) {
+        await seedCatalogueForAllBranches(tx, touchedProductIds)
       }
 
       return { ...counts, errors }

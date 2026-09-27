@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAdmin } from '@/lib/require-auth';
 import { logAudit, getClientIp } from '@/lib/audit';
 import { isValidBranchCode, normalizeBranchCode } from '@/lib/branches';
+import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding';
 
 /**
  * GET /api/branches — the branch list.
@@ -90,14 +91,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const branch = await db.branch.create({
-      data: {
-        name,
-        code,
-        address: typeof body.address === 'string' && body.address.trim() ? body.address.trim() : null,
-        phone: typeof body.phone === 'string' && body.phone.trim() ? body.phone.trim() : null,
-        active: body.active === undefined ? true : body.active === true,
-      },
+    // Opening a branch must hand the owner a WORKING till, not an empty shelf.
+    // Every existing product gets a quantity-0 starter batch here so the new
+    // branch can sell the same catalogue immediately; real quantities are still
+    // entered per branch, never copied. Omitting this left every newly created
+    // branch with a completely empty catalogue.
+    const branch = await db.$transaction(async (tx) => {
+      const created = await tx.branch.create({
+        data: {
+          name,
+          code,
+          address: typeof body.address === 'string' && body.address.trim() ? body.address.trim() : null,
+          phone: typeof body.phone === 'string' && body.phone.trim() ? body.phone.trim() : null,
+          active: body.active === undefined ? true : body.active === true,
+        },
+      });
+
+      // Inactive branches hold no sellable stock, so seeding them would create
+      // rows the seeder would immediately treat as gaps again. Only seed an
+      // active branch.
+      if (created.active) {
+        await seedCatalogueForAllBranches(tx);
+      }
+
+      return created;
     });
 
     await logAudit({

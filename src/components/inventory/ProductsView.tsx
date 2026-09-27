@@ -43,6 +43,8 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { usePermissions } from '@/hooks/use-permissions';
+import { notifyCatalogueChanged } from '@/lib/catalogue-events';
+import { useCatalogueSync } from '@/lib/use-catalogue-sync';
 import type { Product, Batch, Category } from '@/types';
 
 function formatGHS(value: number): string {
@@ -76,6 +78,16 @@ interface ProductWithStock extends Product {
   hasExpiredBatches?: boolean;
   stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
   expiryStatus?: 'good' | 'expiring_soon' | 'expired';
+  /**
+   * Admin-only cross-branch roll-up of sellable quantity. Omitted entirely for a
+   * salesperson, so its absence is meaningful rather than an empty list.
+   */
+  branchAvailability?: {
+    branchId: string;
+    branchName: string;
+    branchCode: string;
+    quantity: number;
+  }[];
 }
 
 /** A batch row being edited inside the Edit Drug dialog. */
@@ -418,7 +430,11 @@ function InlinePriceEditor({
   const [open, setOpen] = useState(false);
   const [costPrice, setCostPrice] = useState(product.defaultCostPrice ?? 0);
   const [sellingPrice, setSellingPrice] = useState(product.defaultSellingPrice ?? 0);
-  const [applyToBatches, setApplyToBatches] = useState(false);
+  const [applyToBatches, setApplyToBatches] = useState(true);
+  // 'all' (default) pushes the new price to every branch, which is what makes an
+  // admin's price change actually reach the tills. 'branch' is the deliberate
+  // opt-out for a one-off local revaluation.
+  const [batchScope, setBatchScope] = useState<'all' | 'branch'>('all');
   const [saving, setSaving] = useState(false);
   const [markupInput, setMarkupInput] = useState('');
 
@@ -426,7 +442,8 @@ function InlinePriceEditor({
     if (open) {
       setCostPrice(product.defaultCostPrice ?? 0);
       setSellingPrice(product.defaultSellingPrice ?? 0);
-      setApplyToBatches(false);
+      setApplyToBatches(true);
+      setBatchScope('all');
       setMarkupInput('');
     }
   }, [open, product]);
@@ -437,13 +454,23 @@ function InlinePriceEditor({
       const res = await fetch(`/api/products/${product.id}/update-prices`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ defaultCostPrice: costPrice, defaultSellingPrice: sellingPrice, applyToBatches }),
+        body: JSON.stringify({
+          defaultCostPrice: costPrice,
+          defaultSellingPrice: sellingPrice,
+          applyToBatches,
+          batchScope: applyToBatches ? batchScope : 'all',
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to update');
       }
-      toast.success(`Price updated for "${product.name}"`);
+      notifyCatalogueChanged();
+      toast.success(
+        applyToBatches && batchScope === 'all'
+          ? `Price updated for "${product.name}" across all branches`
+          : `Price updated for "${product.name}"`
+      );
       setOpen(false);
       onUpdated();
     } catch (err) {
@@ -542,14 +569,59 @@ function InlinePriceEditor({
             </div>
           )}
 
-          {/* Apply to batches */}
+          {/* Which batches the new price reaches.
+              The till charges the BATCH price, not the product default, so a
+              change that stops here would show the new number on this screen
+              while every till kept charging the old one. Hence "all branches"
+              by default, with the single-branch case kept as an explicit opt-in
+              for a deliberate local revaluation. */}
           {(product._count?.batches ?? 0) > 0 && (
-            <label className="flex items-center gap-2 cursor-pointer group">
-              <Switch checked={applyToBatches} onCheckedChange={setApplyToBatches} className="scale-90" />
-              <span className="text-[11px] text-slate-500 group-hover:text-slate-700 transition-colors">
-                Also update <span className="font-semibold text-slate-700">{product._count?.batches}</span> batch{((product._count?.batches ?? 0) !== 1) ? 'es' : ''}
-              </span>
-            </label>
+            <div className="space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={applyToBatches}
+                  onCheckedChange={setApplyToBatches}
+                  className="scale-90"
+                  aria-label="Apply price to existing batches"
+                />
+                <span className="text-[11px] text-slate-500 group-hover:text-slate-700 transition-colors">
+                  Apply to existing batches
+                </span>
+              </div>
+              {applyToBatches && (
+                <div className="flex gap-1.5 pl-1">
+                  <button
+                    type="button"
+                    onClick={() => setBatchScope('all')}
+                    className={`flex-1 rounded-md border px-2 py-1.5 text-[10px] font-medium transition-colors ${
+                      batchScope === 'all'
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    All branches
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBatchScope('branch')}
+                    className={`flex-1 rounded-md border px-2 py-1.5 text-[10px] font-medium transition-colors ${
+                      batchScope === 'branch'
+                        ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                        : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                    }`}
+                  >
+                    This branch only
+                  </button>
+                </div>
+              )}
+              {applyToBatches && batchScope === 'all' && (
+                <p className="text-[10px] text-slate-400 leading-snug">
+                  Updates {product._count?.batches} batch
+                  {((product._count?.batches ?? 0) !== 1) ? 'es' : ''} at every branch so all
+                  tills charge the new price.
+                </p>
+              )}
+            </div>
           )}
 
           {/* Save */}
@@ -607,7 +679,8 @@ export default function ProductsView() {
   const [editPriceProduct, setEditPriceProduct] = useState<ProductWithStock | null>(null);
   const [editCostPrice, setEditCostPrice] = useState(0);
   const [editSellingPrice, setEditSellingPrice] = useState(0);
-  const [editApplyToBatches, setEditApplyToBatches] = useState(false);
+  const [editApplyToBatches, setEditApplyToBatches] = useState(true);
+  const [editBatchScope, setEditBatchScope] = useState<'all' | 'branch'>('all');
   const [updatingPrice, setUpdatingPrice] = useState(false);
 
   // Edit Drug dialog state — full product + batch/stock management
@@ -707,6 +780,12 @@ export default function ProductsView() {
     }
     init();
   }, []);
+
+  // Stay in step with catalogue changes made elsewhere: another tab in this
+  // browser (instant, via BroadcastChannel) or another branch's device (via the
+  // revision token). Without this the screen an admin is looking at can be
+  // showing a price or a drug list that the tills have already moved past.
+  useCatalogueSync(fetchProducts, 15000);
 
   const handleToggleInactive = (value: boolean) => {
     setShowIncludedInactive(value);
@@ -819,6 +898,7 @@ export default function ProductsView() {
         defaultCostPrice: 0,
         defaultSellingPrice: 0,
       });
+      notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add product');
@@ -863,6 +943,7 @@ export default function ProductsView() {
       toast.success(data.message || `Product "${productToDelete.name}" ${permanent ? 'permanently deleted' : 'deactivated'}`);
       setShowDeleteDialog(false);
       setProductToDelete(null);
+      notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
     } catch (err) {
       toast.error('Could not delete product', {
@@ -885,6 +966,7 @@ export default function ProductsView() {
         throw new Error(data.error || 'Failed to restore product');
       }
       toast.success(`"${product.name}" restored to inventory`);
+      notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
     } catch (err) {
       toast.error('Restore failed', {
@@ -898,7 +980,8 @@ export default function ProductsView() {
     setEditPriceProduct(product);
     setEditCostPrice(product.defaultCostPrice ?? 0);
     setEditSellingPrice(product.defaultSellingPrice ?? 0);
-    setEditApplyToBatches(false);
+    setEditApplyToBatches(true);
+    setEditBatchScope('all');
     setShowEditPriceDialog(true);
   };
 
@@ -913,12 +996,14 @@ export default function ProductsView() {
           defaultCostPrice: editCostPrice,
           defaultSellingPrice: editSellingPrice,
           applyToBatches: editApplyToBatches,
+          batchScope: editApplyToBatches ? editBatchScope : 'all',
         }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to update prices');
       }
+      notifyCatalogueChanged();
       const data = await res.json();
       toast.success(data.message || `Prices updated for "${editPriceProduct.name}"`);
       setShowEditPriceDialog(false);
@@ -1088,6 +1173,9 @@ export default function ProductsView() {
       }
       setShowEditDialog(false);
       setEditProduct(null);
+      // Batch quantities and prices are what the tills read, so a stock edit has
+      // to invalidate the other screens too.
+      notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update product');
@@ -1388,6 +1476,42 @@ export default function ProductsView() {
                         {isExpanded && (
                           <TableRow key={`${rowKey}-batches`}>
                             <TableCell colSpan={totalCols} className="bg-muted/30 px-8 py-3">
+                              {/* WHERE CAN THIS BE SOLD? (admin only)
+                                  The batch list below is scoped to the branch
+                                  being viewed, so on its own it answers "what is
+                                  on my shelf", never "where else can I sell
+                                  this". This strip is the cross-branch view the
+                                  owner needs before raising a transfer. */}
+                              {canManageProducts && product.branchAvailability && product.branchAvailability.length > 0 && (
+                                <div className="mb-3 rounded-lg border border-slate-200 bg-white p-3">
+                                  <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                                    Available by branch
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {product.branchAvailability.map((b) => (
+                                      <div
+                                        key={b.branchId}
+                                        title={`${b.branchName}: ${b.quantity} ${product.unit} in stock`}
+                                        className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] ${
+                                          b.quantity === 0
+                                            ? 'border-slate-200 bg-slate-50 text-slate-400'
+                                            : b.quantity <= product.reorderLevel
+                                              ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                        }`}
+                                      >
+                                        <span className="font-mono text-[9px] opacity-70">{b.branchCode}</span>
+                                        <span className="font-semibold tabular-nums">{b.quantity}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {product.branchAvailability.every((b) => b.quantity === 0) && (
+                                    <p className="mt-2 text-[11px] text-slate-400">
+                                      No branch currently holds sellable stock for this drug.
+                                    </p>
+                                  )}
+                                </div>
+                              )}
                               {loadingBatches ? (
                                 <div className="space-y-2">
                                   {Array.from({ length: 2 }).map((_, i) => (
@@ -1807,23 +1931,65 @@ export default function ProductsView() {
                 />
               </div>
 
-              {/* Apply to batches toggle */}
+              {/* Which batches the new price reaches. The till charges the BATCH
+                  price, so a change that never leaves this dialog shows a new
+                  number here while every till keeps charging the old one. */}
               {(editPriceProduct._count?.batches ?? 0) > 0 && (
-                <div className="flex items-start gap-3 rounded-xl border border-slate-200 p-3.5 bg-white">
-                  <Switch
-                    checked={editApplyToBatches}
-                    onCheckedChange={setEditApplyToBatches}
-                    className="mt-0.5"
-                    id="apply-to-batches"
-                  />
-                  <div className="space-y-0.5">
-                    <Label htmlFor="apply-to-batches" className="text-sm font-medium cursor-pointer">
-                      Apply to existing batches
-                    </Label>
-                    <p className="text-xs text-muted-foreground">
-                      Also update prices for all <span className="font-semibold text-slate-700">{editPriceProduct._count?.batches ?? 0}</span> existing batches of this product.
-                    </p>
+                <div className="space-y-3 rounded-xl border border-slate-200 p-3.5 bg-white">
+                  <div className="flex items-start gap-3">
+                    <Switch
+                      checked={editApplyToBatches}
+                      onCheckedChange={setEditApplyToBatches}
+                      className="mt-0.5"
+                      id="apply-to-batches"
+                    />
+                    <div className="space-y-0.5">
+                      <Label htmlFor="apply-to-batches" className="text-sm font-medium cursor-pointer">
+                        Apply to existing batches
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        Also update prices for all{' '}
+                        <span className="font-semibold text-slate-700">
+                          {editPriceProduct._count?.batches ?? 0}
+                        </span>{' '}
+                        existing batches of this product.
+                      </p>
+                    </div>
                   </div>
+
+                  {editApplyToBatches && (
+                    <div className="space-y-2 pl-1">
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setEditBatchScope('all')}
+                          className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                            editBatchScope === 'all'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                          }`}
+                        >
+                          All branches
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditBatchScope('branch')}
+                          className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                            editBatchScope === 'branch'
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                              : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300'
+                          }`}
+                        >
+                          This branch only
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {editBatchScope === 'all'
+                          ? 'Every till at every branch will charge the new price.'
+                          : 'Only this branch is revalued. Other branches keep their current prices.'}
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
