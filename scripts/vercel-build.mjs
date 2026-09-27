@@ -30,9 +30,19 @@ const isCloud = process.env.VERCEL === '1' || process.env.DATABASE_PROVIDER === 
 if (isCloud) {
   console.log('[build] Cloud target detected — generating PostgreSQL Prisma client');
   run('prisma generate --schema prisma/schema.postgres.prisma');
-  // Self-migrate the cloud database so schema changes (e.g. new columns with
-  // defaults) are applied before this deployment goes live. Idempotent for
-  // additive changes and safe to run on every deploy.
+
+  // MUST run before `prisma db push`. `db push` cannot add a NOT NULL column
+  // to a table that already has rows: PostgreSQL rejects it with "column
+  // contains null values" and the deploy fails. The multi-branch schema makes
+  // `branchId` required on batches/sales/purchases/daily records, so any
+  // pre-branch production data has to be given a branch first.
+  //
+  // Deliberately fatal on error. If this cannot run, pushing the schema
+  // anyway would fail too, and aborting here leaves the live database exactly
+  // as it was rather than half-migrated.
+  console.log('[build] Backfilling pre-branch data with a default branch');
+  run('prisma db execute --schema prisma/schema.postgres.prisma --file scripts/backfill-branch.sql');
+
   console.log('[build] Applying schema to cloud database (prisma db push)');
   run('prisma db push --schema prisma/schema.postgres.prisma --skip-generate');
 } else {

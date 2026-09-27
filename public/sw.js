@@ -1,7 +1,15 @@
-const CACHE_NAME = 'pharmacare-v5';
-const STATIC_CACHE = 'pharmacare-static-v5';
-const DYNAMIC_CACHE = 'pharmacare-dynamic-v5';
-const API_CACHE = 'pharmacare-api-v5';
+// BUMP THIS ON EVERY RELEASE.
+//
+// The activate handler below deliberately preserves whichever caches carry the
+// current version number, and deletes everything else. If a release ships new
+// code without bumping these, the old caches are treated as current and are
+// never evicted: the installed PWA keeps serving the previous build's
+// manifest, assets and cached API responses, so the app silently looks and
+// behaves like the old version even though the server has the new code.
+const CACHE_NAME = 'pharmacare-v6';
+const STATIC_CACHE = 'pharmacare-static-v6';
+const DYNAMIC_CACHE = 'pharmacare-dynamic-v6';
+const API_CACHE = 'pharmacare-api-v6';
 
 const STATIC_ASSETS = [
   '/manifest.json',
