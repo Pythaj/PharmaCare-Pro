@@ -2,6 +2,7 @@
 
 import { useAppStore } from '@/stores/app-store';
 import { getPageName } from './Sidebar';
+import { BranchSwitcher } from './BranchSwitcher';
 import { cn } from '@/lib/utils';
 import {
   Search,
@@ -82,11 +83,14 @@ function ProfileDialog() {
 
   // Load stats
   useEffect(() => {
-    if (!showProfileDialog || !currentUser) return;
+    // Capture the id: the narrowing from `currentUser` is not preserved inside
+    // the async callback, where the store value could already have changed.
+    const userId = currentUser?.id;
+    if (!showProfileDialog || !userId) return;
     setLoading(true);
     async function loadStats() {
       try {
-        const res = await fetch('/api/sales?userId=' + currentUser.id);
+        const res = await fetch('/api/sales?userId=' + userId);
         if (res.ok) {
           const data = await res.json();
           const sales = data.sales ?? [];
@@ -107,7 +111,7 @@ function ProfileDialog() {
       finally { setLoading(false); }
     }
     loadStats();
-  }, [showProfileDialog, currentUser]);
+  }, [showProfileDialog, currentUser?.id]);
 
   const handleLogout = useCallback(() => {
     setShowProfileDialog(false);
@@ -504,6 +508,9 @@ export function Header() {
           )}
           <span className="sr-only">Notifications</span>
         </Button>
+
+        {/* Branch context: which shop's numbers are on screen */}
+        <BranchSwitcher />
 
         {/* User dropdown */}
         <DropdownMenu>

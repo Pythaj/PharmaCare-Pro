@@ -835,7 +835,7 @@ export default function DailySalesRegister() {
                   record={record}
                   isExpanded={expandedRecordId === record.id}
                   expandedSales={expandedRecordSales}
-                  isLoading={loadingRecordDetail}
+                  loadingDetail={loadingRecordDetail}
                   isAdmin={isAdmin}
                   onExpand={() => handleExpandRecord(record.id)}
                   onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
@@ -1272,6 +1272,10 @@ export default function DailySalesRegister() {
               onClick={() => {
                 const content = document.getElementById('closing-report');
                 if (!content) return;
+                // The print template reads the state value directly, so it can
+                // be null (or the report unmounted) even though the button only
+                // renders inside the `closedRecord &&` block.
+                if (!closedRecord) return;
                 const win = window.open('', '_blank', 'width=500,height=700');
                 if (win) {
                   win.document.write(`

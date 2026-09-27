@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
+import { branchWhere } from '@/lib/branches'
+import { toNumber } from '@/lib/utils'
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -12,9 +14,18 @@ function toDateString(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+/**
+ * GET /api/reports
+ *
+ * Financial reporting — admin only, and branch-scoped like every other money
+ * route. An admin parked on Branch A gets Branch A's revenue, its top products
+ * and its cashier leaderboard; the consolidated "All branches" view is the only
+ * way to see the whole business. Without the boundary this page contradicted
+ * itself: the header would read one shop while the totals summed the chain.
+ */
 export async function GET(request: NextRequest) {
   // Financial reporting — admin only
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -59,21 +70,31 @@ export async function GET(request: NextRequest) {
 
     const sales = await db.sale.findMany({
       where: {
+        ...branchWhere(auth.scope!),
         createdAt: { gte: startDate, lte: endDate },
         status: 'completed',
       },
       include: {
         items: { include: { product: { select: { name: true } } } },
         user: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true, code: true } },
       },
       orderBy: { createdAt: 'asc' },
     })
 
     // --- Aggregate Stats ---
-    const totalRevenue = sales.reduce((sum, s) => sum + s.totalAmount, 0)
-    const totalProfit = sales.reduce((sum, s) => sum + s.profit, 0)
-    const totalSales = sales.length
-    const totalItemsSold = sales.reduce(
+    // Money columns are Decimal. Flatten once so every aggregate below is
+    // plain number arithmetic and serialises as JSON numbers.
+    const rows = sales.map((sale) => ({
+      ...sale,
+      totalAmount: toNumber(sale.totalAmount),
+      profit: toNumber(sale.profit),
+    }))
+
+    const totalRevenue = rows.reduce((sum, s) => sum + s.totalAmount, 0)
+    const totalProfit = rows.reduce((sum, s) => sum + s.profit, 0)
+    const totalSales = rows.length
+    const totalItemsSold = rows.reduce(
       (sum, s) => sum + s.items.reduce((i, item) => i + item.quantity, 0),
       0
     )
@@ -81,7 +102,7 @@ export async function GET(request: NextRequest) {
 
     // --- Revenue Chart Data (by day) ---
     const revenueByDay: Record<string, number> = {}
-    for (const sale of sales) {
+    for (const sale of rows) {
       const day = sale.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
       revenueByDay[day] = (revenueByDay[day] ?? 0) + sale.totalAmount
     }
@@ -89,7 +110,7 @@ export async function GET(request: NextRequest) {
 
     // --- Payment Method Distribution ---
     const paymentByMethod: Record<string, number> = {}
-    for (const sale of sales) {
+    for (const sale of rows) {
       const key = sale.paymentMethod || 'cash'
       paymentByMethod[key] = (paymentByMethod[key] ?? 0) + sale.totalAmount
     }
@@ -100,12 +121,12 @@ export async function GET(request: NextRequest) {
 
     // --- Top Products ---
     const productSales: Record<string, { quantity: number; revenue: number }> = {}
-    for (const sale of sales) {
+    for (const sale of rows) {
       for (const item of sale.items) {
         const pName = item.product?.name ?? 'Unknown'
         if (!productSales[pName]) productSales[pName] = { quantity: 0, revenue: 0 }
         productSales[pName].quantity += item.quantity
-        productSales[pName].revenue += item.total
+        productSales[pName].revenue += toNumber(item.total)
       }
     }
     const topProducts = Object.entries(productSales)
@@ -122,7 +143,7 @@ export async function GET(request: NextRequest) {
       { date: string; sales: number; revenue: number; profit: number; items: number }
     > = {}
 
-    for (const sale of sales) {
+    for (const sale of rows) {
       const dateKey = toDateString(sale.createdAt)
       if (!dailyMap[dateKey]) {
         dailyMap[dateKey] = { date: dateKey, sales: 0, revenue: 0, profit: 0, items: 0 }
@@ -140,9 +161,12 @@ export async function GET(request: NextRequest) {
       { userId: string; name: string; sales: number; revenue: number; profit: number }
     > = {}
 
-    for (const sale of sales) {
-      const uid = sale.userId
-      const uname = sale.user?.name ?? 'Unknown'
+    for (const sale of rows) {
+      // A deleted cashier leaves userId null. Indexing the map with null
+      // collapsed every such sale into one "null" bucket, so one phantom
+      // cashier absorbed the revenue of all of them.
+      const uid = sale.userId ?? 'deleted-user'
+      const uname = sale.user?.name ?? 'Deleted user'
       if (!cashierMap[uid]) {
         cashierMap[uid] = { userId: uid, name: uname, sales: 0, revenue: 0, profit: 0 }
       }
@@ -184,7 +208,7 @@ export async function GET(request: NextRequest) {
         }
       > = {}
 
-      for (const sale of sales) {
+      for (const sale of rows) {
         const mIdx = sale.createdAt.getMonth()
         const yr = sale.createdAt.getFullYear()
         const key = `${yr}-${mIdx}`
@@ -212,6 +236,12 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
+      // Lets the report page label its own totals instead of implying a scope
+      // it may not be in. The name is not repeated here — the client already
+      // holds it from the session bootstrap, and a second source for the same
+      // label is a second thing to get out of step.
+      branchId: auth.scope!.branchId,
+      scope: auth.scope!.branchId ? 'branch' : 'all',
       stats: {
         totalRevenue: Number(totalRevenue),
         totalProfit: Number(totalProfit),

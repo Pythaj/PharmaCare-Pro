@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, verifyPassword, hashPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { validateNewPassword } from '@/lib/password-policy';
 
 /**
  * POST /api/auth/change-password — change the signed-in user's password. Also
@@ -13,7 +14,8 @@ import { logAudit, getClientIp } from '@/lib/audit';
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireAuth(request);
+    // allowPasswordChange: a flagged account must be able to clear the flag.
+    const auth = await requireAuth(request, { allowPasswordChange: true });
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status });
     }
@@ -28,11 +30,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof newPassword !== 'string' || newPassword.length < 8) {
-      return NextResponse.json(
-        { error: 'New password must be at least 8 characters' },
-        { status: 400 }
-      );
+    const passwordError = validateNewPassword(newPassword, 'New password');
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
     const user = await db.user.findUnique({ where: { id: auth.user!.userId } });
@@ -44,6 +44,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Current password is incorrect' },
         { status: 401 }
+      );
+    }
+
+    if (currentPassword === newPassword) {
+      return NextResponse.json(
+        { error: 'New password must be different from your current password' },
+        { status: 400 }
       );
     }
 
@@ -75,7 +82,8 @@ export async function POST(request: NextRequest) {
       role: updated.role,
     });
 
-    const response = NextResponse.json({ message: 'Password updated', user: updated, token }, { status: 200 });
+    // The token is delivered by the HttpOnly cookie only, never in the body.
+    const response = NextResponse.json({ message: 'Password updated', user: updated }, { status: 200 });
     const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
     response.cookies.set('auth_token', token, {
       httpOnly: true,

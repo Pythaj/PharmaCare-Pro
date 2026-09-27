@@ -12,6 +12,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
+    "test:branch-scope": "node scripts/branch-scope-test.cjs",
     "db:seed": "ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",
     "db:import-drugs": "node scripts/import-drugs.cjs",
     "db:setup": "prisma migrate dev --name init && ts-node --compiler-options '{\"module\":\"CommonJS\"}' prisma/seed.ts",

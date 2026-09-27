@@ -22,8 +22,10 @@ import { usePermissions } from '@/hooks/use-permissions';
 import type { Customer } from '@/types';
 
 interface CustomerWithPurchases extends Customer {
+  /** Total money this customer has spent — money, not a count. */
   totalPurchases?: number;
-  sales?: { invoiceNo: string; totalAmount: number; createdAt: string }[];
+  _count?: { sales: number };
+  sales?: { invoiceNo: string; totalAmount: number; createdAt: number | string }[];
 }
 
 export default function CustomersView() {
@@ -38,6 +40,10 @@ export default function CustomersView() {
   const [addForm, setAddForm] = useState({ name: '', email: '', phone: '', address: '' });
   const [submitting, setSubmitting] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards against a slow earlier search resolving after a newer one and
+  // overwriting the list with stale results.
+  const listRequestId = useRef(0);
+  const expandedRowRef = useRef<string | null>(null);
 
   // Edit state
   const [editingCustomer, setEditingCustomer] = useState<CustomerWithPurchases | null>(null);
@@ -49,18 +55,40 @@ export default function CustomersView() {
   const [deleting, setDeleting] = useState(false);
 
   const fetchCustomers = async (query: string) => {
+    const current = ++listRequestId.current;
     try {
       const res = await fetch(`/api/customers?search=${encodeURIComponent(query)}`);
+      if (current !== listRequestId.current) return;
       if (res.ok) {
         const data = await res.json();
+        if (current !== listRequestId.current) return;
         setCustomers(data.customers ?? []);
       }
     } catch { /* silent */ }
   };
 
   useEffect(() => {
-    fetchCustomers('');
-    setLoading(false);
+    let cancelled = false;
+    async function initialLoad() {
+      const current = ++listRequestId.current;
+      try {
+        const res = await fetch('/api/customers?search=');
+        if (cancelled || current !== listRequestId.current) return;
+        if (res.ok) {
+          const data = await res.json();
+          if (cancelled || current !== listRequestId.current) return;
+          setCustomers(data.customers ?? []);
+        }
+      } catch { /* silent */ }
+      if (!cancelled) setLoading(false);
+    }
+    initialLoad();
+    return () => {
+      cancelled = true;
+      // Never leave a pending debounce behind: it would fire a request (and a
+      // setState) after the screen is gone.
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, []);
 
   const handleSearch = (value: string) => {
@@ -70,17 +98,22 @@ export default function CustomersView() {
   };
 
   const handleExpandRow = async (customerId: string) => {
-    if (expandedRow === customerId) { setExpandedRow(null); return; }
+    if (expandedRow === customerId) { setExpandedRow(null); expandedRowRef.current = null; return; }
     setExpandedRow(customerId);
+    expandedRowRef.current = customerId;
     setLoadingHistory(true);
     try {
       const res = await fetch(`/api/customers/${customerId}`);
       if (res.ok) {
         const data = await res.json();
+        // The user may have collapsed this row or opened another while the
+        // request was in flight; a ref is needed because `expandedRow` in this
+        // closure is still the pre-click value.
+        if (expandedRowRef.current !== customerId) return;
         setPurchaseHistory(data.sales ?? []);
       }
     } catch { /* silent */ }
-    setLoadingHistory(false);
+    if (expandedRowRef.current === customerId) setLoadingHistory(false);
   };
 
   const handleAddCustomer = async () => {
@@ -190,7 +223,8 @@ export default function CustomersView() {
                   <TableHead className="hidden md:table-cell">Email</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead className="hidden lg:table-cell">Address</TableHead>
-                  <TableHead className="text-right">Total Purchases</TableHead>
+                  <TableHead className="text-right">Sales</TableHead>
+                  <TableHead className="text-right">Total Spent</TableHead>
                   {isAdmin && <TableHead className="w-24">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
@@ -203,6 +237,7 @@ export default function CustomersView() {
                       <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell className="hidden lg:table-cell"><Skeleton className="h-4 w-36" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-10 ml-auto" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
                       {isAdmin && <TableCell><Skeleton className="h-4 w-16" /></TableCell>}
                     </TableRow>
@@ -350,7 +385,7 @@ function CustomerRow({
   customer: CustomerWithPurchases;
   isExpanded: boolean;
   expandedRow: string | null;
-  purchaseHistory: { invoiceNo: string; totalAmount: number; createdAt: string }[];
+  purchaseHistory: { invoiceNo: string; totalAmount: number; createdAt: number | string }[];
   loadingHistory: boolean;
   formatGHS: (v: number) => string;
   onExpand: (id: string) => void;
@@ -368,6 +403,7 @@ function CustomerRow({
         <TableCell className="hidden md:table-cell">{customer.email ?? '-'}</TableCell>
         <TableCell>{customer.phone ?? '-'}</TableCell>
         <TableCell className="hidden lg:table-cell max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
+        <TableCell className="text-right text-muted-foreground">{(customer._count?.sales ?? 0).toLocaleString()}</TableCell>
         <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
         {showActions && (
         <TableCell>

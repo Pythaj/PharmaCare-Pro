@@ -1313,9 +1313,11 @@ export default function ProductsView() {
                             {product.earliestExpiry ? (
                               <div className="flex items-center gap-1">
                                 <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                  product.daysToExpiry !== null && product.daysToExpiry < 0 ? 'bg-red-500' :
-                                  product.daysToExpiry !== null && product.daysToExpiry < 30 ? 'bg-red-500' :
-                                  product.daysToExpiry !== null && product.daysToExpiry < 90 ? 'bg-amber-500' :
+                                  // null/undefined when the product has no
+                                  // batches — `!== null` alone let `undefined`
+                                  // reach the comparison.
+                                  product.daysToExpiry != null && product.daysToExpiry < 30 ? 'bg-red-500' :
+                                  product.daysToExpiry != null && product.daysToExpiry < 90 ? 'bg-amber-500' :
                                   'bg-emerald-500'
                                 }`} />
                                 <span className="text-[11px]">{new Date(product.earliestExpiry).toLocaleDateString('en-GH')}</span>

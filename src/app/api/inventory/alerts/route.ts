@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
-import { requireAuth } from '@/lib/require-auth';
+import { requireBranchScope } from '@/lib/require-auth';
+import { classifyBatchExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts';
 
+/**
+ * GET /api/inventory/alerts
+ *
+ * Classification comes from lib/inventory-alerts, the same helpers the product
+ * list, dashboard stats and dashboard recent panels use — so a product can never
+ * be "low stock" here and "in stock" there, and "expiring soon" always means
+ * the same 90-day window that excludes already-expired stock.
+ */
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request);
+  const auth = await requireBranchScope(request);
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
@@ -11,12 +20,20 @@ export async function GET(request: NextRequest) {
   try {
     const now = new Date();
 
-    // Fetch all active products with their batches
+    // The catalogue is shared across branches, but AVAILABILITY is not. Every
+    // figure below — total stock, reorder shortfall, expiry warnings, inventory
+    // value — is derived from this branch's batches only. Summing the whole
+    // business's stock would make a shop with nothing on the shelf look
+    // well-stocked because a different shop is full, which is precisely the
+    // mistake that lets a customer be promised medicine that is not there.
+    const branchId = auth.scope!.branchId;
+
     const products = await db.product.findMany({
       where: { active: true },
       include: {
         category: { select: { id: true, name: true } },
         batches: {
+          where: branchId ? { branchId } : {},
           select: {
             id: true,
             batchNumber: true,
@@ -60,6 +77,7 @@ export async function GET(request: NextRequest) {
       batchId: string;
       batchNumber: string;
       quantity: number;
+      /** ISO-8601 — the wire format is always a string, never a Date object. */
       expiryDate: string;
       daysToExpiry: number;
     }[] = [];
@@ -82,48 +100,46 @@ export async function GET(request: NextRequest) {
 
     for (const product of products) {
       const totalStock = product.batches.reduce((sum, b) => sum + b.quantity, 0);
-      const inventoryValue = product.batches.reduce((sum, b) => sum + b.quantity * b.costPrice, 0);
+      const inventoryValue = product.batches.reduce(
+        (sum, b) => sum + b.quantity * Number(b.costPrice),
+        0
+      );
 
       totalInventoryValue += inventoryValue;
       totalItems++;
       if (totalStock > 0) itemsInStock++;
 
-      // Classify each batch
+      // Classify each batch that still holds stock
       for (const batch of product.batches) {
-        const expiry = new Date(batch.expiryDate);
-        const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-
         if (batch.quantity <= 0) continue;
 
-        if (diffDays < 0) {
-          expired.push({
-            productId: product.id,
-            productName: product.name,
-            genericName: product.genericName,
-            categoryName: product.category?.name ?? null,
-            batchId: batch.id,
-            batchNumber: batch.batchNumber,
-            quantity: batch.quantity,
-            expiryDate: batch.expiryDate,
-            daysExpired: Math.abs(diffDays),
-          });
-        } else if (diffDays < 90) {
-          expiringSoon.push({
-            productId: product.id,
-            productName: product.name,
-            genericName: product.genericName,
-            categoryName: product.category?.name ?? null,
-            batchId: batch.id,
-            batchNumber: batch.batchNumber,
-            quantity: batch.quantity,
-            expiryDate: batch.expiryDate,
-            daysToExpiry: diffDays,
-          });
+        const status = classifyBatchExpiry(batch.expiryDate, now);
+        if (status === 'good') continue;
+
+        const days = daysUntil(batch.expiryDate, now);
+        const shared = {
+          productId: product.id,
+          productName: product.name,
+          genericName: product.genericName,
+          categoryName: product.category?.name ?? null,
+          batchId: batch.id,
+          batchNumber: batch.batchNumber,
+          quantity: batch.quantity,
+          expiryDate: batch.expiryDate.toISOString(),
+        };
+
+        if (status === 'expired') {
+          expired.push({ ...shared, daysExpired: Math.abs(days) });
+        } else {
+          expiringSoon.push({ ...shared, daysToExpiry: days });
         }
       }
 
-      // Out of stock
-      if (totalStock === 0) {
+      // Stock alerts come from the shared classifier, so a reorder level of 0
+      // ("never reorder") can never flag a stocked product as low.
+      const stockStatus = classifyStock(totalStock, product.reorderLevel);
+
+      if (stockStatus === 'out_of_stock') {
         outOfStock.push({
           productId: product.id,
           productName: product.name,
@@ -133,7 +149,7 @@ export async function GET(request: NextRequest) {
           reorderLevel: product.reorderLevel,
           totalStock: 0,
         });
-      } else if (totalStock > 0 && totalStock <= product.reorderLevel) {
+      } else if (stockStatus === 'low_stock') {
         lowStock.push({
           productId: product.id,
           productName: product.name,
@@ -154,6 +170,7 @@ export async function GET(request: NextRequest) {
         totalInventoryValue,
         outOfStockCount: outOfStock.length,
         lowStockCount: lowStock.length,
+        // Batches, not products: one product can hold several expiring batches.
         expiringSoonCount: expiringSoon.length,
         expiredCount: expired.length,
         criticalAlerts: outOfStock.length + expired.length,

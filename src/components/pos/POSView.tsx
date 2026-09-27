@@ -1036,7 +1036,7 @@ const CartLine = memo(function CartLine({
 // Main POSView Component
 // ─────────────────────────────────────────────────────────────
 export default function POSView() {
-  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, selectedCustomerId, setSelectedCustomer, posPresetDate, setPosPresetDate } = useAppStore();
+  const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, activeBranch, selectedCustomerId, setSelectedCustomer, posPresetDate, setPosPresetDate } = useAppStore();
   const isAdminUser = currentUser?.role === 'admin';
   // Configurable VAT rate + receipt branding come from system settings
   const { settings } = usePharmacySettings();
@@ -1060,6 +1060,8 @@ export default function POSView() {
     paymentMethod: string;
     createdAt: string;
     changeDue?: number;
+    /** Shop the sale was rung up at, for the printed receipt. */
+    branchName?: string;
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const submittingRef = useRef(false);
@@ -1104,6 +1106,8 @@ export default function POSView() {
     paymentMethod: string;
     createdAt: string;
     changeDue?: number;
+    /** Shop the sale was rung up at, for the printed receipt. */
+    branchName?: string;
   } | null>(null);
 
   // Auto-refresh interval ref
@@ -1520,6 +1524,7 @@ export default function POSView() {
         paymentMethod: data.paymentMethod,
         createdAt: data.createdAt,
         changeDue: paymentMethod === 'cash' ? Math.max(0, cashReceived - Number(data.totalAmount)) : 0,
+        branchName: data.branch?.name,
       };
 
       // Refresh products to show updated stock (search re-applies client-side)
@@ -1567,6 +1572,12 @@ export default function POSView() {
     setSelectedCustomer(null);
     setSaleDate(toDateKey(new Date()));
   };
+
+  // Printed receipt label. Prefers the branch recorded on the sale itself, and
+  // falls back to the session's active branch for a receipt rendered before the
+  // response lands. Never blank for a sales user, because an unattributed
+  // receipt is the thing you cannot reconcile later.
+  const receiptBranchLabel = completedSale?.branchName ?? activeBranch?.name ?? undefined;
 
   // Reported-change display on the desktop/mobile payment sections. The
   // tendered amount is optional — it only feeds the change-due readout.
@@ -2195,6 +2206,15 @@ export default function POSView() {
                       <span className="text-slate-400 text-[9px] uppercase tracking-wider">Cashier</span>
                       <p className="font-medium text-slate-700 text-[11px]">{currentUser?.name ?? '-'}</p>
                     </div>
+                    {/* The invoice number already carries the branch code; printing
+                        the branch name too is what makes a returned or disputed
+                        receipt traceable back to a specific shop. */}
+                    {receiptBranchLabel && (
+                      <div>
+                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Branch</span>
+                        <p className="font-medium text-slate-700 text-[11px]">{receiptBranchLabel}</p>
+                      </div>
+                    )}
                     {completedSale.customerName && (
                       <div>
                         <span className="text-slate-400 text-[9px] uppercase tracking-wider">Customer</span>

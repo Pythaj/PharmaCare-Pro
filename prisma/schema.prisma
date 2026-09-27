@@ -7,6 +7,39 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+/// A physical pharmacy location.
+///
+/// The governing rule of multi-branch: the CATALOGUE is shared, the STOCK and
+/// MONEY are not. Product, Category, Supplier and Customer stay global (one
+/// price list, one supplier list, one customer book). `branchId` therefore
+/// appears only on the tables that represent physical stock or financial
+/// events — Batch, Sale, Purchase, DailySalesRecord — and never on the
+/// catalogue. Putting it on Product would fork the catalogue per branch and
+/// make "does this drug exist anywhere?" unanswerable.
+model Branch {
+  id        String   @id @default(cuid())
+  name      String
+  /// Short unique code (e.g. "MAIN", "ACCRA") used to build invoice numbers
+  /// that stay unique per branch, not just per day.
+  code      String   @unique
+  address   String?
+  phone     String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users        User[]
+  batches      Batch[]
+  sales        Sale[]
+  purchases    Purchase[]
+  dailyRecords DailySalesRecord[]
+  auditLogs    AuditLog[]
+  transfersOut StockTransfer[] @relation("TransferOut")
+  transfersIn  StockTransfer[] @relation("TransferIn")
+
+  @@map("branches")
+}
+
 model User {
   id        String   @id @default(cuid())
   name      String
@@ -14,17 +47,26 @@ model User {
   password  String
   role      String   @default("sales") // "admin" or "sales"
   phone     String?
+  /// Home branch. NULL means "every branch" and is reserved for admins/owners:
+  /// it is what lets the owner see the whole business while a salesperson is
+  /// pinned to the counter they actually work at.
+  branchId  String?
   active    Boolean  @default(true)
   mustChangePassword Boolean @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  branch     Branch?   @relation(fields: [branchId], references: [id])
   sales     Sale[]
   purchases Purchase[]
+  returns   Return[]
   auditLogs AuditLog[]
-  openedDailyRecords  DailySalesRecord[] @relation("DailyRecordOpener")
-  closedDailyRecords  DailySalesRecord[] @relation("DailyRecordCloser")
+    openedDailyRecords  DailySalesRecord[] @relation("DailyRecordOpener")
+    closedDailyRecords  DailySalesRecord[] @relation("DailyRecordCloser")
+    transfersCreated    StockTransfer[]   @relation("TransferCreatedBy")
+    transfersApproved   StockTransfer[]   @relation("TransferApprovedBy")
 
+  @@index([branchId])
   @@map("users")
 }
 
@@ -71,8 +113,9 @@ model Product {
   updatedAt   DateTime   @updatedAt
 
   category    Category?  @relation(fields: [categoryId], references: [id])
-  batches     Batch[]
-  saleItems   SaleItem[]
+    batches     Batch[]
+    saleItems   SaleItem[]
+    transferLines StockTransferLine[]
 
   @@index([active])
   @@index([categoryId])
@@ -82,6 +125,15 @@ model Product {
 model Batch {
   id            String   @id @default(cuid())
   productId     String
+  /// Stock is owned by exactly one branch: this is the field that stops Branch A
+  /// selling units that are physically sitting on Branch B's shelf.
+  ///
+  /// NOT NULL is load-bearing, not stylistic. It participates in the compound
+  /// unique below, and in both SQLite and PostgreSQL NULLs are DISTINCT inside a
+  /// unique index — so a nullable branchId would let two rows share the same
+  /// product + batchNumber and quietly defeat the constraint that stops a
+  /// duplicate batch being created.
+  branchId      String
   batchNumber   String
   quantity      Int      @default(0)
   costPrice     Decimal    @default(0)
@@ -92,10 +144,16 @@ model Batch {
   updatedAt     DateTime @updatedAt
 
   product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch        Branch   @relation(fields: [branchId], references: [id])
   purchase      Purchase? @relation(fields: [purchaseId], references: [id])
   saleItems     SaleItem[]
+  transferLinesOut StockTransferLine[] @relation("TransferSource")
+  transferLinesIn  StockTransferLine[] @relation("TransferDest")
 
-  @@unique([productId, batchNumber])
+  // Was [productId, batchNumber]. The same supplier delivery legitimately exists
+  // in two branches, so the branch is now part of the batch's identity.
+  @@unique([productId, batchNumber, branchId])
+  @@index([branchId])
   @@map("batches")
 }
 
@@ -104,6 +162,8 @@ model Purchase {
   invoiceNo   String
   supplierId  String?
   userId      String?
+  /// Which branch physically received this delivery.
+  branchId    String
   totalAmount Float    @default(0)
   notes       String?
   createdAt   DateTime @default(now())
@@ -111,8 +171,10 @@ model Purchase {
 
   supplier    Supplier? @relation(fields: [supplierId], references: [id])
   user        User?      @relation(fields: [userId], references: [id])
+  branch      Branch     @relation(fields: [branchId], references: [id])
   batches     Batch[]
 
+  @@index([branchId])
   @@map("purchases")
 }
 
@@ -141,6 +203,11 @@ model Sale {
   discount      Decimal    @default(0)
   totalAmount   Decimal    @default(0)
   profit        Decimal    @default(0)
+  /// The shop this sale physically happened at. Every branch figure in the
+  /// owner dashboard and every report groups by this, and it is what stops a
+  /// cashier at one branch seeing another's takings. NOT NULL because a sale
+  /// that belongs to no branch cannot be reported on or reconciled.
+  branchId      String
   paymentMethod String   @default("cash") // "cash", "card", "mobile_money"
   status        String   @default("completed") // "completed", "returned", "partial_return"
   notes         String?
@@ -149,12 +216,14 @@ model Sale {
 
   customer      Customer? @relation(fields: [customerId], references: [id])
   user          User?      @relation(fields: [userId], references: [id])
+  branch        Branch     @relation(fields: [branchId], references: [id])
   items         SaleItem[]
   returns       Return[]
 
   @@index([createdAt])
   @@index([customerId])
   @@index([userId])
+  @@index([branchId, createdAt])
   @@map("sales")
 }
 
@@ -184,7 +253,10 @@ model SaleItem {
 model Return {
   id            String   @id @default(cuid())
   saleId        String
-  userId        String
+  // Optional so a deleted cashier account leaves the refund record intact
+  // (mirrors Sale.userId / Purchase.userId). Kept as a real relation so the
+  // operator who processed the refund can always be resolved.
+  userId        String?
   reason        String
   totalRefund   Float
   status        String   @default("approved") // "pending", "approved", "rejected"
@@ -192,18 +264,24 @@ model Return {
   updatedAt     DateTime @updatedAt
 
   sale      Sale         @relation(fields: [saleId], references: [id])
+  user      User?        @relation(fields: [userId], references: [id])
   items     ReturnItem[]
 
+  @@index([userId])
   @@map("returns")
 }
 
 // Per-line return tracking: makes cumulative over-return validation possible
-// (a SaleItem can never have more returned quantity than was purchased)
+// (a SaleItem can never have more returned quantity than was purchased).
+// refundAmount is the customer's actual money back for this line — the line's
+// share of the sale after discount and tax — so the parts always add up to
+// Return.totalRefund and to what was actually collected.
 model ReturnItem {
-  id         String @id @default(cuid())
-  returnId   String
-  saleItemId String
-  quantity   Int
+  id            String @id @default(cuid())
+  returnId      String
+  saleItemId    String
+  quantity      Int
+  refundAmount  Float  @default(0)
 
   return   Return   @relation(fields: [returnId], references: [id], onDelete: Cascade)
   saleItem SaleItem @relation(fields: [saleItemId], references: [id])
@@ -214,6 +292,9 @@ model ReturnItem {
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String?
+  /// Where the action happened. Recorded so a dispute ("who discounted that at
+  /// the new branch?") can be settled from the log alone.
+  branchId  String?
   action    String
   entity    String
   entityId  String?
@@ -222,15 +303,24 @@ model AuditLog {
   createdAt DateTime @default(now())
 
   user      User?    @relation(fields: [userId], references: [id])
+  branch    Branch?  @relation(fields: [branchId], references: [id])
 
   @@index([createdAt])
   @@index([userId])
+  @@index([branchId])
   @@map("audit_logs")
 }
 
 model DailySalesRecord {
   id                String    @id @default(cuid())
-  date              String    @unique // YYYY-MM-DD format
+  /// Was `@unique` on its own, which allowed exactly ONE till record per day for
+  /// the entire business — Branch B could not open its till on a day Branch A
+  /// had already opened. The uniqueness is now per branch per day.
+  date              String    // YYYY-MM-DD format
+  /// NOT NULL: this field is half of the (date, branchId) unique key, and NULLs
+  /// are distinct inside a unique index in both SQLite and PostgreSQL — a
+  /// nullable branch would let two registers exist for the same day.
+  branchId          String
   status            String    @default("open") // "open" | "closed"
   openedBy          String?
   closedBy          String?
@@ -250,7 +340,10 @@ model DailySalesRecord {
 
   opener            User?     @relation("DailyRecordOpener", fields: [openedBy], references: [id])
   closer            User?     @relation("DailyRecordCloser", fields: [closedBy], references: [id])
+  branch            Branch    @relation(fields: [branchId], references: [id])
 
+  @@unique([date, branchId])
+  @@index([branchId])
   @@map("daily_sales_records")
 }
 
@@ -262,4 +355,75 @@ model SystemSetting {
   updatedAt DateTime @updatedAt
 
   @@map("system_settings")
+}
+
+/// A movement of stock between two branches.
+///
+/// This model exists because the governing rule of multi-branch is that a Batch
+/// belongs to exactly ONE branch. When units physically move from Branch A to
+/// Branch B there is no honest way to represent that by editing `Batch.branchId`:
+/// it would retro-actively re-attribute every sale that already referenced the
+/// batch, and it cannot express a PARTIAL movement at all. So a transfer debits
+/// the source batch and credits a destination batch, and this row is the
+/// document that ties the two sides together.
+///
+/// Stock moves ONLY on `completed`. `pending` and `approved` are paperwork, and
+/// a transfer that was never completed must leave both shelves exactly as it
+/// found them.
+model StockTransfer {
+  id           String   @id @default(cuid())
+  /// Human reference, e.g. "TRF-MAIN-0007". Unique like invoiceNo so a transfer
+  /// can be quoted on a paper docket and found again unambiguously.
+  reference    String   @unique
+  fromBranchId String
+  toBranchId   String
+  status       String   @default("pending") // "pending", "approved", "completed", "rejected", "cancelled"
+  notes        String?
+  createdById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  fromBranch Branch  @relation("TransferOut", fields: [fromBranchId], references: [id])
+  toBranch   Branch  @relation("TransferIn", fields: [toBranchId], references: [id])
+  createdBy  User?   @relation("TransferCreatedBy", fields: [createdById], references: [id])
+  approvedBy User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  lines      StockTransferLine[]
+
+  @@index([fromBranchId, createdAt])
+  @@index([toBranchId, createdAt])
+  @@index([status])
+  @@map("stock_transfers")
+}
+
+/// One product's worth of movement within a transfer.
+///
+/// A line points at the batch it left AND (once completed) the batch it landed
+/// in, so the movement stays traceable in both directions. The destination batch
+/// is created on completion rather than at request time, because until the goods
+/// physically arrive the receiving shelf must not appear to hold them.
+model StockTransferLine {
+  id            String  @id @default(cuid())
+  transferId    String
+  productId     String
+  /// The batch the units were debited from. Kept after completion so the
+  /// movement can always be traced back to the delivery it came from.
+  sourceBatchId String
+  /// The batch the units were credited into. NULL until the transfer completes.
+  destBatchId   String?
+  quantity      Int
+  /// Cost per unit snapshotted when the transfer was raised, so a later price
+  /// edit at the source branch cannot rewrite what this movement was worth.
+  unitCost      Float   @default(0)
+
+  transfer    StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+  product     Product       @relation(fields: [productId], references: [id])
+  sourceBatch Batch         @relation("TransferSource", fields: [sourceBatchId], references: [id])
+  destBatch   Batch?        @relation("TransferDest", fields: [destBatchId], references: [id])
+
+  @@index([transferId])
+  @@index([sourceBatchId])
+  @@map("stock_transfer_lines")
 }

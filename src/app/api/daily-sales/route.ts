@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
+import { toNumber } from '@/lib/utils'
 
 // GET /api/daily-sales — list all daily records (paginated, with summary)
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -17,11 +18,15 @@ export async function GET(request: NextRequest) {
 
     const where: Record<string, unknown> = {}
     if (status) where.status = status
+    // Branch scoping comes from the session, never the query string, so a
+    // cashier cannot widen it by editing a URL.
+    if (auth.scope!.branchId) where.branchId = auth.scope!.branchId
 
     const [records, total] = await Promise.all([
       db.dailySalesRecord.findMany({
         where,
         include: {
+          branch: { select: { id: true, name: true, code: true } },
           opener: { select: { id: true, name: true } },
           closer: { select: { id: true, name: true } },
         },
@@ -53,7 +58,7 @@ export async function GET(request: NextRequest) {
 // POST /api/daily-sales — open a new daily record for a given date
 export async function POST(request: NextRequest) {
   // Authenticated staff only; the opener identity comes from the JWT cookie
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -66,15 +71,29 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Date is required' }, { status: 400 })
     }
 
+    // A till belongs to exactly one branch, so opening one requires a specific
+    // branch. "All branches" is a read-only view — you cannot open a register
+    // that has no single owner.
+    const branchId = auth.scope!.branchId
+    if (!branchId) {
+      return NextResponse.json(
+        { error: 'Select a branch before opening the daily register' },
+        { status: 400 }
+      )
+    }
+
     const validUserId = auth.user!.userId
 
-    // Check if record already exists for this date
-    const existing = await db.dailySalesRecord.findUnique({ where: { date } })
+    // One register per branch per day. `date` alone is no longer unique.
+    const existing = await db.dailySalesRecord.findFirst({
+      where: { date, branchId },
+    })
     if (existing) {
       // Return existing record
-      const record = await db.dailySalesRecord.findUnique({
-        where: { date },
+      const record = await db.dailySalesRecord.findFirst({
+        where: { date, branchId },
         include: {
+          branch: { select: { id: true, name: true, code: true } },
           opener: { select: { id: true, name: true } },
           closer: { select: { id: true, name: true } },
         },
@@ -91,24 +110,35 @@ export async function POST(request: NextRequest) {
     const sales = await db.sale.findMany({
       where: {
         createdAt: { gte: dayStart, lt: dayEnd },
+        branchId,
       },
       include: {
         items: { include: { product: { select: { name: true, unit: true } } } },
       },
     })
 
-    const totalRevenue = sales.reduce((sum, s) => sum + s.totalAmount, 0)
-    const totalProfit = sales.reduce((sum, s) => sum + s.profit, 0)
-    const totalDiscount = sales.reduce((sum, s) => sum + s.discount, 0)
-    const totalTransactions = sales.length
+    // Money columns are Decimal — flatten to numbers so the register totals
+    // are plain arithmetic instead of a mix of Decimal objects.
+    const totals = sales.map((s) => ({
+      totalAmount: toNumber(s.totalAmount),
+      profit: toNumber(s.profit),
+      discount: toNumber(s.discount),
+      paymentMethod: s.paymentMethod,
+    }))
+
+    const totalRevenue = totals.reduce((sum, s) => sum + s.totalAmount, 0)
+    const totalProfit = totals.reduce((sum, s) => sum + s.profit, 0)
+    const totalDiscount = totals.reduce((sum, s) => sum + s.discount, 0)
+    const totalTransactions = totals.length
     const totalItemsSold = sales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
-    const cashTotal = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
-    const cardTotal = sales.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
-    const mobileMoneyTotal = sales.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
+    const cashTotal = totals.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
+    const cardTotal = totals.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
+    const mobileMoneyTotal = totals.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
 
     const record = await db.dailySalesRecord.create({
       data: {
         date,
+        branchId,
         status: 'open',
         openedBy: validUserId,
         totalRevenue,

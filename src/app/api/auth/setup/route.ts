@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, hashPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { validateNewPassword } from '@/lib/password-policy';
+import { normalizeEmail } from '@/lib/email';
 
 /**
  * POST /api/auth/setup — first-time credential setup for accounts created with
@@ -15,7 +17,8 @@ import { logAudit, getClientIp } from '@/lib/audit';
  */
 export async function POST(request: NextRequest) {
   try {
-    const auth = await requireAuth(request);
+    // allowPasswordChange: this is the one route a flagged account must reach.
+    const auth = await requireAuth(request, { allowPasswordChange: true });
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status });
     }
@@ -23,11 +26,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { password, email } = body;
 
-    if (!password || typeof password !== 'string' || password.length < 8) {
-      return NextResponse.json(
-        { error: 'New password must be at least 8 characters' },
-        { status: 400 }
-      );
+    const passwordError = validateNewPassword(password, 'New password');
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
     const user = await db.user.findUnique({ where: { id: auth.user!.userId } });
@@ -43,12 +44,12 @@ export async function POST(request: NextRequest) {
     }
 
     const data: { email?: string; password: string; mustChangePassword: boolean } = {
-      password: await hashPassword(password),
+      password: await hashPassword(password as string),
       mustChangePassword: false,
     };
 
-    if (email && typeof email === 'string' && email.trim().toLowerCase() !== user.email) {
-      const normalizedEmail = email.trim().toLowerCase();
+    if (email && typeof email === 'string' && normalizeEmail(email) !== user.email) {
+      const normalizedEmail = normalizeEmail(email);
       const existing = await db.user.findUnique({ where: { email: normalizedEmail } });
       if (existing && existing.id !== user.id) {
         return NextResponse.json(
@@ -85,7 +86,8 @@ export async function POST(request: NextRequest) {
       role: updated.role,
     });
 
-    const response = NextResponse.json({ user: updated, token }, { status: 200 });
+    // The token stays in the HttpOnly cookie only — never in the response body.
+    const response = NextResponse.json({ user: updated }, { status: 200 });
     const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
     response.cookies.set('auth_token', token, {
       httpOnly: true,

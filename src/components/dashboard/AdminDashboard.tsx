@@ -11,6 +11,7 @@ import {
   Pill,
   AlertTriangle,
   Clock,
+  CalendarX,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -23,7 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart.tsx';
+import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { BarChart, Bar, AreaChart, Area, LineChart, Line, XAxis, YAxis, CartesianGrid } from 'recharts';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -53,11 +54,12 @@ interface RecentPurchase {
 }
 
 interface StockAlert {
+  key: string;
   productId: string;
   productName: string;
-  currentQty: number;
-  reorderLevel: number;
-  type: 'low' | 'expiring';
+  quantity: number;
+  reorderLevel?: number;
+  type: 'low' | 'out' | 'expiring' | 'expired';
   expiryDate?: string;
 }
 
@@ -130,35 +132,23 @@ export default function AdminDashboard() {
               totalAmount: p.totalAmount,
               createdAt: p.createdAt,
             })),
-            stockAlerts: (data.stockAlerts ?? []).map((a: any) => {
-              let currentQty = 0;
-              let reorderLevel = 0;
-              let expiryDate: string | undefined;
-
-              if (a.type === 'low_stock') {
-                const qtyMatch = a.message.match(/has only (\d+) units/);
-                const reorderMatch = a.message.match(/reorder level: (\d+)/);
-                currentQty = qtyMatch ? parseInt(qtyMatch[1]) : 0;
-                reorderLevel = reorderMatch ? parseInt(reorderMatch[1]) : 0;
-              } else if (a.type === 'expiring') {
-                const qtyMatch = a.message.match(/\((\d+) units\)/);
-                const daysMatch = a.message.match(/expires in (\d+) days/);
-                currentQty = qtyMatch ? parseInt(qtyMatch[1]) : 0;
-                if (daysMatch) {
-                  const days = parseInt(daysMatch[1]);
-                  expiryDate = new Date(Date.now() + days * 86400000).toISOString();
-                }
-              }
-
-              return {
-                productId: a.productId,
-                productName: a.productName,
-                currentQty,
-                reorderLevel,
-                type: (a.type === 'low_stock' ? 'low' : 'expiring') as 'low' | 'expiring',
-                expiryDate,
-              };
-            }),
+            // Alerts arrive structured from the API (key, type, quantity,
+            // expiryDate, reorderLevel). They used to be reassembled here by
+            // regex-scraping the message text, which silently produced 0s
+            // whenever a product name contained a number.
+            stockAlerts: (data.stockAlerts ?? []).map((a: any) => ({
+              key: a.key ?? `${a.productId}:${a.type}`,
+              productId: a.productId,
+              productName: a.productName,
+              quantity: Number(a.quantity ?? 0),
+              reorderLevel: a.reorderLevel === undefined ? undefined : Number(a.reorderLevel),
+              type:
+                a.type === 'low_stock' ? 'low'
+                : a.type === 'out_of_stock' ? 'out'
+                : a.type === 'expired' ? 'expired'
+                : 'expiring',
+              expiryDate: a.expiryDate,
+            })),
             auditLogs: [],
           });
         }
@@ -169,9 +159,11 @@ export default function AdminDashboard() {
             prev
               ? { ...prev, auditLogs: logs.map((log: any) => ({
                   id: log.id,
+                  // user is null for an account that was later deleted — the
+                  // audit row is deliberately kept.
                   userName: log.user?.name,
                   action: log.action,
-                  entity: '',
+                  entity: log.entity ?? '',
                   details: log.details,
                   createdAt: log.createdAt,
                 })) }
@@ -200,7 +192,8 @@ export default function AdminDashboard() {
     { label: 'Inventory Value', value: stats?.totalInventoryValue ?? 0, icon: Package, bg: 'bg-green-500' },
     { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', isCount: true, navTo: 'products' as const },
     { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', isCount: true, navTo: 'inventory' as const },
-    { label: 'Expiry Alerts', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-red-500', isCount: true, navTo: 'inventory' as const },
+    { label: 'Expiring Soon', value: stats?.expiringCount ?? 0, icon: Clock, bg: 'bg-orange-500', isCount: true, navTo: 'inventory' as const },
+    { label: 'Expired Batches', value: stats?.expiredCount ?? 0, icon: CalendarX, bg: 'bg-red-500', isCount: true, navTo: 'inventory' as const },
   ];
 
   const dailySalesConfig = { sales: { label: 'Sales', color: '#10b981' } };
@@ -212,7 +205,7 @@ export default function AdminDashboard() {
     return (
       <div className="space-y-6 p-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 9 }).map((_, i) => (
+          {Array.from({ length: 10 }).map((_, i) => (
             <Card key={i}>
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
@@ -481,25 +474,31 @@ export default function AdminDashboard() {
               {recentData?.stockAlerts && recentData.stockAlerts.length > 0 ? (
                 recentData.stockAlerts.map((alert) => (
                   <div
-                    key={alert.productId}
+                    key={alert.key}
                     className="flex items-center justify-between p-3 rounded-lg border cursor-pointer hover:bg-muted/50"
                     onClick={() => { navigate('inventory'); toast.success(`Viewing inventory for ${alert.productName}`); }}
                   >
                     <div>
                       <p className="font-medium text-sm">{alert.productName}</p>
                       <p className="text-xs text-muted-foreground">
-                        {alert.type === 'low'
-                          ? `Qty: ${alert.currentQty} / Reorder at: ${alert.reorderLevel}`
-                          : alert.expiryDate
-                            ? `Qty: ${alert.currentQty} / Exp: ${new Date(alert.expiryDate).toLocaleDateString('en-GH')}`
-                            : `Qty: ${alert.currentQty}`
+                        {alert.type === 'expiring' || alert.type === 'expired'
+                          ? `Qty: ${alert.quantity} / Exp: ${alert.expiryDate ? new Date(alert.expiryDate).toLocaleDateString('en-GH') : '-'}`
+                          : alert.type === 'out'
+                            ? 'Out of stock'
+                            : `Qty: ${alert.quantity} / Reorder at: ${alert.reorderLevel ?? 0}`
                         }
                       </p>
                     </div>
-                    <Badge variant={alert.type === 'low' ? 'default' : 'destructive'} className={
-                      alert.type === 'low' ? 'bg-amber-500 hover:bg-amber-600' : ''
-                    }>
-                      {alert.type === 'low' ? 'Low Stock' : 'Expiring'}
+                    <Badge
+                      variant={alert.type === 'low' ? 'default' : 'destructive'}
+                      className={
+                        alert.type === 'low' ? 'bg-amber-500 hover:bg-amber-600' : ''
+                      }
+                    >
+                      {alert.type === 'low' ? 'Low Stock'
+                        : alert.type === 'out' ? 'Out of Stock'
+                        : alert.type === 'expired' ? 'Expired'
+                        : 'Expiring'}
                     </Badge>
                   </div>
                 ))

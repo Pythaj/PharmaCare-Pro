@@ -1,10 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
+import { branchWhere } from '@/lib/branches'
+import { EXPIRY_WARNING_DAYS } from '@/lib/inventory-alerts'
 
-// All roles may read dashboard stats (sales staff see personal metrics)
+/**
+ * GET /api/dashboard/stats
+ *
+ * Every figure here belongs to ONE branch at a time — the one selected in the
+ * session — and only the consolidated "All branches" view spans the business.
+ *
+ * Two boundaries, both required:
+ *  - BRANCH. Revenue, profit and transaction counts are sums over Sale, which is
+ *    branch-owned. An admin sitting on Branch A must not see Branch B's takings
+ *    under a header that says "Branch A".
+ *  - USER. A salesperson is further narrowed to their own till records, which is
+ *    what makes the numbers on the sales dashboard personal.
+ *
+ * Stock figures are branch-scoped too, not pharmacy-wide. That comment used to
+ * claim otherwise ("a cashier needs to see what is on the shelf"), but stock on
+ * another branch's shelf cannot be sold from this till, so counting it would
+ * both overstate availability and understate this branch's own reorder needs.
+ */
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -14,103 +33,120 @@ export async function GET(request: NextRequest) {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
     const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-    const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000)
+    const expiryHorizon = new Date(now.getTime() + EXPIRY_WARNING_DAYS * 24 * 60 * 60 * 1000)
 
-    // Run all queries in parallel
+    // Branch boundary applies to everything below; the personal-till boundary
+    // is layered on top for non-admins.
+    const isAdmin = auth.user!.role === 'admin'
+    const branchScope = branchWhere(auth.scope!)
+    const ownerScope = isAdmin ? branchScope : { ...branchScope, userId: auth.user!.userId }
+    // Batch queries have no `user`, so they take the branch boundary alone.
+    const stockScope = branchScope
+    const since = (from: Date) => ({ createdAt: { gte: from } })
+
     const [
       todaySalesResult,
       weeklySalesResult,
       monthlySalesResult,
       totalRevenueResult,
       totalProfitResult,
-      allBatches,
-      products,
-      batchesWithProduct,
-      expiringBatches,
       todayTransactionsResult,
       todaySaleItemsResult,
+      stockBatches,
+      productRows,
+      stockByProduct,
+      expiringSoonBatches,
+      expiredBatches,
       todayBatchesResult,
     ] = await Promise.all([
-      // Today's sales
       db.sale.aggregate({
-        where: { createdAt: { gte: today } },
+        where: { ...ownerScope, ...since(today) },
         _sum: { totalAmount: true },
       }),
-      // Weekly sales
       db.sale.aggregate({
-        where: { createdAt: { gte: sevenDaysAgo } },
+        where: { ...ownerScope, ...since(sevenDaysAgo) },
         _sum: { totalAmount: true },
       }),
-      // Monthly sales
       db.sale.aggregate({
-        where: { createdAt: { gte: thirtyDaysAgo } },
+        where: { ...ownerScope, ...since(thirtyDaysAgo) },
         _sum: { totalAmount: true },
       }),
-      // Total revenue
       db.sale.aggregate({
+        where: ownerScope,
         _sum: { totalAmount: true },
       }),
-      // Total profit
       db.sale.aggregate({
+        where: ownerScope,
         _sum: { profit: true },
       }),
-      // All batches for inventory value
-      db.batch.findMany({ select: { quantity: true, costPrice: true } }),
-      // All active products
-      db.product.findMany({ where: { active: true } }),
-      // Batches with product info for stock calculations
-      db.batch.findMany({
-        include: { product: true },
-      }),
-      // Expiring batches (within 90 days)
-      db.batch.count({
-        where: {
-          expiryDate: { lte: ninetyDaysFromNow },
-          quantity: { gt: 0 },
-        },
-      }),
-      // Today's transaction count
       db.sale.count({
-        where: { createdAt: { gte: today } },
+        where: { ...ownerScope, ...since(today) },
       }),
-      // Products sold today
       db.saleItem.aggregate({
-        where: {
-          sale: { createdAt: { gte: today } },
-        },
+        where: { sale: { ...ownerScope, ...since(today) } },
         _sum: { quantity: true },
       }),
-      // Stock received today
+      // Only batches that still hold stock can contribute value.
+      db.batch.findMany({
+        where: { ...stockScope, quantity: { gt: 0 } },
+        select: { quantity: true, costPrice: true },
+      }),
+      // Two columns only — this used to pull every Product field for every product.
+      db.product.findMany({
+        where: { active: true },
+        select: { id: true, reorderLevel: true },
+      }),
+      // Aggregate in SQL instead of loading every batch row into memory and
+      // folding it per product in JS.
+      db.batch.groupBy({
+        by: ['productId'],
+        where: { ...stockScope, quantity: { gt: 0 } },
+        _sum: { quantity: true },
+      }),
+      // Expiring soon: inside the 90-day window and NOT already expired.
       db.batch.count({
-        where: { createdAt: { gte: today } },
+        where: {
+          ...stockScope,
+          quantity: { gt: 0 },
+          expiryDate: { gt: now, lte: expiryHorizon },
+        },
+      }),
+      // Expired: its own count, instead of being lumped in with "expiring".
+      db.batch.count({
+        where: {
+          ...stockScope,
+          quantity: { gt: 0 },
+          expiryDate: { lte: now },
+        },
+      }),
+      db.batch.count({
+        where: { ...stockScope, ...since(today) },
       }),
     ])
 
-    // Calculate total inventory value
-    const totalInventoryValue = allBatches.reduce(
-      (sum, b) => sum + b.quantity * b.costPrice,
+    const totalInventoryValue = stockBatches.reduce(
+      (sum, b) => sum + b.quantity * Number(b.costPrice),
       0
     )
 
-    // Calculate stock per product
-    const productStock = new Map<string, number>()
-    for (const batch of batchesWithProduct) {
-      const current = productStock.get(batch.productId) || 0
-      productStock.set(batch.productId, current + batch.quantity)
+    const stockByProductId = new Map(
+      stockByProduct.map((row) => [row.productId, row._sum.quantity ?? 0])
+    )
+
+    let productsInStock = 0
+    let lowStockCount = 0
+    for (const product of productRows) {
+      const stock = stockByProductId.get(product.id) ?? 0
+      if (stock > 0) productsInStock += 1
+      // In stock but at or below the reorder level (zero-stock is counted by
+      // its own out-of-stock figure, not as "low").
+      if (stock > 0 && product.reorderLevel > 0 && stock <= product.reorderLevel) {
+        lowStockCount += 1
+      }
     }
 
-    // Products in stock (total qty > 0)
-    const productsInStock = products.filter(
-      (p) => (productStock.get(p.id) || 0) > 0
-    ).length
-
-    // Low stock count: in stock but at or below reorder level (excludes zero-stock)
-    const lowStockCount = products.filter((p) => {
-      const stock = productStock.get(p.id) || 0;
-      return stock > 0 && stock <= p.reorderLevel;
-    }).length
-
     return NextResponse.json({
+      scope: isAdmin ? 'all' : 'own',
       todaySales: Number(todaySalesResult._sum.totalAmount || 0),
       weeklySales: Number(weeklySalesResult._sum.totalAmount || 0),
       monthlySales: Number(monthlySalesResult._sum.totalAmount || 0),
@@ -119,7 +155,8 @@ export async function GET(request: NextRequest) {
       totalInventoryValue: Number(totalInventoryValue),
       productsInStock,
       lowStockCount,
-      expiringCount: expiringBatches,
+      expiringCount: expiringSoonBatches,
+      expiredCount: expiredBatches,
       todayTransactions: todayTransactionsResult,
       productsSoldToday: todaySaleItemsResult._sum.quantity || 0,
       stockReceivedToday: todayBatchesResult,

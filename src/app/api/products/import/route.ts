@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 
 interface ImportRow {
@@ -41,12 +41,23 @@ function toDateString(value: string | null | undefined): string {
 }
 
 export async function POST(request: NextRequest) {
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
   try {
+    // Imported batches become real stock, so they must land in a specific
+    // branch. There is no sensible "import into all branches" — that would
+    // create the same batch in every shop and multiply the stock.
+    const branchId = auth.scope!.branchId
+    if (!branchId) {
+      return NextResponse.json(
+        { error: 'Select the branch that is receiving this stock before importing' },
+        { status: 400 }
+      )
+    }
+
     const body = await request.json().catch(() => ({}))
     const items: ImportRow[] = Array.isArray(body.items) ? body.items : []
     const onDuplicate = body.onDuplicate === 'update' ? 'update' : 'skip'
@@ -156,10 +167,15 @@ export async function POST(request: NextRequest) {
             }
 
             await tx.batch.upsert({
-              where: { productId_batchNumber: { productId, batchNumber } },
+              // Batch identity is now (product, batchNumber, branch): the same
+              // supplier delivery legitimately exists in more than one branch,
+              // so keying on product+number alone would overwrite one shop's
+              // stock with another's on import.
+              where: { productId_batchNumber_branchId: { productId, batchNumber, branchId } },
               create: {
                 productId,
                 batchNumber,
+                branchId,
                 quantity,
                 costPrice,
                 sellingPrice,

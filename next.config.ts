@@ -6,9 +6,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   output: process.env.NEXT_DESKTOP_BUILD === "1" ? "standalone" : undefined,
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // Type errors now fail the build again. `ignoreBuildErrors: true` was hiding
+  // a 73-error baseline and would have let any new type error ship silently.
+  // Fix errors with `npx tsc --noEmit` rather than re-enabling this flag.
   reactStrictMode: false,
   images: {
     unoptimized: true,

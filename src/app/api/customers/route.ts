@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAuth } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import {
+  parseCustomerName,
+  parseOptionalCustomerEmail,
+  parseOptionalCustomerPhone,
+  parseOptionalCustomerAddress,
+} from '@/lib/customer-input'
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuth(request)
@@ -69,19 +75,32 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { name, email, phone, address } = body
 
-    if (!name || typeof name !== 'string' || !name.trim()) {
-      return NextResponse.json(
-        { error: 'Customer name is required' },
-        { status: 400 }
-      )
+    const parsedName = parseCustomerName(name)
+    if (!parsedName.ok) {
+      return NextResponse.json({ error: parsedName.error }, { status: 400 })
+    }
+
+    const parsedEmail = parseOptionalCustomerEmail(email)
+    if (!parsedEmail.ok) {
+      return NextResponse.json({ error: parsedEmail.error }, { status: 400 })
+    }
+
+    const parsedPhone = parseOptionalCustomerPhone(phone)
+    if (!parsedPhone.ok) {
+      return NextResponse.json({ error: parsedPhone.error }, { status: 400 })
+    }
+
+    const parsedAddress = parseOptionalCustomerAddress(address)
+    if (!parsedAddress.ok) {
+      return NextResponse.json({ error: parsedAddress.error }, { status: 400 })
     }
 
     const customer = await db.customer.create({
       data: {
-        name: name.trim(),
-        email: email || null,
-        phone: phone || null,
-        address: address || null,
+        name: parsedName.value,
+        email: parsedEmail.value,
+        phone: parsedPhone.value,
+        address: parsedAddress.value,
       },
     })
 

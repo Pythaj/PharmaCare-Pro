@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAdmin, requireAuth } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import {
+  parseCustomerName,
+  parseOptionalCustomerEmail,
+  parseOptionalCustomerPhone,
+  parseOptionalCustomerAddress,
+} from '@/lib/customer-input'
 
 export async function GET(
   request: NextRequest,
@@ -73,14 +79,50 @@ export async function PATCH(
       return NextResponse.json({ error: 'Customer not found' }, { status: 404 })
     }
 
+    // Same validators as POST /api/customers. This handler used to copy the
+    // request body straight into Prisma, so a non-string field produced a raw
+    // 500 and a blank name was accepted.
+    const updateData: Record<string, unknown> = {}
+
+    if (name !== undefined) {
+      const parsed = parseCustomerName(name)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      updateData.name = parsed.value
+    }
+
+    if (email !== undefined) {
+      const parsed = parseOptionalCustomerEmail(email)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      updateData.email = parsed.value
+    }
+
+    if (phone !== undefined) {
+      const parsed = parseOptionalCustomerPhone(phone)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      updateData.phone = parsed.value
+    }
+
+    if (address !== undefined) {
+      const parsed = parseOptionalCustomerAddress(address)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      updateData.address = parsed.value
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json({ error: 'Nothing to update' }, { status: 400 })
+    }
+
     const updated = await db.customer.update({
       where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(email !== undefined && { email }),
-        ...(phone !== undefined && { phone }),
-        ...(address !== undefined && { address }),
-      },
+      data: updateData,
     })
 
     await logAudit({

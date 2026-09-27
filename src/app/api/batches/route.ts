@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth, requireAdmin } from '@/lib/require-auth'
+import { requireAuth, requireAdmin, requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { branchWhere } from '@/lib/branches'
 
 /** Generates a unique, human-friendly batch number for a product. */
 async function generateBatchNumber(db: any, productId: string): Promise<string> {
@@ -18,7 +19,7 @@ async function generateBatchNumber(db: any, productId: string): Promise<string> 
 }
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -31,7 +32,10 @@ export async function GET(request: NextRequest) {
     const now = new Date()
     const ninetyDaysFromNow = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000)
 
-    let where: Record<string, unknown> = {}
+    // Branch-scoped, always. Stock physically sitting on another branch's shelf
+    // is not this branch's inventory: showing it lets a cashier promise a
+    // customer something the shop does not hold, and hides the real shortfall.
+    const where: Record<string, unknown> = branchWhere(auth.scope!)
 
     if (productId) {
       where.productId = productId
@@ -50,6 +54,9 @@ export async function GET(request: NextRequest) {
         },
         purchase: {
           select: { id: true, invoiceNo: true, createdAt: true },
+        },
+        branch: {
+          select: { id: true, name: true, code: true },
         },
       },
       orderBy: { createdAt: 'desc' },
@@ -79,9 +86,19 @@ export async function GET(request: NextRequest) {
  * defaults to +24 months from today.
  */
 export async function POST(request: NextRequest) {
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
+  }
+
+  // Stock is physically held at one branch, so receiving stock requires a
+  // branch. Refuse rather than silently filing it under a default.
+  const branchId = auth.scope!.branchId
+  if (!branchId) {
+    return NextResponse.json(
+      { error: 'Select the branch receiving this stock before adding a batch' },
+      { status: 400 }
+    )
   }
 
   try {
@@ -123,11 +140,17 @@ export async function POST(request: NextRequest) {
         : (await generateBatchNumber(db, productId))
 
     const existing = await db.batch.findFirst({
-      where: { productId, batchNumber: rawBatchNumber },
+      // Scoped to the branch: the same delivery legitimately exists in two
+      // branches, so "already exists" must mean "already exists HERE".
+      where: { productId, batchNumber: rawBatchNumber, branchId },
     })
     if (existing) {
       return NextResponse.json(
-        { error: `Batch "${rawBatchNumber}" already exists for this product` },
+        {
+          error: `Batch "${rawBatchNumber}" already exists for this product at ${
+            auth.branch?.name ?? 'this branch'
+          }`,
+        },
         { status: 409 }
       )
     }
@@ -135,6 +158,7 @@ export async function POST(request: NextRequest) {
     const batch = await db.batch.create({
       data: {
         productId,
+        branchId,
         batchNumber: rawBatchNumber,
         quantity,
         costPrice,
@@ -158,3 +182,4 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Failed to create batch' }, { status: 500 })
   }
 }
+

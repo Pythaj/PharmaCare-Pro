@@ -60,6 +60,7 @@ const EMPTY_STATE: RemoteState = {
   ngrokReady: false,
   downloading: false,
   starting: false,
+  ngrokBlocked: false,
   running: false,
   url: null,
   ngrokPath: null,

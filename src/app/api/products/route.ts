@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth, requireAdmin } from '@/lib/require-auth'
+import { requireAdmin, requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { classifyProductExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
+import {
+  parseProductName,
+  parseOptionalGenericName,
+  parseOptionalCategoryId,
+  parseOptionalDescription,
+  parseProductUnit,
+  parseReorderLevel,
+  parseMoney,
+} from '@/lib/product-input'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -26,13 +36,28 @@ export async function GET(request: NextRequest) {
 
     const where = conditions.length > 0 ? { AND: conditions } : {}
 
+    // The product ROW is shared catalogue data - every branch sells the same
+    // medicines at the same catalogue price. Its STOCK is not: the batches
+    // below are filtered to the caller's branch, so totalStock, the price the
+    // POS charges, the earliest expiry and the "in stock" badge all describe
+    // what this branch can actually sell. Without this filter a cashier at
+    // Branch A sees Branch B's units, sells against a batch sitting in the
+    // other building, and drives that branch's quantity negative.
+    const branchId = auth.scope!.branchId
+    const batchScope = branchId ? { branchId } : {}
+
     const products = await db.product.findMany({
       where,
       include: {
         category: { select: { id: true, name: true } },
-        _count: { select: { batches: true, saleItems: true } },
+        _count: {
+          select: {
+            batches: { where: batchScope },
+            saleItems: true,
+          },
+        },
         batches: {
-          where: { quantity: { gt: 0 } },
+          where: { ...batchScope, quantity: { gt: 0 } },
           select: { id: true, batchNumber: true, quantity: true, costPrice: true, sellingPrice: true, expiryDate: true },
           orderBy: { expiryDate: 'asc' },
         },
@@ -48,8 +73,8 @@ export async function GET(request: NextRequest) {
     const productsWithStock = products.map((p) => {
       const totalStock = p.batches.reduce((sum, b) => sum + b.quantity, 0);
       const minSellingPrice = p.batches.length > 0
-        ? Math.min(...p.batches.map(b => b.sellingPrice))
-        : (p.defaultSellingPrice || 0);
+        ? Math.min(...p.batches.map(b => Number(b.sellingPrice)))
+        : Number(p.defaultSellingPrice || 0);
       // Normalize Prisma.Decimal (serialized as strings on Postgres / sqlite JSON)
       const batchesWithQty = p.batches.map(b => ({
         ...b,
@@ -62,31 +87,22 @@ export async function GET(request: NextRequest) {
       // Calculate earliest expiry
       const earliestExpiry = p.batches.length > 0 ? p.batches[0].expiryDate : null;
 
-      // Calculate days to earliest expiry
-      let daysToExpiry: number | null = null;
-      let hasExpiringBatches = false;
-      let hasExpiredBatches = false;
+      // Days to the earliest batch expiry (null when nothing is on the shelf).
+      // Shared helpers so this screen, the inventory alerts and both dashboards
+      // agree on what "expiring soon" means and on the 90-day window.
+      const daysToExpiry: number | null = earliestExpiry
+        ? daysUntil(earliestExpiry, now)
+        : null;
 
-      for (const b of p.batches) {
-        const expiry = new Date(b.expiryDate);
-        const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-        if (diffDays < 0) hasExpiredBatches = true;
-        else if (diffDays < 90) hasExpiringBatches = true;
-      }
+      const expiryStatus = classifyProductExpiry(
+        p.batches.map((b) => b.expiryDate),
+        now
+      );
+      const hasExpiredBatches = expiryStatus === 'expired';
+      const hasExpiringBatches = expiryStatus === 'expiring_soon';
 
-      if (earliestExpiry) {
-        daysToExpiry = Math.ceil((new Date(earliestExpiry).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-      }
-
-      // Combined stock status
-      let stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock' = 'in_stock';
-      if (totalStock === 0) stockStatus = 'out_of_stock';
-      else if (totalStock <= p.reorderLevel) stockStatus = 'low_stock';
-
-      // Expiry status
-      let expiryStatus: 'good' | 'expiring_soon' | 'expired' = 'good';
-      if (hasExpiredBatches) expiryStatus = 'expired';
-      else if (hasExpiringBatches) expiryStatus = 'expiring_soon';
+      // Combined stock status, from the shared classifier.
+      const stockStatus = classifyStock(totalStock, p.reorderLevel);
 
       return {
         id: p.id,
@@ -158,23 +174,69 @@ export async function POST(request: NextRequest) {
     }
     const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice } = body
 
-    if (!name) {
-      return NextResponse.json(
-        { error: 'Product name is required' },
-        { status: 400 }
-      )
+    // Shared validators — see lib/product-input for what these replaced.
+    const parsedName = parseProductName(name)
+    if (!parsedName.ok) {
+      return NextResponse.json({ error: parsedName.error }, { status: 400 })
+    }
+
+    const parsedGenericName = parseOptionalGenericName(genericName)
+    if (!parsedGenericName.ok) {
+      return NextResponse.json({ error: parsedGenericName.error }, { status: 400 })
+    }
+
+    const parsedCategoryId = parseOptionalCategoryId(categoryId)
+    if (!parsedCategoryId.ok) {
+      return NextResponse.json({ error: parsedCategoryId.error }, { status: 400 })
+    }
+
+    const parsedDescription = parseOptionalDescription(description)
+    if (!parsedDescription.ok) {
+      return NextResponse.json({ error: parsedDescription.error }, { status: 400 })
+    }
+
+    const parsedUnit = parseProductUnit(unit)
+    if (!parsedUnit.ok) {
+      return NextResponse.json({ error: parsedUnit.error }, { status: 400 })
+    }
+
+    // 0 means "never reorder" and must survive: `reorderLevel || 10` used to
+    // overwrite it and quietly flag the product as low stock forever.
+    const parsedReorderLevel = parseReorderLevel(reorderLevel, 10)
+    if (!parsedReorderLevel.ok) {
+      return NextResponse.json({ error: parsedReorderLevel.error }, { status: 400 })
+    }
+
+    const parsedCost = parseMoney(defaultCostPrice, 'Cost price', 0)
+    if (!parsedCost.ok) {
+      return NextResponse.json({ error: parsedCost.error }, { status: 400 })
+    }
+
+    const parsedSelling = parseMoney(defaultSellingPrice, 'Selling price', 0)
+    if (!parsedSelling.ok) {
+      return NextResponse.json({ error: parsedSelling.error }, { status: 400 })
+    }
+
+    if (parsedCategoryId.value) {
+      const category = await db.category.findUnique({
+        where: { id: parsedCategoryId.value },
+        select: { id: true },
+      })
+      if (!category) {
+        return NextResponse.json({ error: 'Category not found' }, { status: 400 })
+      }
     }
 
     const product = await db.product.create({
       data: {
-        name,
-        genericName: genericName || null,
-        categoryId: categoryId || null,
-        description: description || null,
-        unit: unit || 'units',
-        reorderLevel: reorderLevel || 10,
-        defaultCostPrice: defaultCostPrice ?? 0,
-        defaultSellingPrice: defaultSellingPrice ?? 0,
+        name: parsedName.value,
+        genericName: parsedGenericName.value,
+        categoryId: parsedCategoryId.value,
+        description: parsedDescription.value,
+        unit: parsedUnit.value,
+        reorderLevel: parsedReorderLevel.value,
+        defaultCostPrice: parsedCost.value,
+        defaultSellingPrice: parsedSelling.value,
       },
       include: {
         category: { select: { id: true, name: true } },

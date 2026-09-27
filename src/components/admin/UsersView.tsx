@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Plus, Shield, ShieldCheck, KeyRound, Trash2 } from 'lucide-react';
+import { Plus, Shield, ShieldCheck, KeyRound, Trash2, Building2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,7 +22,8 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
-import type { User } from '@/types';
+import type { User, Branch } from '@/types';
+import { MIN_PASSWORD_LENGTH } from '@/lib/password-policy';
 
 export default function UsersView() {
   const [users, setUsers] = useState<User[]>([]);
@@ -30,7 +31,8 @@ export default function UsersView() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
-  const [addForm, setAddForm] = useState({ name: '', email: '', password: '', role: 'sales' as 'admin' | 'sales', phone: '' });
+  const [addForm, setAddForm] = useState({ name: '', email: '', password: '', role: 'sales' as 'admin' | 'sales', phone: '', branchId: '' });
+  const [branches, setBranches] = useState<Branch[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [resetPassword, setResetPassword] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -49,12 +51,22 @@ export default function UsersView() {
   useEffect(() => {
     fetchUsers();
     setLoading(false);
+    // Branch options for the add-user form; staff assignment is a required
+    // field for sales accounts, so the dialog needs the list up front.
+    fetch('/api/branches')
+      .then((res) => (res.ok ? res.json() : { branches: [] }))
+      .then((data) => setBranches(data.branches ?? []))
+      .catch(() => setBranches([]));
   }, []);
 
   const handleAddUser = async () => {
     if (!addForm.name.trim()) { toast.error('Name is required'); return; }
     if (!addForm.email.trim()) { toast.error('Email is required'); return; }
     if (!addForm.password) { toast.error('Password is required'); return; }
+    if (addForm.role === 'sales' && !addForm.branchId) {
+      toast.error('Select the branch this salesperson works at');
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch('/api/users', {
@@ -68,7 +80,7 @@ export default function UsersView() {
       }
       toast.success('User added successfully');
       setShowAddDialog(false);
-      setAddForm({ name: '', email: '', password: '', role: 'sales', phone: '' });
+      setAddForm({ name: '', email: '', password: '', role: 'sales', phone: '', branchId: '' });
       fetchUsers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add user');
@@ -150,6 +162,7 @@ export default function UsersView() {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Branch</TableHead>
                   <TableHead className="hidden md:table-cell">Phone</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -162,6 +175,7 @@ export default function UsersView() {
                       <TableCell><Skeleton className="h-4 w-28" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-32" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-16" /></TableCell>
+                      <TableCell><Skeleton className="h-4 w-20" /></TableCell>
                       <TableCell className="hidden md:table-cell"><Skeleton className="h-4 w-24" /></TableCell>
                       <TableCell><Skeleton className="h-5 w-20" /></TableCell>
                       <TableCell><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
@@ -186,6 +200,18 @@ export default function UsersView() {
                           {user.role}
                         </Badge>
                       </TableCell>
+                      <TableCell>
+                        {user.branch ? (
+                          <span className="inline-flex items-center gap-1.5 text-sm text-slate-700">
+                            <Building2 className="h-3.5 w-3.5 text-slate-400" />
+                            {user.branch.name}
+                          </span>
+                        ) : (
+                          <Badge variant="outline" className="border-amber-200 bg-amber-50 text-[10px] text-amber-700">
+                            All branches
+                          </Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="hidden md:table-cell">{user.phone ?? '-'}</TableCell>
                       <TableCell>
                         <Badge variant={user.active ? 'default' : 'destructive'} className={
@@ -193,6 +219,18 @@ export default function UsersView() {
                         }>
                           {user.active ? 'Active' : 'Inactive'}
                         </Badge>
+                        {/* Surfaced by the API: the account is still on the
+                            temporary password an admin issued and cannot be used
+                            normally until first-time setup is finished. */}
+                        {user.mustChangePassword && (
+                          <Badge
+                            variant="outline"
+                            className="ml-1 border-amber-300 text-amber-700 bg-amber-50"
+                            title="Temporary password — the user must complete first-time setup on first sign-in"
+                          >
+                            Setup pending
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
@@ -255,7 +293,11 @@ export default function UsersView() {
             </div>
             <div>
               <Label>Password *</Label>
-              <Input type="password" value={addForm.password} onChange={(e) => setAddForm({ ...addForm, password: e.target.value })} placeholder="Minimum 6 characters" />
+              <Input type="password" value={addForm.password} onChange={(e) => setAddForm({ ...addForm, password: e.target.value })} placeholder={`Minimum ${MIN_PASSWORD_LENGTH} characters`} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                This is a temporary password — the account is flagged for first-time
+                setup, so the user sets their own password on first sign-in.
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -272,6 +314,34 @@ export default function UsersView() {
                 <Label>Phone</Label>
                 <Input value={addForm.phone} onChange={(e) => setAddForm({ ...addForm, phone: e.target.value })} placeholder="+233..." />
               </div>
+            </div>
+            <div className="space-y-2">
+              <Label>
+                Branch {addForm.role === 'sales' ? '*' : ''}
+              </Label>
+              <Select
+                value={addForm.branchId || (addForm.role === 'admin' ? 'all' : 'none')}
+                onValueChange={(v) =>
+                  setAddForm({ ...addForm, branchId: v === 'all' || v === 'none' ? '' : v })
+                }
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {addForm.role === 'admin' && (
+                    <SelectItem value="all">All branches (owner view)</SelectItem>
+                  )}
+                  {branches.filter((b) => b.active).map((b) => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {b.name} ({b.code})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-slate-500">
+                {addForm.role === 'admin'
+                  ? 'An admin can see every branch. Leave on "All branches" for the owner.'
+                  : 'A sales account must be assigned to the branch they work at.'}
+              </p>
             </div>
           </div>
           <DialogFooter>
@@ -295,8 +365,11 @@ export default function UsersView() {
               type="password"
               value={resetPassword}
               onChange={(e) => setResetPassword(e.target.value)}
-              placeholder="Enter new password"
+              placeholder={`Minimum ${MIN_PASSWORD_LENGTH} characters`}
             />
+            <p className="mt-1 text-xs text-muted-foreground">
+              The user must complete first-time setup before they can use the system.
+            </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowResetDialog(false)}>Cancel</Button>

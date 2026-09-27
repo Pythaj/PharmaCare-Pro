@@ -12,6 +12,8 @@ import {
   RotateCcw,
   BarChart3,
   UserCog,
+  Building2,
+  Truck,
   FileText,
   Settings,
   X,
@@ -74,6 +76,8 @@ const adminNavSections: NavSection[] = [
     title: 'MANAGEMENT',
     items: [
       { label: 'Users', page: 'users', icon: UserCog },
+      { label: 'Branches', page: 'branches', icon: Building2 },
+      { label: 'Stock Transfers', page: 'transfers', icon: Truck },
       { label: 'Audit Logs', page: 'audit-logs', icon: FileText },
       { label: 'Settings', page: 'settings', icon: Settings },
     ],
@@ -110,6 +114,8 @@ const pageNameMap: Record<Page, string> = {
   'returns': 'Returns',
   'reports': 'Reports',
   'users': 'Users',
+    'branches': 'Branches',
+    'transfers': 'Stock Transfers',
   'audit-logs': 'Audit Logs',
   'settings': 'Settings',
 };

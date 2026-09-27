@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -13,42 +13,52 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import type { AuditLog } from '@/types';
+import { AUDIT_ACTIONS, AUDIT_ENTITIES, AUDIT_ACTION_COLORS } from '@/lib/audit-actions';
 
-const actionColors: Record<string, string> = {
-  LOGIN: 'border-blue-300 text-blue-700 bg-blue-50',
-  LOGOUT: 'border-gray-300 text-gray-700 bg-gray-50',
-  SALE: 'border-emerald-300 text-emerald-700 bg-emerald-50',
-  PURCHASE: 'border-teal-300 text-teal-700 bg-teal-50',
-  STOCK: 'border-amber-300 text-amber-700 bg-amber-50',
-  USER: 'border-purple-300 text-purple-700 bg-purple-50',
-  RETURN: 'border-red-300 text-red-700 bg-red-50',
-  SETTINGS: 'border-gray-300 text-gray-700 bg-gray-50',
-};
+const ALL = 'all';
 
 export default function AuditLogsView() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [actionFilter, setActionFilter] = useState('all');
+  const [actionFilter, setActionFilter] = useState(ALL);
+  const [entityFilter, setEntityFilter] = useState(ALL);
   const [search, setSearch] = useState('');
+  // Debounced mirror of `search`: without it every keystroke fired a request,
+  // and whichever response landed last won, so the list could show results for
+  // a prefix the user had already deleted.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const requestId = useRef(0);
 
   useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    const current = ++requestId.current;
+
     async function fetchLogs() {
+      setLoading(true);
       try {
         const params = new URLSearchParams();
-        if (actionFilter !== 'all') params.set('action', actionFilter);
-        if (search) params.set('search', search);
+        if (actionFilter !== ALL) params.set('action', actionFilter);
+        if (entityFilter !== ALL) params.set('entity', entityFilter);
+        if (debouncedSearch) params.set('search', debouncedSearch);
         const res = await fetch(`/api/audit-logs?${params.toString()}`);
+        if (current !== requestId.current) return;
         if (res.ok) {
           const data = await res.json();
+          if (current !== requestId.current) return;
           setLogs(data.logs ?? []);
+        } else if (current === requestId.current) {
+          setLogs([]);
         }
       } catch { /* silent */ }
-      setLoading(false);
+      if (current === requestId.current) setLoading(false);
     }
-    fetchLogs();
-  }, [actionFilter, search]);
 
-  const actionTypes = ['all', 'LOGIN', 'LOGOUT', 'SALE', 'PURCHASE', 'STOCK', 'USER', 'RETURN', 'SETTINGS'];
+    fetchLogs();
+  }, [actionFilter, entityFilter, debouncedSearch]);
 
   return (
     <div className="space-y-4 p-6">
@@ -63,18 +73,37 @@ export default function AuditLogsView() {
             className="pl-10"
           />
         </div>
-        <Select value={actionFilter} onValueChange={setActionFilter}>
-          <SelectTrigger className="w-44">
-            <SelectValue placeholder="Filter by action" />
-          </SelectTrigger>
-          <SelectContent>
-            {actionTypes.map((type) => (
-              <SelectItem key={type} value={type}>
-                {type === 'all' ? 'All Actions' : type}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <Select value={actionFilter} onValueChange={setActionFilter}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Filter by action" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All Actions</SelectItem>
+              {/* The real logged actions. The previous list offered SALE,
+                  PURCHASE, STOCK, USER and SETTINGS, none of which is ever
+                  written, so the filter always came back empty. */}
+              {AUDIT_ACTIONS.map((action) => (
+                <SelectItem key={action} value={action}>
+                  {action}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={entityFilter} onValueChange={setEntityFilter}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="Filter by entity" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All Entities</SelectItem>
+              {AUDIT_ENTITIES.map((entity) => (
+                <SelectItem key={entity} value={entity}>
+                  {entity}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       <Card>
@@ -107,11 +136,18 @@ export default function AuditLogsView() {
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(log.createdAt).toLocaleString('en-GH')}
                       </TableCell>
-                      <TableCell className="text-sm font-medium">{log.user?.name ?? '-'}</TableCell>
+                      <TableCell className="text-sm font-medium">
+                        {/* null user = the account was deleted; the audit row
+                            is kept on purpose, so say so instead of '-'. */}
+                        {log.user?.name ?? 'Deleted user'}
+                      </TableCell>
                       <TableCell>
                         <Badge
                           variant="outline"
-                          className={actionColors[log.action] ?? 'border-gray-300 text-gray-700 bg-gray-50'}
+                          className={
+                            AUDIT_ACTION_COLORS[log.action as keyof typeof AUDIT_ACTION_COLORS]
+                            ?? 'border-gray-300 text-gray-700 bg-gray-50'
+                          }
                         >
                           {log.action}
                         </Badge>

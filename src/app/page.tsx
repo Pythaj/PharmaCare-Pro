@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { Header } from '@/components/layout/Header';
 import { MobileBottomNav } from '@/components/layout/MobileBottomNav';
 import LoginPage from '@/components/auth/LoginPage';
+import FirstRunSetupCard from '@/components/auth/FirstRunSetupCard';
 import InstallPrompt, { InstallFAB } from '@/components/InstallPrompt';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -70,6 +71,8 @@ const ReturnsView = lazy(() => import('@/components/pages/ReturnsView'));
 const ReportsView = lazy(() => import('@/components/pages/ReportsView'));
 const UsersView = lazy(() => import('@/components/pages/UsersView'));
 const AuditLogsView = lazy(() => import('@/components/pages/AuditLogsView'));
+    const BranchesView = lazy(() => import('@/components/pages/BranchesView'));
+    const StockTransfersView = lazy(() => import('@/components/pages/StockTransfersView'));
 const SettingsView = lazy(() => import('@/components/pages/SettingsView'));
 
 function PageLoader() {
@@ -104,35 +107,57 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
   'reports': ReportsView,
   'users': UsersView,
   'audit-logs': AuditLogsView,
+    'branches': BranchesView,
+    'transfers': StockTransfersView,
   'settings': SettingsView,
 };
 
 export default function Home() {
   useLoadAppSettings();
-  const { currentPage, isAuthenticated, sidebarOpen, currentUser } = useAppStore();
+  const { currentPage, isAuthenticated, sidebarOpen, currentUser, requiresPasswordSetup } = useAppStore();
   const isDesktop = useIsDesktop();
   const navigate = useAppStore((s) => s.navigate);
   const logout = useAppStore((s) => s.logout);
+  const setCurrentUser = useAppStore((s) => s.setCurrentUser);
+  const setRequiresPasswordSetup = useAppStore((s) => s.setRequiresPasswordSetup);
+  const setActiveBranch = useAppStore((s) => s.setActiveBranch);
 
   // Validate persisted sessions on load: zustand may say "authenticated"
   // from localStorage while the real HttpOnly JWT cookie has expired.
   // A single GET /api/auth check resolves this; 401 → clean logout.
+  //
+  // The response is also the authority for role and password state, so a
+  // demotion, deactivation or a newly flagged account takes effect on the very
+  // next load instead of whenever the 7-day token happens to expire.
   useEffect(() => {
     if (!isAuthenticated) return;
     let cancelled = false;
     (async () => {
       try {
         const res = await fetch('/api/auth');
-        if (!res.ok && !cancelled) {
+        if (cancelled) return;
+
+        if (!res.ok) {
           logout();
+          return;
         }
+
+        const session = await res.json();
+        if (cancelled) return;
+
+        if (session?.user) setCurrentUser(session.user);
+        setRequiresPasswordSetup(Boolean(session?.mustChangePassword));
+        // Which branch the header shows. The server derives this from the signed
+        // cookie, so it cannot drift from what the API will actually scope to.
+        // `null` means an admin is on the consolidated all-branches view.
+        setActiveBranch(session?.activeBranch ?? null);
       } catch {
         // Network error: keep current state, individual API calls will
         // surface their own connection errors
       }
     })();
     return () => { cancelled = true; };
-  }, [logout]);
+  }, [isAuthenticated, logout, setCurrentUser, setRequiresPasswordSetup, setActiveBranch]);
 
   // Role-based page access guard
   const resolvedPage = (() => {
@@ -168,6 +193,31 @@ export default function Home() {
       <InstallPrompt />
       <InstallFAB />
     </>;
+  }
+
+  // An account on a temporary password reaches the app shell (the session is
+  // valid) but is walled off here: the server already refuses every business
+  // API for it, so the dashboard would otherwise be a wall of failed requests.
+  if (requiresPasswordSetup && currentUser) {
+    return (
+      <div className="flex h-dvh max-h-dvh items-center justify-center overflow-y-auto bg-slate-50/60 px-4 py-8">
+        <ThemeInitializer />
+        <div className="w-full max-w-md">
+          <FirstRunSetupCard
+            key={currentUser.id}
+            user={currentUser}
+            onComplete={(user) => {
+              setRequiresPasswordSetup(false);
+              setCurrentUser(user);
+              navigate(user.role === 'admin' ? 'admin-dashboard' : 'sales-dashboard');
+            }}
+            onCancel={() => logout()}
+          />
+        </div>
+        <InstallPrompt />
+        <InstallFAB />
+      </div>
+    );
   }
 
   // Sidebar width: only apply margin on desktop where sidebar is fixed

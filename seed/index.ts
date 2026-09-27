@@ -39,24 +39,40 @@ async function seed() {
     await db.supplier.upsert({ where: { id: s.id }, update: {}, create: s });
   }
 
+  // Branches. The first branch is the original shop; every record seeded below
+  // belongs to it, so a fresh install is indistinguishable from the
+  // single-branch app it grew out of.
+  const mainBranch = await db.branch.upsert({
+    where: { code: 'MAIN' },
+    update: {},
+    create: {
+      name: 'Main Branch',
+      code: 'MAIN',
+      address: 'Head office',
+      active: true,
+    },
+  });
+
   // Users
   const adminPassword = await hashPassword('admin123');
   const salesPassword = await hashPassword('sales123');
 
+  // The admin deliberately has branchId = null ("sees every branch"). The two
+  // cashiers are pinned to Main.
   const admin = await db.user.upsert({
     where: { email: 'admin@pharmacy.com' },
     update: {},
-    create: { name: 'Dr. Kwame Owusu', email: 'admin@pharmacy.com', password: adminPassword, role: 'admin', phone: '+233-20-000-0001' },
+    create: { name: 'Dr. Kwame Owusu', email: 'admin@pharmacy.com', password: adminPassword, role: 'admin', phone: '+233-20-000-0001', branchId: null },
   });
   const sales1 = await db.user.upsert({
     where: { email: 'cashier@pharmacy.com' },
     update: {},
-    create: { name: 'Ama Adjei', email: 'cashier@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0002' },
+    create: { name: 'Ama Adjei', email: 'cashier@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0002', branchId: mainBranch.id },
   });
   const sales2 = await db.user.upsert({
     where: { email: 'attendant@pharmacy.com' },
     update: {},
-    create: { name: 'Kofi Boateng', email: 'attendant@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0003' },
+    create: { name: 'Kofi Boateng', email: 'attendant@pharmacy.com', password: salesPassword, role: 'sales', phone: '+233-20-000-0003', branchId: mainBranch.id },
   });
 
   // Products
@@ -106,6 +122,7 @@ async function seed() {
     await db.batch.create({
       data: {
         productId: prod.id,
+        branchId: mainBranch.id,
         batchNumber: `BATCH-${String(i + 1).padStart(3, '0')}`,
         quantity: b.qty,
         costPrice: b.cost,
@@ -143,7 +160,15 @@ async function seed() {
       const numItems = Math.floor(Math.random() * 3) + 1;
       let subtotal = 0;
       let cost = 0;
-      const items = [];
+      // Typed so the nested items are inferred as sale-item payloads; an
+      // untyped `const items = []` widened to `never[]` and rejected the push.
+      const items: {
+        productId: string;
+        quantity: number;
+        unitPrice: number;
+        costPrice: number;
+        total: number;
+      }[] = [];
       const used = new Set<number>();
 
       for (let i = 0; i < numItems && i < products.length; i++) {
@@ -166,7 +191,7 @@ async function seed() {
 
       if (items.length === 0) continue;
 
-      const invNo = `SL-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(s + 1).padStart(3, '0')}`;
+      const invNo = `MAIN-SL-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}-${String(s + 1).padStart(3, '0')}`;
       const user = users[Math.floor(Math.random() * 2)];
       const custId = Math.random() > 0.4 ? custData[Math.floor(Math.random() * custData.length)].id : null;
 
@@ -175,6 +200,7 @@ async function seed() {
           invoiceNo: invNo,
           customerId: custId,
           userId: user.id,
+          branchId: mainBranch.id,
           subtotal,
           tax: 0,
           discount: Math.random() > 0.8 ? subtotal * 0.05 : 0,

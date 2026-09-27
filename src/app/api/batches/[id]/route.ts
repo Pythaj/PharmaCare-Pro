@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 
+/**
+ * A Batch row IS a shelf: its quantity is that branch's on-hand stock of one
+ * expiry, and its cost is what that branch's profit is measured against. Both
+ * handlers below therefore have to respect the active branch, not just the
+ * admin role. "Admin" answers WHO may act; it does not answer WHOSE BOOKS. An
+ * admin working Branch A must not be able to rewrite Branch B's stock levels or
+ * cost prices from that branch's screen.
+ */
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -21,6 +29,18 @@ export async function PATCH(
       return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
     }
 
+    if (auth.scope!.branchId && batch.branchId !== auth.scope!.branchId) {
+      return NextResponse.json(
+        { error: 'That batch belongs to a different branch' },
+        { status: 403 }
+      )
+    }
+
+    const quantity = body.quantity !== undefined ? Number(body.quantity) : batch.quantity
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      return NextResponse.json({ error: 'Quantity must be zero or more' }, { status: 400 })
+    }
+
     const updated = await db.batch.update({
       where: { id },
       data: {
@@ -30,7 +50,7 @@ export async function PATCH(
           typeof body.batchNumber === 'string' && body.batchNumber.trim()
             ? body.batchNumber.trim()
             : batch.batchNumber,
-        quantity: body.quantity !== undefined ? Number(body.quantity) : batch.quantity,
+        quantity,
         costPrice: body.costPrice !== undefined ? Number(body.costPrice) : batch.costPrice,
         sellingPrice: body.sellingPrice !== undefined ? Number(body.sellingPrice) : batch.sellingPrice,
         expiryDate:
@@ -46,6 +66,7 @@ export async function PATCH(
       entity: 'Batch',
       entityId: id,
       details: `Updated batch "${updated.batchNumber}" (qty: ${updated.quantity})`,
+      branchId: batch.branchId,
       ipAddress: getClientIp(request),
     })
 
@@ -60,7 +81,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -71,6 +92,13 @@ export async function DELETE(
     const batch = await db.batch.findUnique({ where: { id } })
     if (!batch) {
       return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
+    }
+
+    if (auth.scope!.branchId && batch.branchId !== auth.scope!.branchId) {
+      return NextResponse.json(
+        { error: 'That batch belongs to a different branch' },
+        { status: 403 }
+      )
     }
 
     const hasSales = await db.saleItem.count({ where: { batchId: id } })
@@ -89,6 +117,7 @@ export async function DELETE(
       entity: 'Batch',
       entityId: id,
       details: `Deleted batch "${batch.batchNumber}"`,
+      branchId: batch.branchId,
       ipAddress: getClientIp(request),
     })
 

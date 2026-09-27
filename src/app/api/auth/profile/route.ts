@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, verifyPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { normalizeEmail } from '@/lib/email';
 
 const publicUser = {
   id: true, name: true, email: true, role: true, phone: true, active: true,
@@ -18,7 +19,9 @@ const publicUser = {
  */
 export async function PATCH(request: NextRequest) {
   try {
-    const auth = await requireAuth(request);
+    // allowPasswordChange: profile details are harmless for a flagged account
+    // and the account screen must render while it finishes setup.
+    const auth = await requireAuth(request, { allowPasswordChange: true });
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status });
     }
@@ -37,8 +40,8 @@ export async function PATCH(request: NextRequest) {
       data.name = name.trim();
     }
 
-    if (email && typeof email === 'string' && email.trim().toLowerCase() !== user.email) {
-      const normalizedEmail = email.trim().toLowerCase();
+    if (email && typeof email === 'string' && normalizeEmail(email) !== user.email) {
+      const normalizedEmail = normalizeEmail(email);
 
       if (!currentPassword || !(await verifyPassword(currentPassword, user.password))) {
         return NextResponse.json(
@@ -86,7 +89,7 @@ export async function PATCH(request: NextRequest) {
       role: updated.role,
     });
 
-    const response = NextResponse.json({ user: updated, token }, { status: 200 });
+    const response = NextResponse.json({ user: updated }, { status: 200 });
     const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
     response.cookies.set('auth_token', token, {
       httpOnly: true,

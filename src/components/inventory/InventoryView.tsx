@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Search,
   Package,
@@ -37,6 +37,7 @@ import {
 } from '@/components/ui/collapsible';
 import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
+import { classifyBatchExpiry, daysUntil } from '@/lib/inventory-alerts';
 import { motion, AnimatePresence } from 'framer-motion';
 
 function formatGHS(value: number): string {
@@ -112,6 +113,8 @@ interface ProductWithBatches {
   id: string;
   name: string;
   genericName?: string | null;
+  /** Returned by /api/products and searched here. */
+  description?: string | null;
   unit: string;
   reorderLevel: number;
   totalStock: number;
@@ -157,16 +160,8 @@ export default function InventoryView() {
     setExpandedAlerts((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const fetchAlerts = useCallback(async () => {
-    try {
-      const res = await fetch('/api/inventory/alerts');
-      if (res.ok) {
-        const data = await res.json();
-        setAlerts(data);
-      }
-    } catch { /* silent */ }
-  }, []);
-
+  // One request for the screen: the alert summary (batch counts) and the
+  // product list (per-product badges) come from the two endpoints together.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -226,13 +221,14 @@ export default function InventoryView() {
   }, [products, search, filter]);
 
   const getBatchStatus = (batch: { expiryDate: string; currentQty: number }) => {
-    const now = new Date();
-    const expiry = new Date(batch.expiryDate);
-    const diffDays = Math.ceil((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     if (batch.currentQty <= 0) return { label: 'Depleted', className: 'bg-slate-100 text-slate-500', dotColor: 'bg-slate-400' };
-    if (diffDays < 0) return { label: 'Expired', className: 'bg-red-100 text-red-700', dotColor: 'bg-red-500' };
+    // Shared helpers: same calendar-day maths and same 90-day window as the
+    // API, so a batch never reads "Good" here and "Expiring Soon" on a badge.
+    const diffDays = daysUntil(batch.expiryDate);
+    const status = classifyBatchExpiry(batch.expiryDate);
+    if (status === 'expired') return { label: 'Expired', className: 'bg-red-100 text-red-700', dotColor: 'bg-red-500' };
     if (diffDays < 30) return { label: `${diffDays}d left`, className: 'bg-red-100 text-red-700', dotColor: 'bg-red-500' };
-    if (diffDays < 90) return { label: `${diffDays}d left`, className: 'bg-amber-100 text-amber-700', dotColor: 'bg-amber-500' };
+    if (status === 'expiring_soon') return { label: `${diffDays}d left`, className: 'bg-amber-100 text-amber-700', dotColor: 'bg-amber-500' };
     return { label: 'Good', className: 'bg-emerald-100 text-emerald-700', dotColor: 'bg-emerald-500' };
   };
 
@@ -258,12 +254,16 @@ export default function InventoryView() {
     return badges;
   };
 
-  const filterButtons: { label: string; value: StockFilter; icon: React.ElementType; count: number; activeColor: string }[] = [
+  // Stock badges count products; the two expiry badges count BATCHES (one
+  // product can hold several expiring batches), which is what the alert summary
+  // reports. The title spells the unit out so a 7 on the button and 3 rows in
+  // the table is not read as a bug.
+  const filterButtons: { label: string; value: StockFilter; icon: React.ElementType; count: number; activeColor: string; title?: string }[] = [
     { label: 'All Items', value: 'all', icon: Package, count: products.length, activeColor: 'bg-emerald-600 hover:bg-emerald-700' },
-    { label: 'Out of Stock', value: 'out_of_stock', icon: PackageX, count: alerts?.summary.outOfStockCount ?? 0, activeColor: 'bg-red-600 hover:bg-red-700' },
-    { label: 'Low Stock', value: 'low_stock', icon: TrendingDown, count: alerts?.summary.lowStockCount ?? 0, activeColor: 'bg-amber-500 hover:bg-amber-600' },
-    { label: 'Expiring Soon', value: 'expiring_soon', icon: Clock, count: alerts?.summary.expiringSoonCount ?? 0, activeColor: 'bg-orange-500 hover:bg-orange-600' },
-    { label: 'Expired', value: 'expired', icon: AlertOctagon, count: alerts?.summary.expiredCount ?? 0, activeColor: 'bg-red-500 hover:bg-red-600' },
+    { label: 'Out of Stock', value: 'out_of_stock', icon: PackageX, count: alerts?.summary.outOfStockCount ?? 0, activeColor: 'bg-red-600 hover:bg-red-700', title: 'Counted in products' },
+    { label: 'Low Stock', value: 'low_stock', icon: TrendingDown, count: alerts?.summary.lowStockCount ?? 0, activeColor: 'bg-amber-500 hover:bg-amber-600', title: 'Counted in products' },
+    { label: 'Expiring Soon', value: 'expiring_soon', icon: Clock, count: alerts?.summary.expiringSoonCount ?? 0, activeColor: 'bg-orange-500 hover:bg-orange-600', title: 'Counted in batches, not products' },
+    { label: 'Expired', value: 'expired', icon: AlertOctagon, count: alerts?.summary.expiredCount ?? 0, activeColor: 'bg-red-500 hover:bg-red-600', title: 'Counted in batches, not products' },
   ];
 
   // ---- Loading skeleton ----
@@ -829,9 +829,11 @@ function ProductRow({
           {product.earliestExpiry ? (
             <div className="flex items-center gap-1.5">
               <div className={`w-1.5 h-1.5 rounded-full ${
-                product.daysToExpiry !== null && product.daysToExpiry < 0 ? 'bg-red-500' :
-                product.daysToExpiry !== null && product.daysToExpiry < 30 ? 'bg-red-500' :
-                product.daysToExpiry !== null && product.daysToExpiry < 90 ? 'bg-amber-500' :
+                // daysToExpiry is null/undefined when the product has no
+                // batches; the old `!== null` test let `undefined < 0` through
+                // to the renderer.
+                product.daysToExpiry != null && product.daysToExpiry < 30 ? 'bg-red-500' :
+                product.daysToExpiry != null && product.daysToExpiry < 90 ? 'bg-amber-500' :
                 'bg-emerald-500'
               }`} />
               <span className="text-xs">

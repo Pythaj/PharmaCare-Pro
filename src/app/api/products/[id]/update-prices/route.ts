@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
+import { branchWhere } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
 
 /**
@@ -10,7 +11,15 @@ import { logAudit, getClientIp } from '@/lib/audit'
  * Body:
  *   defaultCostPrice: number
  *   defaultSellingPrice: number
- *   applyToBatches: boolean   (default false) — if true, also updates every batch's costPrice & sellingPrice
+ *   applyToBatches: boolean   (default false) - if true, also updates every batch's costPrice & sellingPrice
+ *
+ * The product's own defaults are the SHARED catalogue, so they are global. A
+ * batch's cost is not: it is one branch's stock at the price that branch paid.
+ * Propagating a new price across every branch's existing batches from a single
+ * branch's screen would rewrite another shop's cost basis — and, because past
+ * sales' profit was measured against the old cost, would leave their reported
+ * margins quietly wrong. So batch propagation follows the active branch, and
+ * only the "All branches" view revalues the whole chain.
  */
 export async function PUT(
   request: NextRequest,
@@ -18,8 +27,8 @@ export async function PUT(
 ) {
   try {
     const { id } = await params
-    // Auth from HttpOnly JWT cookie — identity is never trusted from the body
-    const auth = await requireAdmin(request)
+    // Auth from HttpOnly JWT cookie - identity is never trusted from the body
+    const auth = await requireBranchScope(request, { admin: true })
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
@@ -50,6 +59,8 @@ export async function PUT(
     }
 
     // Atomic: product defaults and batch propagation commit together (Rule 9/12)
+    const scope = auth.scope!
+    const isSingleBranch = !!scope.branchId
     const result = await db.$transaction(async (tx) => {
       const updated = await tx.product.update({
         where: { id },
@@ -59,14 +70,19 @@ export async function PUT(
         },
         include: {
           category: { select: { id: true, name: true } },
-          batches: { orderBy: { createdAt: 'desc' } },
+          // Only ever show this branch's batches, so the admin can see which rows
+          // the propagation below is about to touch.
+          batches: {
+            where: branchWhere(scope),
+            orderBy: { createdAt: 'desc' },
+          },
         },
       })
 
       let batchesUpdated = 0
       if (applyToBatches) {
         const res = await tx.batch.updateMany({
-          where: { productId: id },
+          where: { productId: id, ...branchWhere(scope) },
           data: {
             costPrice: defaultCostPrice,
             sellingPrice: defaultSellingPrice,
@@ -83,7 +99,8 @@ export async function PUT(
       action: 'UPDATE',
       entity: 'Product',
       entityId: id,
-      details: `Updated prices for "${product.name}"${result.batchesUpdated > 0 ? ` (applied to ${result.batchesUpdated} batches)` : ''}`,
+      details: `Updated prices for "${product.name}"${result.batchesUpdated > 0 ? ` (applied to ${result.batchesUpdated} batch${result.batchesUpdated !== 1 ? 'es' : ''}${isSingleBranch ? ' in this branch' : ' across ALL branches'})` : ''}`,
+      branchId: scope.branchId,
       ipAddress: getClientIp(request),
     })
 
@@ -91,7 +108,7 @@ export async function PUT(
       product: result.updated,
       batchesUpdated: result.batchesUpdated,
       message: result.batchesUpdated > 0
-        ? `Prices updated for product and ${result.batchesUpdated} batch${result.batchesUpdated !== 1 ? 'es' : ''}`
+        ? `Prices updated for product and ${result.batchesUpdated} batch${result.batchesUpdated !== 1 ? 'es' : ''}${isSingleBranch ? ' in this branch' : ''}`
         : 'Product default prices updated',
     })
   } catch (error) {

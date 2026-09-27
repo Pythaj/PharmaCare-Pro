@@ -1,33 +1,65 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { branchRelationWhere } from '@/lib/branches'
+import {
+  allocateRefunds,
+  applyReturnStock,
+  isReturnStatus,
+  recomputeSaleStatus,
+  sumRefunds,
+  RETURN_STATUSES,
+} from '@/lib/returns'
 
 /** Distinguishes client-facing validation failures from unexpected server errors */
 class ValidationError extends Error {}
 
-
+// Returns are an admin-managed area (returns move stock and money), so the gate
+// is requireAdmin for reads and writes alike. Reads are still branch-scoped: an
+// admin parked on Branch A should reconcile Branch A's refunds, not the whole
+// company's. A return inherits its branch from the sale it refunds, so the
+// filter is on the related sale.
 export async function GET(request: NextRequest) {
-  // Returns are an admin-managed area; both roles may read for now,
-  // matching the ReturnsView admin gating client-side
-  const auth = await requireAdmin(request)
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
   try {
     const returns = await db.return.findMany({
+      where: branchRelationWhere(auth.scope!, 'sale'),
       include: {
         sale: {
           select: {
             id: true,
             invoiceNo: true,
             totalAmount: true,
+            branchId: true,
+            branch: { select: { id: true, name: true, code: true } },
             customer: { select: { id: true, name: true, phone: true } },
             user: { select: { id: true, name: true } },
           },
         },
+        // The operator who processed the refund. Nullable relation, so a deleted
+        // account leaves the refund intact and simply reads as "removed user".
         user: { select: { id: true, name: true } },
+        // Line-level refunds so the UI shows what was actually credited per
+        // item instead of re-deriving it from shelf prices.
+        items: {
+          select: {
+            id: true,
+            saleItemId: true,
+            quantity: true,
+            refundAmount: true,
+            saleItem: {
+              select: {
+                unitPrice: true,
+                product: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
     })
@@ -43,8 +75,8 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  // Identity from HttpOnly JWT cookie — fixes the missing-userId payload bug
-  const auth = await requireAdmin(request)
+  // Identity from HttpOnly JWT cookie, resolved against the live database role.
+  const auth = await requireBranchScope(request, { admin: true })
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -54,17 +86,21 @@ export async function POST(request: NextRequest) {
     const body = await request.json()
     const { saleId, reason, items, status = 'approved' } = body
 
-    if (!saleId || !reason) {
+    if (!saleId || typeof saleId !== 'string') {
       return NextResponse.json(
-        { error: 'Sale ID and reason are required' },
+        { error: 'Sale ID is required' },
         { status: 400 }
       )
     }
-
-    const validStatuses = ['approved', 'pending', 'rejected']
-    if (!validStatuses.includes(status)) {
+    if (typeof reason !== 'string' || !reason.trim()) {
       return NextResponse.json(
-        { error: 'Status must be "approved", "pending", or "rejected"' },
+        { error: 'A reason for the return is required' },
+        { status: 400 }
+      )
+    }
+    if (!isReturnStatus(status)) {
+      return NextResponse.json(
+        { error: `Status must be one of: ${RETURN_STATUSES.join(', ')}` },
         { status: 400 }
       )
     }
@@ -83,6 +119,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Sale not found' },
         { status: 404 }
+      )
+    }
+
+    // A refund puts stock back on a shelf and money back to a customer, so it
+    // must land in the branch that made the original sale. Refusing here (rather
+    // than silently crediting it) keeps each shop's stock count honest: the units
+    // return to the shelf they left.
+    if (auth.scope!.branchId && sale.branchId !== auth.scope!.branchId) {
+      return NextResponse.json(
+        { error: 'That sale belongs to a different branch. Switch to its branch to process the return.' },
+        { status: 403 }
       )
     }
     if (sale.status === 'returned') {
@@ -110,12 +157,12 @@ export async function POST(request: NextRequest) {
 
       // Resolve which quantities are being returned in THIS request
       let planned: { saleItemId: string; quantity: number; unitPrice: number; batchId: string | null }[]
-      if (items && items.length > 0) {
+      if (Array.isArray(items) && items.length > 0) {
         planned = []
         for (const reqItem of items) {
-          const saleItem = sale.items.find((si) => si.id === reqItem.saleItemId)
+          const saleItem = sale.items.find((si) => si.id === reqItem?.saleItemId)
           if (!saleItem) {
-            throw new ValidationError(`Sale item ${reqItem.saleItemId} not found on this sale`)
+            throw new ValidationError(`Sale item ${reqItem?.saleItemId} not found on this sale`)
           }
           const qty = Number(reqItem.quantity)
           if (!Number.isInteger(qty) || qty <= 0) {
@@ -146,18 +193,33 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const totalRefund = planned.reduce((sum, p) => sum + p.unitPrice * p.quantity, 0)
+      // Refund what the customer actually paid for these lines: each line's
+      // share of the sale AFTER discount and tax. Refunding shelf price instead
+      // over-refunds any discounted sale and leaves a "partial_return" sale that
+      // can never reach "returned", because the totals no longer line up.
+      const salePricing = {
+        subtotal: Number(sale.subtotal),
+        discount: Number(sale.discount),
+        tax: Number(sale.tax),
+        totalAmount: Number(sale.totalAmount),
+      }
+      const allocated = allocateRefunds(planned, salePricing)
+      const totalRefund = sumRefunds(allocated)
 
       // Create the return record + its line items together
       const returnRecord = await tx.return.create({
         data: {
           saleId,
           userId,
-          reason,
+          reason: reason.trim(),
           totalRefund,
           status,
           items: {
-            create: planned.map((p) => ({ saleItemId: p.saleItemId, quantity: p.quantity })),
+            create: allocated.map((p) => ({
+              saleItemId: p.saleItemId,
+              quantity: p.quantity,
+              refundAmount: p.refundAmount,
+            })),
           },
         },
         include: {
@@ -174,33 +236,10 @@ export async function POST(request: NextRequest) {
 
       // Approved returns restore stock to the original batch immediately
       if (status === 'approved') {
-        for (const p of planned) {
-          if (p.batchId) {
-            await tx.batch.update({
-              where: { id: p.batchId },
-              data: { quantity: { increment: p.quantity } },
-            })
-          }
-        }
+        await applyReturnStock(tx, allocated, 1)
       }
 
-      // Recompute sale status from approved refunds only
-      const approvedRefunds = await tx.return.aggregate({
-        where: { saleId, status: 'approved' },
-        _sum: { totalRefund: true },
-      })
-      const totalReturned = approvedRefunds._sum.totalRefund ?? 0
-      const newStatus =
-        totalReturned >= sale.totalAmount - 0.001 // float tolerance
-          ? 'returned'
-          : totalReturned > 0
-            ? 'partial_return'
-            : sale.status
-
-      await tx.sale.update({
-        where: { id: saleId },
-        data: { status: newStatus },
-      })
+      await recomputeSaleStatus(tx, saleId, salePricing.totalAmount, sale.status)
 
       return { returnRecord, totalRefund, invoiceNo: sale.invoiceNo }
     })
@@ -210,7 +249,7 @@ export async function POST(request: NextRequest) {
       action: 'RETURN',
       entity: 'Return',
       entityId: result.returnRecord.id,
-      details: `Processed return for ${result.invoiceNo} (refund GHS ${result.totalRefund.toFixed(2)}): ${reason}`,
+      details: `Processed ${status} return for ${result.invoiceNo} (refund GHS ${result.totalRefund.toFixed(2)}): ${reason.trim()}`,
       ipAddress: getClientIp(request),
     })
 

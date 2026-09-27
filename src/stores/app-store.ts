@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Page, User, CartItem } from '@/types';
+import type { Page, User, CartItem, Branch } from '@/types';
 import { ADMIN_ONLY_PAGES } from '@/types';
 
 export type AccentTheme = 'emerald' | 'blue' | 'violet' | 'rose' | 'amber' | 'teal';
@@ -14,6 +14,20 @@ interface AppState {
   currentUser: User | null;
   isAuthenticated: boolean;
   loginTime: number;
+  /**
+   * True while the signed-in account is still on its temporary password.
+   * Server-enforced (every business API answers 403 until setup is done); this
+   * flag only decides which screen to render, and is re-derived from the server
+   * on every app load so it can never be stale or forged via localStorage.
+   */
+  requiresPasswordSetup: boolean;
+  /**
+   * Which branch's data the UI is currently showing. Distinct from
+   * `currentUser.branchId`, which is where a salesperson is *employed*: an admin
+   * has no home branch but can be looking at one. `null` for an admin means the
+   * consolidated all-branches view.
+   */
+  activeBranch: Branch | null;
   
   // Navigation
   currentPage: Page;
@@ -35,6 +49,8 @@ interface AppState {
   setAppTagline: (tagline: string) => void;
   login: (user: User) => void;
   setCurrentUser: (user: User) => void;
+  setRequiresPasswordSetup: (required: boolean) => void;
+  setActiveBranch: (branch: Branch | null) => void;
   logout: () => void;
   navigate: (page: Page) => void;
   toggleSidebar: () => void;
@@ -65,6 +81,8 @@ export const useAppStore = create<AppState>()(
   currentUser: null,
   isAuthenticated: false,
   loginTime: 0,
+  requiresPasswordSetup: false,
+  activeBranch: null,
   
   // Navigation
   currentPage: 'login',
@@ -85,13 +103,18 @@ export const useAppStore = create<AppState>()(
     currentUser: user,
     isAuthenticated: true,
     loginTime: Date.now(),
+    requiresPasswordSetup: Boolean(user.mustChangePassword),
     currentPage: user.role === 'admin' ? 'admin-dashboard' : 'sales-dashboard',
   }),
 
   setCurrentUser: (user) => set({
     currentUser: user,
   }),
-  
+
+  setRequiresPasswordSetup: (required) => set({ requiresPasswordSetup: required }),
+
+  setActiveBranch: (branch) => set({ activeBranch: branch }),
+
   logout: async () => {
     try {
       await fetch('/api/auth', { method: 'DELETE' });
@@ -102,6 +125,9 @@ export const useAppStore = create<AppState>()(
       currentUser: null,
       isAuthenticated: false,
       loginTime: 0,
+      requiresPasswordSetup: false,
+      activeBranch: null,
+
       currentPage: 'login',
       cart: [],
       selectedCustomerId: null,
@@ -178,6 +204,9 @@ export const useAppStore = create<AppState>()(
         accentTheme: state.accentTheme,
         appName: state.appName,
         appTagline: state.appTagline,
+        // activeBranch is deliberately NOT persisted: the signed session cookie
+        // is the authority on which branch is selected, and a value restored
+        // from localStorage could disagree with it.
       }),
     },
   ),

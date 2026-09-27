@@ -11,12 +11,21 @@ export type Page =
   | 'reports'
   | 'users'
   | 'audit-logs'
+  | 'branches'
+  | 'transfers'
   | 'settings';
 
 /** Pages restricted to admin role only */
 export const ADMIN_ONLY_PAGES: Page[] = [
   'admin-dashboard', 'returns', 'reports',
   'users', 'audit-logs', 'settings', 'inventory',
+  // Creating a branch is an owner-level decision: it decides where money is
+  // attributed for the rest of the business's life.
+  'branches',
+  // Stock transfers move real inventory and cost between branches. Visible to
+  // admins only because a cashier must not be able to hand another branch's
+  // shelves to a competitor.
+  'transfers',
 ];
 
 export type UserRole = 'admin' | 'sales';
@@ -30,8 +39,29 @@ export interface User {
   phone?: string;
   active: boolean;
   mustChangePassword?: boolean;
+  /**
+   * Home branch. `null` means "every branch" and is only valid for an admin —
+   * the owner. A salesperson always has one.
+   */
+  branchId?: string | null;
+  /** Present when the API includes branch details. */
+  branch?: Branch | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Branch {
+  id: string;
+  name: string;
+  /** Short code used in invoice numbers, e.g. "MAIN". */
+  code: string;
+  address?: string | null;
+  phone?: string | null;
+  active: boolean;
+  createdAt?: string;
+  staffCount?: number;
+  batchCount?: number;
+  saleCount?: number;
 }
 
 export interface Category {
@@ -114,6 +144,8 @@ export interface Sale {
   invoiceNo: string;
   customerId?: string;
   userId: string;
+  /** Shop the sale was rung up at. */
+  branchId?: string;
   subtotal: number;
   tax: number;
   discount: number;
@@ -125,6 +157,7 @@ export interface Sale {
   createdAt: string;
   customer?: Customer;
   user?: User;
+  branch?: Branch;
   items?: SaleItem[];
 }
 
@@ -138,6 +171,10 @@ export interface SaleItem {
   costPrice: number;
   total: number;
   expiryDate?: string;
+  /** Units already claimed by approved/pending returns of this sale. */
+  returnedQuantity?: number;
+  /** Units still returnable: quantity - returnedQuantity. */
+  returnableQuantity?: number;
   product?: Product;
   batch?: Batch;
 }
@@ -147,17 +184,25 @@ export interface ReturnItem {
   returnId: string;
   saleItemId: string;
   quantity: number;
+  /** What the customer actually got back for this line, after discount/tax. */
+  refundAmount: number;
+  saleItem?: {
+    unitPrice: number;
+    product?: { id: string; name: string };
+  };
 }
 
 export interface Return {
   id: string;
   saleId: string;
-  userId: string;
+  /** Null once the operator's account has been removed. */
+  userId?: string | null;
   reason: string;
   totalRefund: number;
   status: string;
   createdAt: string;
   sale?: Sale;
+  user?: User;
   items?: ReturnItem[];
 }
 
@@ -175,6 +220,8 @@ export interface AuditLog {
 
 // ===== Dashboard Stats =====
 export interface DashboardStats {
+  /** 'all' for an admin, 'own' for a cashier — the money figures are scoped. */
+  scope: 'all' | 'own';
   todaySales: number;
   weeklySales: number;
   monthlySales: number;
@@ -183,7 +230,10 @@ export interface DashboardStats {
   totalInventoryValue: number;
   productsInStock: number;
   lowStockCount: number;
+  /** Batches inside the warning window, expired ones excluded. */
   expiringCount: number;
+  /** Batches already past their expiry date. */
+  expiredCount: number;
   todayTransactions: number;
   productsSoldToday: number;
   stockReceivedToday: number;
@@ -231,6 +281,50 @@ export interface DailySalesRecord {
 
 export interface DailySalesDetail extends DailySalesRecord {
   sales: Sale[];
+}
+
+// ===== Stock Transfers =====
+
+/**
+ * A transfer is a request to move goods from one branch's shelf to another's.
+ * It is deliberately NOT a relocation: the source batch is debited and a
+ * separate destination batch is credited, so every sale that already referenced
+ * the source batch keeps pointing at the branch that actually held it.
+ */
+export type TransferStatus = 'pending' | 'approved' | 'completed' | 'rejected' | 'cancelled';
+
+export interface StockTransferLine {
+  id: string;
+  productId: string;
+  sourceBatchId: string;
+  /** Null until completion — the receiving batch is created as goods arrive. */
+  destBatchId?: string | null;
+  quantity: number;
+  /** Cost is snapshotted at raise time so later price edits cannot restate it. */
+  unitCost: number;
+  product: { id: string; name: string; unit: string };
+  sourceBatch: { id: string; batchNumber: string; expiryDate?: string | null };
+  destBatch?: { id: string; batchNumber: string; quantity: number } | null;
+}
+
+export interface StockTransfer {
+  id: string;
+  reference: string;
+  fromBranchId: string;
+  toBranchId: string;
+  status: TransferStatus;
+  notes?: string | null;
+  createdById?: string | null;
+  approvedById?: string | null;
+  approvedAt?: string | null;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  fromBranch: { id: string; name: string; code: string };
+  toBranch: { id: string; name: string; code: string };
+  createdBy?: { id: string; name: string } | null;
+  approvedBy?: { id: string; name: string } | null;
+  lines: StockTransferLine[];
 }
 
 // ===== Chart Data =====

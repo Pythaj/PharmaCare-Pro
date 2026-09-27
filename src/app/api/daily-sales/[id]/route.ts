@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { toNumber } from '@/lib/utils'
 
-// GET /api/daily-sales/[id] — get a specific day's record with all sales
+/**
+ * GET /api/daily-sales/[id] — get a specific day's record with all sales
+ *
+ * A daily record belongs to exactly one branch, and the day-close recomputation
+ * is MONEY. Both used to ignore the branch entirely: the sales list was filtered
+ * only by date, and closing a day summed every branch's takings for that date
+ * into the record. Two branches trading on the same day would produce a
+ * "closed" register whose revenue matched neither of them.
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -21,6 +30,7 @@ export async function GET(
       include: {
         opener: { select: { id: true, name: true } },
         closer: { select: { id: true, name: true } },
+        branch: { select: { id: true, name: true, code: true } },
       },
     })
 
@@ -28,13 +38,22 @@ export async function GET(
       return NextResponse.json({ error: 'Daily sales record not found' }, { status: 404 })
     }
 
-    // Fetch all sales for this date (exclusive next-midnight bound)
+    if (auth.scope!.branchId && record.branchId !== auth.scope!.branchId) {
+      return NextResponse.json(
+        { error: 'That register belongs to a different branch' },
+        { status: 403 }
+      )
+    }
+
+    // Fetch all sales for this date (exclusive next-midnight bound), narrowed to
+    // the RECORD's branch — not the caller's, so a consolidated view still
+    // returns a single coherent day's book for the branch it asked about.
     const dayStart = new Date(record.date + 'T00:00:00')
     const dayEnd = new Date(record.date + 'T00:00:00')
     dayEnd.setDate(dayEnd.getDate() + 1)
 
     const sales = await db.sale.findMany({
-      where: { createdAt: { gte: dayStart, lt: dayEnd } },
+      where: { branchId: record.branchId, createdAt: { gte: dayStart, lt: dayEnd } },
       include: {
         user: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, phone: true } },
@@ -84,7 +103,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAuth(request)
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -101,6 +120,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'Daily sales record not found' }, { status: 404 })
     }
 
+    // You can only close or reopen your own shop's register. An admin parked on
+    // Branch A closing Branch B's day would write Branch A's approval over
+    // Branch B's books.
+    if (auth.scope!.branchId && record.branchId !== auth.scope!.branchId) {
+      return NextResponse.json(
+        { error: 'That register belongs to a different branch' },
+        { status: 403 }
+      )
+    }
+
     if (action === 'close') {
       if (record.status === 'closed') {
         return NextResponse.json({ error: 'This day is already closed' }, { status: 400 })
@@ -112,18 +141,27 @@ export async function PATCH(
       dayEnd.setDate(dayEnd.getDate() + 1)
 
       const sales = await db.sale.findMany({
-        where: { createdAt: { gte: dayStart, lt: dayEnd } },
+        where: { branchId: record.branchId, createdAt: { gte: dayStart, lt: dayEnd } },
         include: { items: true },
       })
 
-      const totalRevenue = sales.reduce((sum, s) => sum + s.totalAmount, 0)
-      const totalProfit = sales.reduce((sum, s) => sum + s.profit, 0)
-      const totalDiscount = sales.reduce((sum, s) => sum + s.discount, 0)
-      const totalTransactions = sales.length
+      // Money columns are Decimal — flatten to numbers so the closing totals
+      // are plain arithmetic instead of a mix of Decimal objects.
+      const totals = sales.map((s) => ({
+        totalAmount: toNumber(s.totalAmount),
+        profit: toNumber(s.profit),
+        discount: toNumber(s.discount),
+        paymentMethod: s.paymentMethod,
+      }))
+
+      const totalRevenue = totals.reduce((sum, s) => sum + s.totalAmount, 0)
+      const totalProfit = totals.reduce((sum, s) => sum + s.profit, 0)
+      const totalDiscount = totals.reduce((sum, s) => sum + s.discount, 0)
+      const totalTransactions = totals.length
       const totalItemsSold = sales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
-      const cashTotal = sales.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
-      const cardTotal = sales.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
-      const mobileMoneyTotal = sales.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
+      const cashTotal = totals.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
+      const cardTotal = totals.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
+      const mobileMoneyTotal = totals.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
 
       const updated = await db.dailySalesRecord.update({
         where: { id },
@@ -153,6 +191,7 @@ export async function PATCH(
         entity: 'DailySalesRecord',
         entityId: id,
         details: `Closed register for ${record.date} (GHS ${totalRevenue.toFixed(2)} across ${totalTransactions} sales)`,
+        branchId: record.branchId,
         ipAddress: getClientIp(request),
       })
 
@@ -187,6 +226,7 @@ export async function PATCH(
         entity: 'DailySalesRecord',
         entityId: id,
         details: `Reopened register for ${record.date}`,
+        branchId: record.branchId,
         ipAddress: getClientIp(request),
       })
 
