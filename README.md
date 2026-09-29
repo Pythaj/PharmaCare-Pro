@@ -10,7 +10,7 @@ A comprehensive, production-ready pharmacy management system built with modern w
 - Real-time product search with category filtering
 - Cart management with quantity controls and per-item batch tracking
 - Multiple payment methods: Cash, Card, Mobile Money (MoMo)
-- Automatic tax calculation (12.5% VAT) and manual discounts
+- Shelf prices are final — no tax line and no discount line, VAT-inclusive
 - Quick Walk-In customer registration directly from the POS
 - Professional receipt generation with print support
 - Automatic stock deduction on sale completion with batch-level tracking (FIFO by expiry)
@@ -45,7 +45,7 @@ A comprehensive, production-ready pharmacy management system built with modern w
 
 ### Settings & Customization
 - Pharmacy business information (name, address, phone, email, license number)
-- Tax rate configuration (default 12.5% VAT)
+- Shelf prices are charged as entered (no tax or discount to configure)
 - Business hours and closed days management
 - Receipt customization (footer message)
 - Theme color picker with 6 accent themes (Emerald, Blue, Violet, Rose, Amber, Teal)

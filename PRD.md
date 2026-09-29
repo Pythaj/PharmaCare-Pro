@@ -68,7 +68,7 @@ PharmaCare Pro is a modern, comprehensive pharmacy management system designed fo
 | POS-007 | Calculate subtotal, 12.5% VAT (configurable), discount (manual input), and total | Must |
 | POS-008 | Support three payment methods: Cash, Card, Mobile Money | Must |
 | POS-009 | On sale completion: create sale record, deduct stock from specific batch (FIFO by expiry), generate invoice number, show receipt | Must |
-| POS-010 | Receipt shows: pharmacy name, address, phone, invoice number, date/time, items with prices, subtotal, tax, discount, total, payment method, cashier name | Must |
+| POS-010 | Receipt shows: pharmacy name, address, phone, invoice number, date/time, items with prices, subtotal, total, payment method, cashier name | Must |
 | POS-011 | Print receipt via browser print function | Must |
 | POS-012 | Search existing customers and assign to sale | Must |
 | POS-013 | Quick Walk-In customer registration from POS (name + optional phone) | Must |
@@ -154,7 +154,7 @@ PharmaCare Pro is a modern, comprehensive pharmacy management system designed fo
 |---|---|---|
 | SET-001 | Configure pharmacy business information: name, address, phone, email, license number | Must |
 | SET-002 | App name updates reflect immediately across sidebar, login page, and document title | Must |
-| SET-003 | Configure tax rate (default 12.5%) | Must |
+| SET-003 | ~~Configure tax rate~~ — REMOVED. Shelf prices are final and charged as entered; there is no tax line. | Removed |
 | SET-004 | Set business hours and closed days | Should |
 | SET-005 | Customize receipt footer message | Should |
 | SET-006 | Theme color picker with 6 accent themes | Must |
