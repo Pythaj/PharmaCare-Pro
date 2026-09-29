@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin, requireBranchScope } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { classifyProductExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
-import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding'
+import { seedCatalogueForAllBranches, SEED_BATCH_NUMBER } from '@/lib/catalogue-seeding'
 import {
   parseProductName,
   parseOptionalGenericName,
@@ -12,7 +12,12 @@ import {
   parseProductUnit,
   parseReorderLevel,
   parseMoney,
+  parseOpeningStock,
 } from '@/lib/product-input'
+import {
+  createEffectiveValueResolver,
+  loadBranchProductOverrides,
+} from '@/lib/branch-product-settings'
 
 export async function GET(request: NextRequest) {
   const auth = await requireBranchScope(request)
@@ -91,6 +96,13 @@ export async function GET(request: NextRequest) {
       _count: { _all: true },
     })
     const expiredProductIds = new Set(expiredGroups.map((g) => g.productId))
+
+    // Per-branch reorder thresholds and default batch prices, in one query.
+    // Empty on "All branches", where every product resolves to its chain-wide
+    // default — there is no single branch to answer for there.
+    const resolveValues = createEffectiveValueResolver(
+      await loadBranchProductOverrides(auth.scope!.branchId)
+    )
 
     // PER-BRANCH AVAILABILITY (admin only)
     //
@@ -172,8 +184,12 @@ export async function GET(request: NextRequest) {
       const hasExpiringBatches = sellableExpiryStatus === 'expiring_soon';
       const expiryStatus = hasExpiredBatches ? 'expired' : sellableExpiryStatus;
 
-      // Combined stock status, from the shared classifier.
-      const stockStatus = classifyStock(totalStock, p.reorderLevel);
+      // Combined stock status, from the shared classifier, using THIS branch's
+      // reorder threshold. The chain-wide `p.reorderLevel` used to be compared
+      // against branch-scoped stock, so one shop's reorder policy moved
+      // another's low-stock badge.
+      const effective = resolveValues(p);
+      const stockStatus = classifyStock(totalStock, effective.reorderLevel);
 
       return {
         id: p.id,
@@ -182,7 +198,15 @@ export async function GET(request: NextRequest) {
         categoryId: p.categoryId,
         description: p.description,
         unit: p.unit,
+        // The chain-wide value, unchanged, because this field is round-tripped
+        // by the edit form: answering it with the effective value would let a
+        // branch override be saved as a global change. The effective value the
+        // classification actually used is sent alongside it, flagged.
         reorderLevel: p.reorderLevel,
+        effectiveReorderLevel: effective.reorderLevel,
+        reorderLevelIsBranchOverride: effective.overriddenFields.includes('reorderLevel'),
+        effectiveSellingPrice: effective.sellingPrice,
+        effectiveCostPrice: effective.costPrice,
         defaultCostPrice: Number(p.defaultCostPrice),
         defaultSellingPrice: Number(p.defaultSellingPrice),
         active: p.active,
@@ -243,11 +267,11 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     // Auth from HttpOnly JWT cookie — identity is never trusted from the body
-    const auth = await requireAdmin(request)
+    const auth = await requireBranchScope(request, { admin: true })
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
-    const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice } = body
+    const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice, initialStock } = body
 
     // Shared validators — see lib/product-input for what these replaced.
     const parsedName = parseProductName(name)
@@ -292,6 +316,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: parsedSelling.error }, { status: 400 })
     }
 
+    // The optional "how many are on the shelf now?" box. Absent/zero is normal —
+    // the drug joins the catalogue at every branch with no stock anywhere.
+    const parsedStock = parseOpeningStock(initialStock)
+    if (!parsedStock.ok) {
+      return NextResponse.json({ error: parsedStock.error }, { status: 400 })
+    }
+    const opening = parsedStock.value
+
+    // A `Product` is chain-wide catalogue data, so an admin with no branch
+    // selected can still create one. But the opening quantity is real stock,
+    // which is physically held at ONE branch — so receiving it needs a branch
+    // and is refused on "All branches" rather than being filed somewhere
+    // arbitrary. This is the same rule `POST /api/batches` enforces.
+    const stockBranchId = auth.scope?.branchId ?? null
+    if (opening && !stockBranchId) {
+      return NextResponse.json(
+        {
+          error:
+            'Select the branch holding this stock before saving, or leave the quantity at 0 to add the drug to the catalogue without stock',
+        },
+        { status: 400 }
+      )
+    }
+
     if (parsedCategoryId.value) {
       const category = await db.category.findUnique({
         where: { id: parsedCategoryId.value },
@@ -327,19 +375,98 @@ export async function POST(request: NextRequest) {
       // every till straight away while real quantities stay owner-entered.
       await seedCatalogueForAllBranches(tx, [created.id])
 
+      // The opening count is written INSIDE the same transaction as the product.
+      // Doing it after would leave a window where the drug exists with no stock
+      // anywhere — and if the batch write then failed, the admin would be told it
+      // saved while the quantity they typed was silently lost.
+      if (opening && stockBranchId) {
+        const batchNumber = opening.batchNumber || SEED_BATCH_NUMBER
+
+        // A real expiry when one was given; otherwise the seeded far-future date,
+        // which must not read as "expired" on the low-stock panel.
+        const expiryDate = opening.expiryDate
+          ? new Date(`${opening.expiryDate}T00:00:00`)
+          : new Date(new Date().setFullYear(new Date().getFullYear() + 100))
+
+        // Priced from the catalogue figures the admin just entered, so the drug
+        // cannot be sold for 0 on the strength of a fresh batch — the exact
+        // failure `seedCatalogueForAllBranches` documents.
+        const counted = {
+          quantity: opening.quantity,
+          costPrice: parsedCost.value,
+          sellingPrice: parsedSelling.value,
+          expiryDate,
+        }
+
+        await tx.batch.upsert({
+          where: {
+            productId_batchNumber_branchId: {
+              productId: created.id,
+              batchNumber,
+              branchId: stockBranchId,
+            },
+          },
+          create: {
+            productId: created.id,
+            branchId: stockBranchId,
+            batchNumber,
+            ...counted,
+          },
+          // Deliberately NOT `update: {}`. The seeding call above has already
+          // created a quantity-0 STOCK-001 row for this exact (product, branch), so
+          // when the admin leaves the batch number blank — the common case — this
+          // upsert MATCHES that row instead of creating a new one. An empty update
+          // would leave it at zero, silently discarding the opening count the admin
+          // just typed while the API still answered 201: the drug would appear on
+          // the till as "in stock" and then have nothing to sell.
+          //
+          // Overwriting is safe precisely because the product is brand new. This is
+          // the only batch that can exist for it, and it was created seconds ago at
+          // zero, so there is no counted stock here to clobber.
+          update: counted,
+        })
+      }
+
       return created
     })
+
+    // Name the branch in the audit trail when an opening count was booked in.
+    // "Created product X" alone cannot answer "which shelf did those units
+    // land on?" six months later during a stock take.
+    const stockBranch = opening && stockBranchId
+      ? await db.branch.findUnique({
+          where: { id: stockBranchId },
+          select: { name: true },
+        })
+      : null
 
     await logAudit({
       userId: auth.user!.userId,
       action: 'CREATE',
       entity: 'Product',
       entityId: product.id,
-      details: `Created product "${product.name}"`,
+      details: opening
+        ? `Created product "${product.name}" with ${opening.quantity} unit(s) of opening stock at ${stockBranch?.name ?? stockBranchId}`
+        : `Created product "${product.name}" with no stock`,
       ipAddress: getClientIp(request),
     })
 
-    return NextResponse.json(product, { status: 201 })
+    return NextResponse.json(
+      {
+        ...product,
+        // Echoed so the client can confirm WHERE the quantity went instead of
+        // assuming the branch it had selected.
+        openingStock: opening
+          ? {
+              quantity: opening.quantity,
+              batchNumber: opening.batchNumber || SEED_BATCH_NUMBER,
+              branchId: stockBranchId,
+              branchName: stockBranch?.name ?? null,
+            }
+          : null,
+      },
+      { status: 201 }
+    )
   } catch (error) {
     console.error('Product create error:', error)
     return NextResponse.json(

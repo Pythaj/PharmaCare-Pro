@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import { useAppStore } from '@/stores/app-store';
-import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
+import { money } from '@/lib/currency';
 import type { Branch, StockTransfer, TransferStatus } from '@/types';
 
 /** Shape of a row from GET /api/batches, narrowed to what the picker needs. */
@@ -75,23 +75,12 @@ const STATUS_FILTERS: { value: 'all' | TransferStatus; label: string }[] = [
  */
 export default function StockTransfersView() {
   const activeBranch = useAppStore((s) => s.activeBranch);
-  const { settings } = usePharmacySettings();
 
   // Stock value is money, so it follows the shop's configured currency rather
-  // than a hardcoded symbol. A bad code in settings must not blank the table.
-  const formatMoney = useMemo(
-    () => (value: number) => {
-      try {
-        return new Intl.NumberFormat('en-GH', {
-          style: 'currency',
-          currency: settings.display.currency,
-        }).format(value);
-      } catch {
-        return `${settings.display.currency} ${value.toFixed(2)}`;
-      }
-    },
-    [settings.display.currency]
-  );
+  // than a hardcoded symbol. `@/lib/currency` owns the formatting — including
+  // the fallback for a bad code in settings, which must not blank the table —
+  // so this view and every other money display agree on the result.
+  const formatMoney = useMemo(() => (value: number) => money(value), []);
 
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [loading, setLoading] = useState(true);

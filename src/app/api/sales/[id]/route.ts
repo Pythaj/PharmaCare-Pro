@@ -64,8 +64,6 @@ export async function GET(
     const normalized = {
       ...sale,
       subtotal: Number(sale.subtotal),
-      tax: Number(sale.tax),
-      discount: Number(sale.discount),
       totalAmount: Number(sale.totalAmount),
       profit: Number(sale.profit),
       items: sale.items.map((item) => {
@@ -138,9 +136,30 @@ export async function DELETE(
 
     // Atomic: restore batch quantities BEFORE removing the sale so stock
     // never silently disappears with the record (data-integrity fix).
+    //
+    // The restore is branch-checked rather than trusted. `POST /api/sales` now
+    // refuses to sell a batch the till does not own, so a correctly-written sale
+    // can only ever reference its own branch's batches. But a database that ran
+    // before that fix may already contain a sale pointing at a foreign batch, and
+    // crediting that shelf on void would invent inventory in a branch that never
+    // sold the goods. So the branch is re-asserted here instead of assumed: the
+    // sale is still deleted (the operator asked for that), but the mis-attributed
+    // units are left where they are and logged loudly enough to reconcile.
     await db.$transaction(async (tx) => {
       for (const item of sale.items) {
         if (!item.batchId) continue
+        const batch = await tx.batch.findFirst({
+          where: { id: item.batchId, branchId: sale.branchId },
+          select: { id: true },
+        })
+        if (!batch) {
+          console.error(
+            `[DELETE /api/sales/${id}] sale ${sale.invoiceNo}: item ${item.id} references batch ` +
+              `${item.batchId}, which is not owned by branch ${sale.branchId} — skipped restoring ` +
+              `${item.quantity} unit(s). This is pre-existing cross-branch data; reconcile manually.`
+          )
+          continue
+        }
         await tx.batch.update({
           where: { id: item.batchId },
           data: { quantity: { increment: item.quantity } },

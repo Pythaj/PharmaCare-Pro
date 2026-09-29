@@ -1,42 +1,23 @@
 'use client';
 
 import { useAppStore } from '@/stores/app-store';
-import type { Page } from '@/types';
-import { LayoutDashboard, ShoppingCart, Package, Warehouse, Menu, Receipt } from 'lucide-react';
+import { getBottomNavItems } from '@/lib/nav';
+import { Menu } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-interface BottomNavItem {
-  label: string;
-  page: Page;
-  icon: React.ElementType;
-}
-
-// Mirrors the sidebar's primary destinations so the phone thumb-reach nav stays
-// in sync with the same role rules (admin vs sales) — single source (Rule 18).
-const adminBottomNav: BottomNavItem[] = [
-  { label: 'Dashboard', page: 'admin-dashboard', icon: LayoutDashboard },
-  { label: 'POS', page: 'pos', icon: ShoppingCart },
-  { label: 'Products', page: 'products', icon: Package },
-  { label: 'Inventory', page: 'inventory', icon: Warehouse },
-  { label: 'History', page: 'sales-history', icon: Receipt },
-];
-
-const salesBottomNav: BottomNavItem[] = [
-  { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard },
-  { label: 'POS', page: 'pos', icon: ShoppingCart },
-  { label: 'Products', page: 'products', icon: Package },
-  { label: 'History', page: 'sales-history', icon: Receipt },
-];
 
 /**
  * Fixed mobile bottom navigation bar. Only rendered on small screens (< lg);
  * tapping a destination navigates and the drawer stays shut. The last slot is a
  * hamburger that re-opens the full sidebar drawer for everything else.
+ *
+ * The items themselves come from `@/lib/nav` — the same labels, icons and pages
+ * the sidebar uses — so the phone and the drawer can never offer the same screen
+ * under two different names, and an admin-only page cannot be typed into this
+ * bar for cashiers by accident. This file is layout only.
  */
 export function MobileBottomNav() {
   const { currentUser, currentPage, navigate, setSidebarOpen } = useAppStore();
-  const isAdmin = currentUser?.role === 'admin';
-  const items = isAdmin ? adminBottomNav : salesBottomNav;
+  const items = getBottomNavItems(currentUser?.role);
 
   return (
     <nav

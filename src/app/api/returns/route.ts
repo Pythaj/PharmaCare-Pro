@@ -194,13 +194,12 @@ export async function POST(request: NextRequest) {
       }
 
       // Refund what the customer actually paid for these lines: each line's
-      // share of the sale AFTER discount and tax. Refunding shelf price instead
-      // over-refunds any discounted sale and leaves a "partial_return" sale that
-      // can never reach "returned", because the totals no longer line up.
+      // share of the sale's charged total. For any sale this app wrote that
+      // factor is 1, but it is still computed from the recorded figures so a
+      // sale booked before discount and tax were removed is refunded to the
+      // cent instead of at shelf price.
       const salePricing = {
         subtotal: Number(sale.subtotal),
-        discount: Number(sale.discount),
-        tax: Number(sale.tax),
         totalAmount: Number(sale.totalAmount),
       }
       const allocated = allocateRefunds(planned, salePricing)
@@ -236,7 +235,7 @@ export async function POST(request: NextRequest) {
 
       // Approved returns restore stock to the original batch immediately
       if (status === 'approved') {
-        await applyReturnStock(tx, allocated, 1)
+        await applyReturnStock(tx, allocated, 1, sale.branchId)
       }
 
       await recomputeSaleStatus(tx, saleId, salePricing.totalAmount, sale.status)

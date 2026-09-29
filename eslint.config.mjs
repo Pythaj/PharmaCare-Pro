@@ -14,8 +14,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "@typescript-eslint/no-non-null-assertion": "off",
     "@typescript-eslint/ban-ts-comment": "off",
     "@typescript-eslint/prefer-as-const": "off",
-    "@typescript-eslint/no-unused-disable-directive": "off",
-    
+    "@typescript-eslint/no-unused-disable-directive": "off",    
     // React rules
     "react-hooks/exhaustive-deps": "off",
     "react-hooks/purity": "off",
@@ -44,7 +43,33 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills"]
+  // Plain Node scripts. The build, seed and desktop tooling are CommonJS by
+  // design — they run under bare `node` with no transpiler — so the TypeScript
+  // rule that forbids `require()` has no business here. Rewriting them to ESM
+  // would mean touching every packaging and import script for a lint rule that
+  // is about `.ts` files.
+  files: ["**/*.cjs", "**/*.mjs", "**/*.js"],
+  rules: {
+    "@typescript-eslint/no-require-imports": "off",
+    "@typescript-eslint/no-unused-expressions": "off",
+  },
+}, {
+  // Build output, not source. The Electron payloads under `desktop/nextapp` and
+  // `release/win-unpacked` are committed compiled `.next` trees: minified chunks
+  // and bundled route files that no human edits. They were being linted, which
+  // is what made `npm run lint` report 16,000+ problems from ~4,000 generated
+  // files and made the command useless as a check on the code anyone writes.
+  ignores: [
+    "node_modules/**",
+    ".next/**",
+    "out/**",
+    "build/**",
+    "next-env.d.ts",
+    "examples/**",
+    "skills",
+    "desktop/nextapp/**",
+    "release/**",
+  ]
 }];
 
 export default eslintConfig;

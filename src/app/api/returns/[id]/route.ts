@@ -93,7 +93,8 @@ export async function PATCH(
         await applyReturnStock(
           tx,
           existing.items.map((i) => ({ batchId: i.saleItem?.batchId ?? null, quantity: i.quantity })),
-          1
+          1,
+          existing.sale.branchId
         )
       }
 

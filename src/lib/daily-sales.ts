@@ -6,7 +6,6 @@ import type { Prisma } from '@prisma/client';
 export interface DailyAggregates {
   totalRevenue: number;
   totalProfit: number;
-  totalDiscount: number;
   totalTransactions: number;
   totalItemsSold: number;
   cashTotal: number;
@@ -43,14 +42,12 @@ async function buildDailyAggregates(
   const totals = sales.map((s) => ({
     totalAmount: toNumber(s.totalAmount),
     profit: toNumber(s.profit),
-    discount: toNumber(s.discount),
     paymentMethod: s.paymentMethod,
   }));
 
   return {
     totalRevenue: totals.reduce((sum, s) => sum + s.totalAmount, 0),
     totalProfit: totals.reduce((sum, s) => sum + s.profit, 0),
-    totalDiscount: totals.reduce((sum, s) => sum + s.discount, 0),
     totalTransactions: totals.length,
     totalItemsSold: sales.reduce(
       (sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0),
@@ -103,7 +100,6 @@ export async function recomputeDailyRecord(
     data: {
       totalRevenue: aggregates.totalRevenue,
       totalProfit: aggregates.totalProfit,
-      totalDiscount: aggregates.totalDiscount,
       totalTransactions: aggregates.totalTransactions,
       totalItemsSold: aggregates.totalItemsSold,
       cashTotal: aggregates.cashTotal,

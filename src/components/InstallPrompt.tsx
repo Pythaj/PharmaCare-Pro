@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useSyncExternalStore } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Download, Smartphone, CheckCircle, Pill, ArrowDown, ExternalLink, Monitor, Zap, Wifi } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,71 @@ import { isElectron } from '@/lib/electron';
 export type Platform = 'android' | 'ios' | 'desktop' | 'other';
 
 let deferredPrompt: any = null;
-let promptFired = false;
+
+/**
+ * `canInstall` and `installed` are not React state — they are facts about the
+ * browser: a `beforeinstallprompt` event that may already have fired before the
+ * first render, `localStorage`, and a media query. They used to be mirrored into
+ * `useState` and re-synced inside `useEffect`, which is the shape React warns
+ * about for good reason: the effect fires *after* the first paint, so a device
+ * that had already been offered the prompt rendered one frame with the stale
+ * value, and the catch-up `setState` caused a second render to fix it.
+ *
+ * `useSyncExternalStore` is the correct primitive for exactly this — it reads the
+ * external source during render, so there is no wrong first frame, and it
+ * re-reads only when the store actually changes. The snapshot is cached by
+ * identity because `useSyncExternalStore` compares with `Object.is` and would loop
+ * forever on a fresh object every call.
+ */
+interface InstallState {
+  canInstall: boolean;
+  installed: boolean;
+}
+
+const UNKNOWN_INSTALL_STATE: InstallState = { canInstall: false, installed: false };
+let installSnapshot: InstallState = UNKNOWN_INSTALL_STATE;
+const installListeners = new Set<() => void>();
+
+function notifyInstallState() {
+  for (const listener of installListeners) listener();
+}
+
+function readInstallState(): InstallState {
+  const canInstall = !!deferredPrompt;
+  const installed =
+    typeof window !== 'undefined' &&
+    (isStandalone() || localStorage.getItem('pharmacare_installed') === 'true');
+
+  if (installSnapshot.canInstall !== canInstall || installSnapshot.installed !== installed) {
+    installSnapshot = { canInstall, installed };
+  }
+  return installSnapshot;
+}
+
+function subscribeToInstallState(onStoreChange: () => void): () => void {
+  installListeners.add(onStoreChange);
+
+  const media = window.matchMedia('(display-mode: standalone)');
+  const onDisplayModeChange = () => {
+    localStorage.setItem('pharmacare_installed', isStandalone() ? 'true' : 'false');
+    onStoreChange();
+  };
+
+  window.addEventListener('installpromptready', onStoreChange);
+  window.addEventListener('appjustinstalled', onStoreChange);
+  window.addEventListener('beforeinstallprompt', onStoreChange);
+  window.addEventListener('appinstalled', onStoreChange);
+  media.addEventListener('change', onDisplayModeChange);
+
+  return () => {
+    installListeners.delete(onStoreChange);
+    window.removeEventListener('installpromptready', onStoreChange);
+    window.removeEventListener('appjustinstalled', onStoreChange);
+    window.removeEventListener('beforeinstallprompt', onStoreChange);
+    window.removeEventListener('appinstalled', onStoreChange);
+    media.removeEventListener('change', onDisplayModeChange);
+  };
+}
 
 export function detectPlatform(): Platform {
   if (typeof window === 'undefined') return 'other';
@@ -31,12 +95,10 @@ export function captureInstallPrompt() {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferredPrompt = e;
-      promptFired = true;
       window.dispatchEvent(new Event('installpromptready'));
     });
     window.addEventListener('appinstalled', () => {
       deferredPrompt = null;
-      promptFired = false;
       localStorage.setItem('pharmacare_installed', 'true');
       window.dispatchEvent(new Event('appjustinstalled'));
     });
@@ -44,50 +106,27 @@ export function captureInstallPrompt() {
 }
 
 export function useInstallState() {
-  const [canInstall, setCanInstall] = useState(() => !!deferredPrompt);
-  const [installed, setInstalled] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return isStandalone() || localStorage.getItem('pharmacare_installed') === 'true';
-  });
+  const { canInstall, installed } = useSyncExternalStore(
+    subscribeToInstallState,
+    readInstallState,
+    // Server render: nothing is installable and nothing is installed. Hydration
+    // picks up the real values through the same store, so the markup matches.
+    () => UNKNOWN_INSTALL_STATE
+  );
+
+  // Dismissal is a user decision, not a browser fact, so it stays in React state
+  // rather than the external store. Seeded from localStorage so a user who said
+  // "not now" is not asked again on their next visit, and written back on change
+  // so every `setDismissed(true)` — wherever it is called from — persists.
   const [dismissed, setDismissed] = useState(() => {
     if (typeof window === 'undefined') return true;
     return localStorage.getItem('pharmacare_prompt_dismissed') === 'true';
   });
 
   useEffect(() => {
-    const onReady = () => setCanInstall(!!deferredPrompt);
-    const onInstalled = () => {
-      setInstalled(true);
-      setCanInstall(false);
-      deferredPrompt = null;
-      promptFired = false;
-      localStorage.setItem('pharmacare_installed', 'true');
-    };
-    const onDisplayModeChange = () => {
-      setInstalled(isStandalone());
-    };
-
-    if (deferredPrompt) {
-      setCanInstall(true);
-    }
-    if (isStandalone()) {
-      setInstalled(true);
-    }
-
-    window.addEventListener('installpromptready', onReady);
-    window.addEventListener('appjustinstalled', onInstalled);
-    window.addEventListener('beforeinstallprompt', onReady);
-    window.addEventListener('appinstalled', onInstalled);
-    window.matchMedia('(display-mode: standalone)').addEventListener('change', onDisplayModeChange);
-
-    return () => {
-      window.removeEventListener('installpromptready', onReady);
-      window.removeEventListener('appjustinstalled', onInstalled);
-      window.removeEventListener('beforeinstallprompt', onReady);
-      window.removeEventListener('appinstalled', onInstalled);
-      window.matchMedia('(display-mode: standalone)').removeEventListener('change', onDisplayModeChange);
-    };
-  }, []);
+    if (!dismissed) return;
+    localStorage.setItem('pharmacare_prompt_dismissed', 'true');
+  }, [dismissed]);
 
   return { canInstall, installed, dismissed, setDismissed };
 }
@@ -101,26 +140,40 @@ export async function triggerInstall() {
   deferredPrompt.prompt();
   const result = await deferredPrompt.userChoice;
   deferredPrompt = null;
-  promptFired = false;
+  // The browser fires `appinstalled` on success, but the consumed prompt has to
+  // be reflected immediately: without this the UI keeps offering an "Install"
+  // button whose prompt object no longer exists, and pressing it would silently
+  // do nothing.
+  notifyInstallState();
   return result.outcome === 'accepted';
 }
 
 export default function InstallPrompt() {
-  const [show, setShow] = useState(false);
+  // `revealed` records only the two things the user can cause: the one-second
+  // delay elapsing, and the prompt being closed. Whether the prompt *should* be
+  // visible is derived, not stored.
+  const [revealed, setRevealed] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
-  const { canInstall, installed, dismissed } = useInstallState();
+  const { canInstall, installed, dismissed, setDismissed } = useInstallState();
   const platform = detectPlatform();
 
+  const eligible = canInstall && !installed && !dismissed && !isElectron();
+
   useEffect(() => {
-    if (canInstall && !installed && !dismissed && !isElectron()) {
-      const timer = setTimeout(() => setShow(true), 1000);
-      return () => clearTimeout(timer);
-    }
-    if (installed) {
-      setShow(false);
-    }
-  }, [canInstall, installed, dismissed]);
+    if (!eligible || revealed) return;
+    // A one-second beat, so a cashier mid-sale is not interrupted by a dialog
+    // the instant the app opens. The state change happens in the timer callback,
+    // not synchronously in the effect body.
+    const timer = setTimeout(() => setRevealed(true), 1000);
+    return () => clearTimeout(timer);
+  }, [eligible, revealed]);
+
+  // Derived: previously this was `setShow(false)` inside the effect, which had to
+  // run a second render to hide a prompt the user had just installed the app
+  // away from — the install overlay would linger for a frame over the app they
+  // now have on their home screen.
+  const show = eligible && revealed;
 
   const handleInstall = useCallback(async () => {
     if (canInstall) {
@@ -129,17 +182,19 @@ export default function InstallPrompt() {
       setInstalling(false);
       if (success) {
         setJustInstalled(true);
-        setTimeout(() => setShow(false), 2500);
+        setTimeout(() => setRevealed(false), 2500);
       }
     } else {
-      setShow(false);
+      setRevealed(false);
     }
   }, [canInstall]);
 
   const handleDismiss = useCallback(() => {
-    setShow(false);
-    localStorage.setItem('pharmacare_prompt_dismissed', 'true');
-  }, []);
+    setRevealed(false);
+    // Recorded in the hook, not just localStorage, so `eligible` goes false and
+    // the prompt cannot re-arm on a later `canInstall` change.
+    setDismissed(true);
+  }, [setDismissed]);
 
   const isIOS = platform === 'ios';
 

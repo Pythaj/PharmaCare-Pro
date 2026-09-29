@@ -1,6 +1,6 @@
 'use client';
 
-import { lazy, Suspense, useMemo, useEffect, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useMemo, useEffect, useRef, useSyncExternalStore } from 'react';
 import { useAppStore } from '@/stores/app-store';
 import { fetchLatestSettings } from '@/hooks/use-pharmacy-settings';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -12,7 +12,7 @@ import InstallPrompt, { InstallFAB } from '@/components/InstallPrompt';
 import { ThemeInitializer } from '@/components/ThemeInitializer';
 import { Skeleton } from '@/components/ui/skeleton';
 import type { Page } from '@/types';
-import { ADMIN_ONLY_PAGES } from '@/types';
+import { resolvePageForRole } from '@/lib/nav';
 
 /** Loads app settings (branding) from API on mount, falls back to localStorage */
 function useLoadAppSettings() {
@@ -67,8 +67,10 @@ const ProductsView = lazy(() => import('@/components/pages/ProductsView'));
 const InventoryView = lazy(() => import('@/components/pages/InventoryView'));
 
 const SalesHistoryView = lazy(() => import('@/components/pages/SalesHistoryView'));
+const CustomersView = lazy(() => import('@/components/pages/CustomersView'));
 const ReturnsView = lazy(() => import('@/components/pages/ReturnsView'));
 const ReportsView = lazy(() => import('@/components/pages/ReportsView'));
+const BranchPerformanceView = lazy(() => import('@/components/pages/BranchPerformanceView'));
 const UsersView = lazy(() => import('@/components/pages/UsersView'));
 const AuditLogsView = lazy(() => import('@/components/pages/AuditLogsView'));
     const BranchesView = lazy(() => import('@/components/pages/BranchesView'));
@@ -92,9 +94,6 @@ function PageLoader() {
   );
 }
 
-// Pages that are admin-only (shared with app-store navigate guard)
-const adminOnlyPages = ADMIN_ONLY_PAGES;
-
 const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<() => React.JSX.Element>> = {
   'admin-dashboard': AdminDashboard,
   'sales-dashboard': SalesDashboard,
@@ -103,8 +102,10 @@ const pageComponents: Record<Exclude<Page, 'login'>, React.LazyExoticComponent<(
   'inventory': InventoryView,
 
   'sales-history': SalesHistoryView,
+  'customers': CustomersView,
   'returns': ReturnsView,
   'reports': ReportsView,
+  'branch-performance': BranchPerformanceView,
   'users': UsersView,
   'audit-logs': AuditLogsView,
     'branches': BranchesView,
@@ -116,6 +117,24 @@ export default function Home() {
   useLoadAppSettings();
   const { currentPage, isAuthenticated, sidebarOpen, currentUser, requiresPasswordSetup } = useAppStore();
   const isDesktop = useIsDesktop();
+  const setSidebarOpen = useAppStore((s) => s.setSidebarOpen);
+
+  // Dismiss the mobile navigation when the viewport crosses DOWN into the
+  // drawer layout.
+  //
+  // `defaultSidebarOpen()` in the store only covers the value present at load.
+  // A tablet that was rotated, a foldable unfolding, or a window narrowed past
+  // the breakpoint all leave the flag reading `true` from when the rail was
+  // visible — and on the far side of the breakpoint that same `true` means a
+  // modal drawer over the content. The `wasDesktop` ref makes this fire only on
+  // the transition, so it never fights the user opening the drawer themselves.
+  const wasDesktop = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (wasDesktop.current === isDesktop) return;
+    wasDesktop.current = isDesktop;
+    if (!isDesktop) setSidebarOpen(false);
+  }, [isDesktop, setSidebarOpen]);
+
   const navigate = useAppStore((s) => s.navigate);
   const logout = useAppStore((s) => s.logout);
   const setCurrentUser = useAppStore((s) => s.setCurrentUser);
@@ -159,17 +178,14 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [isAuthenticated, logout, setCurrentUser, setRequiresPasswordSetup, setActiveBranch]);
 
-  // Role-based page access guard
-  const resolvedPage = (() => {
-    if (currentUser?.role !== 'admin' && adminOnlyPages.includes(currentPage)) {
-      // Redirect sales users to their dashboard if they try to access admin pages
-      return 'sales-dashboard' as Page;
-    }
-    if (currentUser?.role === 'admin' && currentPage === 'sales-dashboard') {
-      return 'admin-dashboard' as Page;
-    }
-    return currentPage;
-  })();
+  // Role-based page access guard.
+  //
+  // `resolvePageForRole` is the same function the store's `navigate` uses, so the
+  // two cannot disagree. It matters here because `currentPage` can be persisted:
+  // a cashier whose account was demoted — or who shared a machine with an admin —
+  // rehydrates with an admin page in localStorage, and this is what puts them
+  // back on their own dashboard on the first paint instead of after a click.
+  const resolvedPage = resolvePageForRole(currentUser?.role, currentPage);
 
   useEffect(() => {
     if (resolvedPage !== currentPage) {

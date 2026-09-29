@@ -3,6 +3,10 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchRelationWhere, branchWhere } from '@/lib/branches'
 import { classifyBatchExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
+import {
+  createEffectiveValueResolver,
+  loadBranchProductOverrides,
+} from '@/lib/branch-product-settings'
 
 /**
  * GET /api/dashboard/recent
@@ -32,6 +36,11 @@ export async function GET(request: NextRequest) {
 
     const isAdmin = auth.user!.role === 'admin'
     const branchScope = branchWhere(auth.scope!)
+    // Per-branch reorder thresholds, loaded once. Empty on "All branches", so
+    // every product falls back to its chain-wide default there.
+    const resolveValues = createEffectiveValueResolver(
+      await loadBranchProductOverrides(auth.scope!.branchId)
+    )
     const saleScope = isAdmin ? branchScope : { ...branchScope, userId: auth.user!.userId }
     // Return has no branch of its own — it inherits one from the sale it
     // refunds, so its boundary has to be expressed as a relation filter.
@@ -47,6 +56,11 @@ export async function GET(request: NextRequest) {
         include: {
           user: { select: { id: true, name: true, email: true, role: true } },
           customer: { select: { id: true, name: true, phone: true } },
+          // The shop a sale was rung up in. On the consolidated "All branches"
+          // view this list mixes several shops, and without it two invoices from
+          // different branches are indistinguishable — which is precisely how an
+          // owner ends up reconciling a branch's till against another's takings.
+          branch: { select: { id: true, name: true, code: true } },
           items: {
             include: {
               product: { select: { id: true, name: true } },
@@ -112,7 +126,10 @@ export async function GET(request: NextRequest) {
     for (const product of products) {
       const batches = product.batches.filter((b) => b.quantity > 0)
       const totalQty = batches.reduce((sum, b) => sum + b.quantity, 0)
-      const stockStatus = classifyStock(totalQty, product.reorderLevel)
+      // This branch's reorder threshold, not the chain-wide default — otherwise
+      // the alert text quotes a level this shop was never given.
+      const reorderLevel = resolveValues(product).reorderLevel
+      const stockStatus = classifyStock(totalQty, reorderLevel)
 
       if (stockStatus === 'out_of_stock') {
         stockAlerts.push({
@@ -123,7 +140,7 @@ export async function GET(request: NextRequest) {
           message: `${product.name} is out of stock`,
           severity: 'danger',
           quantity: 0,
-          reorderLevel: product.reorderLevel,
+          reorderLevel,
         })
       } else if (stockStatus === 'low_stock') {
         stockAlerts.push({
@@ -131,10 +148,10 @@ export async function GET(request: NextRequest) {
           key: `${product.id}:low`,
           productId: product.id,
           productName: product.name,
-          message: `${product.name} has only ${totalQty} units (reorder level: ${product.reorderLevel})`,
+          message: `${product.name} has only ${totalQty} units (reorder level: ${reorderLevel})`,
           severity: 'warning',
           quantity: totalQty,
-          reorderLevel: product.reorderLevel,
+          reorderLevel,
         })
       }
 
@@ -173,8 +190,6 @@ export async function GET(request: NextRequest) {
       recentSales: recentSales.map((s) => ({
         ...s,
         subtotal: Number(s.subtotal),
-        tax: Number(s.tax),
-        discount: Number(s.discount),
         totalAmount: Number(s.totalAmount),
         profit: Number(s.profit),
         items: s.items.map((item) => ({

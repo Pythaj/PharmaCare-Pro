@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo, memo, useDeferredValue } from 'react';
+import { money } from '@/lib/currency';
+import { classifyStock } from '@/lib/inventory-alerts';
 import {
   Search,
   Plus,
@@ -15,11 +17,9 @@ import {
   CheckCircle,
   Package,
   AlertTriangle,
-  TrendingDown,
   ArrowDownCircle,
   PackagePlus,
   BarChart3,
-  Clock,
   ArrowUp,
   ArrowDown,
   CircleDot,
@@ -39,9 +39,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { useCatalogueSync } from '@/lib/use-catalogue-sync';
 import {
   Dialog,
@@ -56,11 +54,7 @@ import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
 import { toast } from 'sonner';
 import { Label } from '@/components/ui/label';
 import type { Product, Batch, Customer, CartItem } from '@/types';
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 
 function toDateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -670,8 +664,15 @@ const ProductGrid = memo(function ProductGrid({
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 px-1 pb-4">
         {products.length > 0 ? products.map((product) => {
           const isOutOfStock = product.totalStock === 0;
-          const isLowStock = product.totalStock > 0 && product.totalStock <= (product.reorderLevel || 10);
-          const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil((product.reorderLevel || 10) * 0.3);
+          // The threshold this branch actually uses. `effectiveReorderLevel` is
+          // the branch's own override when it has one; `reorderLevel` stays the
+          // chain-wide default, so using it here made the till badge disagree
+          // with the inventory screen for any branch that overrode it.
+          const reorderLevel = product.effectiveReorderLevel ?? product.reorderLevel ?? 10;
+          // The shared classifier, so "low" means the same thing here as it does
+          // on the products list and the alerts screen.
+          const isLowStock = classifyStock(product.totalStock, reorderLevel) === 'low_stock';
+          const isCritical = product.totalStock > 0 && product.totalStock <= Math.ceil(reorderLevel * 0.3);
           const isInCart = cartQtyMap.has(product.id);
           const cartCount = cartQtyMap.get(product.id) || 0;
           const justAdded = addedToCart.has(product.id);
@@ -776,7 +777,7 @@ const ProductGrid = memo(function ProductGrid({
                   <div className="absolute top-1 right-1">
                     <StockGauge
                       stock={product.totalStock}
-                      reorderLevel={product.reorderLevel || 10}
+                      reorderLevel={reorderLevel}
                       size={22}
                       strokeWidth={2}
                     />
@@ -812,7 +813,7 @@ const ProductGrid = memo(function ProductGrid({
                 {/* Price & Unit */}
                 <div className="flex items-baseline gap-0.5 mb-1">
                   <span className="text-xs lg:text-sm font-bold text-slate-900 leading-none">
-                    {formatGHS(product.minSellingPrice)}
+                    {money(product.minSellingPrice)}
                   </span>
                   <span className="text-[8px] lg:text-[9px] text-slate-400 leading-none">/{product.unit || 'unit'}</span>
                 </div>
@@ -932,9 +933,9 @@ const CartLine = memo(function CartLine({
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm text-slate-800 truncate">{item.productName}</p>
-            <p className="text-xs text-slate-400 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
+            <p className="text-xs text-slate-400 tabular-nums">{money(item.unitPrice)} × {item.quantity}</p>
           </div>
-          <span className="font-bold text-sm text-slate-800 tabular-nums shrink-0">{formatGHS(item.unitPrice * item.quantity)}</span>
+          <span className="font-bold text-sm text-slate-800 tabular-nums shrink-0">{money(item.unitPrice * item.quantity)}</span>
         </div>
         <div className="flex items-center justify-between mt-2">
           {statusLine}
@@ -985,10 +986,10 @@ const CartLine = memo(function CartLine({
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-[12px] text-slate-800 truncate leading-tight">{item.productName}</p>
-          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{formatGHS(item.unitPrice)} × {item.quantity}</p>
+          <p className="text-[10px] text-slate-400 mt-0.5 tabular-nums">{money(item.unitPrice)} × {item.quantity}</p>
         </div>
         <span className="font-bold text-[12px] text-slate-800 tabular-nums shrink-0 pt-px">
-          {formatGHS(item.unitPrice * item.quantity)}
+          {money(item.unitPrice * item.quantity)}
         </span>
       </div>
       <div className="flex items-center justify-between mt-1.5">
@@ -1039,14 +1040,13 @@ const CartLine = memo(function CartLine({
 export default function POSView() {
   const { cart, addToCart, removeFromCart, updateCartQuantity, clearCart, currentUser, activeBranch, selectedCustomerId, setSelectedCustomer, posPresetDate, setPosPresetDate } = useAppStore();
   const isAdminUser = currentUser?.role === 'admin';
-  // Configurable VAT rate + receipt branding come from system settings
+  // Receipt branding comes from system settings
   const { settings } = usePharmacySettings();
   const [searchQuery, setSearchQuery] = useState('');
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
-  const [discount, setDiscount] = useState(0);
   const [notes, setNotes] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
   const [showReceipt, setShowReceipt] = useState(false);
@@ -1055,8 +1055,6 @@ export default function POSView() {
     customerName?: string;
     items: { productName: string; quantity: number; unitPrice: number; total: number; productId: string }[];
     subtotal: number;
-    tax: number;
-    discount: number;
     totalAmount: number;
     paymentMethod: string;
     createdAt: string;
@@ -1101,8 +1099,6 @@ export default function POSView() {
     customerName?: string;
     items: { productName: string; quantity: number; unitPrice: number; total: number; productId: string }[];
     subtotal: number;
-    tax: number;
-    discount: number;
     totalAmount: number;
     paymentMethod: string;
     createdAt: string;
@@ -1411,9 +1407,10 @@ export default function POSView() {
   }, [cart, products, addToCart, updateCartQuantity]);
 
   const subtotal = cart.reduce((sum, item) => sum + Number(item.unitPrice) * item.quantity, 0);
-  const effectiveDiscount = Math.min(discount, subtotal);
-  // VAT is intentionally NOT added at the POS — retail prices are all-inclusive.
-  const total = Math.max(0, subtotal - effectiveDiscount);
+  // Shelf prices are VAT-inclusive and there is no discount, so what the
+  // customer pays is the subtotal. Rounded here to match the server's round2
+  // so the amount shown on screen is the amount that gets stored.
+  const total = Math.round(subtotal * 100) / 100;
 
   // Stable callback for the (memoized) grid's "no results" recovery action.
   const clearSearch = useCallback(() => {
@@ -1482,9 +1479,6 @@ export default function POSView() {
         };
       });
 
-      // Clamp discount to the subtotal (never allow a negative total)
-      const appliedDiscount = Math.min(discount, subtotal);
-
       const res = await fetch('/api/sales', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1497,8 +1491,6 @@ export default function POSView() {
             batchId: item.batchId,
             quantity: item.quantity,
           })),
-          discount: appliedDiscount,
-          tax: 0,
           paymentMethod,
           notes: notes || undefined,
           saleDate,
@@ -1521,8 +1513,6 @@ export default function POSView() {
           productId: item.productId,
         })),
         subtotal: data.subtotal,
-        tax: data.tax,
-        discount: data.discount,
         totalAmount: data.totalAmount,
         paymentMethod: data.paymentMethod,
         createdAt: data.createdAt,
@@ -1568,7 +1558,6 @@ export default function POSView() {
     setCompletedSale(null);
     setPendingSaleData(null);
     clearCart();
-    setDiscount(0);
     setCashReceived(0);
     setNotes('');
     setPaymentMethod('cash');
@@ -1601,7 +1590,7 @@ export default function POSView() {
         {cashReceived >= total && (
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-slate-500">Change due</span>
-            <span className="font-mono font-bold text-emerald-700">{formatGHS(cashReceived - total)}</span>
+            <span className="font-mono font-bold text-emerald-700">{money(cashReceived - total)}</span>
           </div>
         )}
       </div>
@@ -1822,7 +1811,7 @@ export default function POSView() {
             </div>
             <span className="font-bold text-sm tracking-tight">View Cart</span>
             <div className="h-5 w-px bg-white/20" />
-            <span className="font-black text-sm tabular-nums">{formatGHS(total)}</span>
+            <span className="font-black text-sm tabular-nums">{money(total)}</span>
           </motion.button>
         )}
       </AnimatePresence>
@@ -1842,7 +1831,7 @@ export default function POSView() {
                 </div>
                 <div>
                   <h3 className="font-semibold text-sm text-slate-800">Cart</h3>
-                  <p className="text-[10px] text-slate-400">{cart.length > 0 ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${formatGHS(subtotal)}` : 'Empty'}</p>
+                  <p className="text-[10px] text-slate-400">{cart.length > 0 ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${money(subtotal)}` : 'Empty'}</p>
                 </div>
               </div>
               {cart.length > 0 && (
@@ -1883,12 +1872,9 @@ export default function POSView() {
             {/* Payment section */}
             <div className="shrink-0 border-t border-slate-100 bg-white px-4 pt-3 pb-6 space-y-3">
               <div className="rounded-xl border border-slate-100 bg-slate-50/50 px-3 py-2.5 space-y-1">
-                <div className="flex justify-between text-xs"><span className="text-slate-400">Subtotal</span><span className="font-medium font-mono">{formatGHS(subtotal)}</span></div>
-                <div className="flex items-center justify-between text-xs"><span className="text-slate-400">Discount</span>
-                  <Input type="number" value={discount || ''} onChange={(e) => setDiscount(Number(e.target.value) || 0)} className="w-20 h-6 text-xs text-right bg-white border-slate-200 px-1.5 rounded-md" placeholder="0.00" />
-                </div>
+                <div className="flex items-center justify-between text-xs"><span className="text-slate-400">Items</span><span className="font-medium font-mono">{cart.reduce((n, i) => n + i.quantity, 0)}</span></div>
                 <div className="h-px bg-slate-200 my-1" />
-                <div className="flex justify-between items-baseline"><span className="font-bold text-sm text-slate-700">Total</span><span className="font-black text-lg text-emerald-600 font-mono">{formatGHS(total)}</span></div>
+                <div className="flex justify-between items-baseline"><span className="font-bold text-sm text-slate-700">Total</span><span className="font-black text-lg text-emerald-600 font-mono">{money(total)}</span></div>
               </div>
               {renderSaleDatePicker()}
               <div className="flex gap-2">
@@ -1907,7 +1893,7 @@ export default function POSView() {
               <Button className="w-full h-12 bg-gradient-to-r from-emerald-600 to-emerald-500 text-white font-bold text-sm shadow-lg rounded-xl"
                 onClick={() => { setCartOpen(false); setTimeout(handleCompleteSale, 300); }}
                 disabled={cart.length === 0 || submitting}>
-                {submitting ? 'Processing...' : `Complete Sale — ${formatGHS(total)}`}
+                {submitting ? 'Processing...' : `Complete Sale — ${money(total)}`}
               </Button>
             </div>
           </div>
@@ -1939,7 +1925,7 @@ export default function POSView() {
                 <h3 className="font-semibold text-[13px] text-slate-800 leading-tight">Cart</h3>
                 <p className="text-[10px] text-slate-400 leading-tight">
                   {cart.length > 0
-                    ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${formatGHS(subtotal)}`
+                    ? `${cart.length} product${cart.length !== 1 ? 's' : ''} · ${money(subtotal)}`
                     : 'Empty'}
                 </p>
               </div>
@@ -2009,23 +1995,13 @@ export default function POSView() {
             {/* Price Summary — compact card */}
             <div className="rounded-xl border border-slate-100 bg-white shadow-[0_1px_3px_rgba(0,0,0,0.04)] px-3 py-2 space-y-0.5">
               <div className="flex justify-between text-[11px]">
-                <span className="text-slate-400">Subtotal</span>
-                <span className="text-slate-600 font-medium font-mono tabular-nums">{formatGHS(subtotal)}</span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400">Discount</span>
-                <Input
-                  type="number"
-                  value={discount || ''}
-                  onChange={(e) => setDiscount(Number(e.target.value) || 0)}
-                  className="w-20 h-5 text-[10px] text-right bg-slate-50/80 border-slate-200 px-1.5 rounded-md focus-visible:ring-emerald-500/20"
-                  placeholder="0.00"
-                />
+                <span className="text-slate-400">Items</span>
+                <span className="text-slate-600 font-medium font-mono tabular-nums">{cart.reduce((n, i) => n + i.quantity, 0)}</span>
               </div>
               <div className="h-px bg-slate-100 my-1" />
               <div className="flex justify-between items-baseline">
                 <span className="font-bold text-[12px] text-slate-700 uppercase tracking-wide">Total</span>
-                <span className="font-black text-[17px] text-emerald-600 font-mono tabular-nums leading-none">{formatGHS(total)}</span>
+                <span className="font-black text-[17px] text-emerald-600 font-mono tabular-nums leading-none">{money(total)}</span>
               </div>
             </div>
 
@@ -2075,7 +2051,7 @@ export default function POSView() {
               ) : (
                 <span className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4" />
-                  Complete Sale — {formatGHS(total)}
+                  Complete Sale — {money(total)}
                 </span>
               )}
             </Button>
@@ -2231,7 +2207,7 @@ export default function POSView() {
                     {completedSale.changeDue !== undefined && completedSale.changeDue > 0 && (
                       <div>
                         <span className="text-slate-400 text-[9px] uppercase tracking-wider">Change</span>
-                        <p className="font-medium text-emerald-600 font-mono text-[11px]">{formatGHS(completedSale.changeDue)}</p>
+                        <p className="font-medium text-emerald-600 font-mono text-[11px]">{money(completedSale.changeDue)}</p>
                       </div>
                     )}
                   </div>
@@ -2252,8 +2228,8 @@ export default function POSView() {
                         <div key={i} className="grid grid-cols-12 gap-1.5 py-1.5 text-[11px]">
                           <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
                           <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
-                          <span className="col-span-2 text-right text-slate-500 font-mono">{formatGHS(item.unitPrice)}</span>
-                          <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{formatGHS(item.total)}</span>
+                          <span className="col-span-2 text-right text-slate-500 font-mono">{money(item.unitPrice)}</span>
+                          <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{money(item.total)}</span>
                         </div>
                       ))}
                     </div>
@@ -2265,27 +2241,15 @@ export default function POSView() {
                   {/* Totals */}
                   <div className="space-y-1 text-[11px]">
                     <div className="flex justify-between text-slate-500">
-                      <span>Subtotal</span>
-                      <span className="font-mono">{formatGHS(completedSale.subtotal)}</span>
+                      <span>Items</span>
+                      <span className="font-mono">{completedSale.items.reduce((n, i) => n + i.quantity, 0)}</span>
                     </div>
-                    {(completedSale?.tax ?? 0) > 0 && (
-                      <div className="flex justify-between text-slate-500">
-                        <span>VAT</span>
-                        <span className="font-mono">{formatGHS(completedSale.tax)}</span>
-                      </div>
-                    )}
-                    {settings.receipt.showDiscount && completedSale.discount > 0 && (
-                      <div className="flex justify-between text-red-500">
-                        <span>Discount</span>
-                        <span className="font-mono">-{formatGHS(completedSale.discount)}</span>
-                      </div>
-                    )}
 
                     {/* Total box */}
                     <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-1">
                       <div className="flex justify-between items-center">
                         <span className="font-bold text-xs text-emerald-800 uppercase tracking-wider">Total</span>
-                        <span className="font-black text-lg text-emerald-700 font-mono">{formatGHS(completedSale.totalAmount)}</span>
+                        <span className="font-black text-lg text-emerald-700 font-mono">{money(completedSale.totalAmount)}</span>
                       </div>
                     </div>
                   </div>

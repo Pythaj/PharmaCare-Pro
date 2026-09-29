@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { requireAdmin } from '@/lib/require-auth'
 import { hashPassword } from '@/lib/auth'
 import { logAudit, getClientIp } from '@/lib/audit'
-import { parseEmail, parseName, parsePassword, parsePhone, parseOptionalRole, parseOptionalActive } from '@/lib/user-input'
+import { parseEmail, parseName, parsePassword, parsePhone, parseOptionalRole, parseOptionalActive, parseBranchId, parseBranchForRole } from '@/lib/user-input'
 
 const USER_SELECT = {
   id: true,
@@ -13,6 +13,8 @@ const USER_SELECT = {
   phone: true,
   active: true,
   mustChangePassword: true,
+  branchId: true,
+  branch: { select: { id: true, name: true, code: true } },
 } as const
 
 // PATCH /api/users/[id] — partial update (admin only). Passwords hashed at rest.
@@ -32,7 +34,7 @@ export async function PATCH(
   try {
     const { id } = await params
     const body = await request.json()
-    const { active, password, name, phone, role, email } = body
+    const { active, password, name, phone, role, email, branchId } = body
 
     const existing = await db.user.findUnique({ where: { id } })
     if (!existing) {
@@ -108,6 +110,61 @@ export async function PATCH(
       updateData.role = parsedRole.value
     }
 
+    // Branch assignment. Accepted on PATCH for parity with PUT /api/users, and
+    // without it there is no single-account way to repair a branchless user:
+    // the only route that could set branchId was the bulk one.
+    //
+    // The target branch is checked for existence and activeness before it is
+    // written, matching PUT — assigning staff to a deactivated branch would
+    // strand them the moment that branch is switched off.
+    if (branchId !== undefined) {
+      const parsed = parseBranchId(branchId)
+      if (!parsed.ok) {
+        return NextResponse.json({ error: parsed.error }, { status: 400 })
+      }
+      if (parsed.value !== existing.branchId) {
+        if (parsed.value) {
+          const target = await db.branch.findUnique({
+            where: { id: parsed.value },
+            select: { id: true, active: true },
+          })
+          if (!target) {
+            return NextResponse.json({ error: 'Branch not found' }, { status: 400 })
+          }
+          if (!target.active) {
+            return NextResponse.json(
+              { error: 'Staff cannot be assigned to an inactive branch' },
+              { status: 400 }
+            )
+          }
+        }
+        updateData.branchId = parsed.value
+      }
+    }
+
+    // The role/branch invariant, checked against the state that will actually be
+    // STORED rather than the raw request body — otherwise a role change and a
+    // branch change sent together (or a bare role change on an account that
+    // already has no branch) slip past.
+    //
+    // This handler previously had no such guard while the bulk PUT did, so
+    // demoting an admin to `sales` through this route produced an account that
+    // 403s on every branch-scoped endpoint: `resolveScope` throws
+    // BranchConfigurationError for a salesperson with no branch. Worse, the
+    // account was unrepairable from this route, because branchId was not
+    // accepted here at all.
+    //
+    // `parseBranchForRole` is the same function PUT uses, so the rule now has
+    // one implementation instead of two that could drift.
+    const finalRole = (updateData.role as string | undefined) ?? existing.role
+    const finalBranch = 'branchId' in updateData
+      ? (updateData.branchId as string | null)
+      : existing.branchId
+    const branchInvariant = parseBranchForRole(finalRole, finalBranch)
+    if (!branchInvariant.ok) {
+      return NextResponse.json({ error: branchInvariant.error }, { status: 400 })
+    }
+
     if (email !== undefined && email !== null && email !== '') {
       const parsed = parseEmail(email)
       if (!parsed.ok) {
@@ -145,12 +202,31 @@ export async function PATCH(
       select: USER_SELECT,
     })
 
+    // Spell out role and branch changes in the audit text. The schema's own
+    // comment on AuditLog.branchId says these logs exist so a dispute ("who
+    // moved this account to the new branch?") can be settled from the trail
+    // alone — an entry reading only "Updated account a@b.com" cannot answer it.
+    const changes: string[] = []
+    if (updateData.password) changes.push('password reset — setup required')
+    if (updateData.role !== undefined) changes.push(`role → ${updateData.role}`)
+    if ('branchId' in updateData) {
+      changes.push(
+        updateData.branchId
+          ? `branch → ${user.branch?.name ?? updateData.branchId}`
+          : 'branch → all branches'
+      )
+    }
+    if (updateData.active !== undefined) {
+      changes.push(updateData.active ? 'account re-enabled' : 'account disabled')
+    }
+
     await logAudit({
       userId: auth.user!.userId,
+      branchId: user.branchId,
       action: 'UPDATE',
       entity: 'User',
       entityId: id,
-      details: `Updated account ${user.email}${updateData.password ? ' (password reset — setup required)' : ''}`,
+      details: `Updated account ${user.email}${changes.length ? ` (${changes.join(', ')})` : ''}`,
       ipAddress: getClientIp(request),
     })
 

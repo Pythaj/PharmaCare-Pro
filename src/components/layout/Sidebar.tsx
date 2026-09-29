@@ -2,20 +2,9 @@
 
 import { useAppStore } from '@/stores/app-store';
 import type { Page } from '@/types';
+import { getNavSections } from '@/lib/nav';
 import {
   Pill,
-  LayoutDashboard,
-  ShoppingCart,
-  Package,
-  Warehouse,
-  Receipt,
-  RotateCcw,
-  BarChart3,
-  UserCog,
-  Building2,
-  Truck,
-  FileText,
-  Settings,
   X,
   ChevronLeft,
   ChevronRight,
@@ -23,106 +12,18 @@ import {
 } from 'lucide-react';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
-import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '@/lib/utils';
 import { useState } from 'react';
-import { InstallFAB, detectPlatform, isInstallReady, triggerInstall } from '@/components/InstallPrompt';
+import { detectPlatform, isInstallReady, triggerInstall } from '@/components/InstallPrompt';
 import type { Platform } from '@/components/InstallPrompt';
 
-interface NavItem {
-  label: string;
-  page: Page;
-  icon: React.ElementType;
-}
-
-interface NavSection {
-  title: string;
-  items: NavItem[];
-}
-
-// Admin navigation — full access to every section
-const adminNavSections: NavSection[] = [
-  {
-    title: 'OVERVIEW',
-    items: [
-      { label: 'Dashboard', page: 'admin-dashboard', icon: LayoutDashboard },
-    ],
-  },
-  {
-    title: 'OPERATIONS',
-    items: [
-      { label: 'POS', page: 'pos', icon: ShoppingCart },
-      { label: 'Products', page: 'products', icon: Package },
-      { label: 'Inventory', page: 'inventory', icon: Warehouse },
-    ],
-  },
-  {
-    title: 'SALES',
-    items: [
-      { label: 'Sales History', page: 'sales-history', icon: Receipt },
-      { label: 'Returns', page: 'returns', icon: RotateCcw },
-    ],
-  },
-  {
-    title: 'ANALYTICS',
-    items: [
-      { label: 'Reports', page: 'reports', icon: BarChart3 },
-    ],
-  },
-  {
-    title: 'MANAGEMENT',
-    items: [
-      { label: 'Users', page: 'users', icon: UserCog },
-      { label: 'Branches', page: 'branches', icon: Building2 },
-      { label: 'Stock Transfers', page: 'transfers', icon: Truck },
-      { label: 'Audit Logs', page: 'audit-logs', icon: FileText },
-      { label: 'Settings', page: 'settings', icon: Settings },
-    ],
-  },
-];
-
-// Sales navigation — clean, minimal, zero admin awareness
-const salesNavSections: NavSection[] = [
-  {
-    title: 'MAIN',
-    items: [
-      { label: 'Dashboard', page: 'sales-dashboard', icon: LayoutDashboard },
-      { label: 'POS', page: 'pos', icon: ShoppingCart },
-    ],
-  },
-  {
-    title: 'RECORDS',
-    items: [
-      { label: 'Products', page: 'products', icon: Package },
-      { label: 'Sales History', page: 'sales-history', icon: Receipt },
-    ],
-  },
-];
-
-const pageNameMap: Record<Page, string> = {
-  'login': 'Login',
-  'admin-dashboard': 'Dashboard',
-  'sales-dashboard': 'Dashboard',
-  'pos': 'POS',
-  'products': 'Products',
-  'inventory': 'Inventory',
-
-  'sales-history': 'Sales History',
-  'returns': 'Returns',
-  'reports': 'Reports',
-  'users': 'Users',
-    'branches': 'Branches',
-    'transfers': 'Stock Transfers',
-  'audit-logs': 'Audit Logs',
-  'settings': 'Settings',
-};
-
-export function getPageName(page: Page): string {
-  return pageNameMap[page] || page;
-}
+// Navigation content, icons, page titles and the access rule all come from
+// @/lib/nav. This component is layout only — it no longer decides what a role
+// may see, because that is the part that used to drift between the drawer, the
+// phone bar and the router.
 
 // ─── Collapsed Section Dot ───
 function CollapsedSectionDot() {
@@ -158,7 +59,7 @@ export function Sidebar() {
     if (window.innerWidth < 1024) setSidebarOpen(false);
   }
 
-  const visibleSections = isAdmin ? adminNavSections : salesNavSections;
+  const visibleSections = getNavSections(currentUser?.role);
 
   // Shared sidebar width animation config
   const WIDTH_OPEN = 256;

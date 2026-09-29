@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { money } from '@/lib/currency';
 import { RotateCcw, Trash2, Check, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,10 +26,6 @@ import {
 import { toast } from 'sonner';
 import type { Return, Sale } from '@/types';
 import { allocateRefunds, sumRefunds } from '@/lib/returns';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 interface ReturnItemRow {
   saleItemId: string;
@@ -140,8 +137,7 @@ export default function ReturnsView() {
 
   /**
    * Preview uses the SAME allocator the API prices the refund with, so the
-   * figure shown here is the figure that gets refunded — including the sale's
-   * discount and tax share.
+   * figure shown here is the figure that gets refunded.
    */
   const { previewTotal, previewLines } = useMemo(() => {
     const lines = returnItems
@@ -152,8 +148,6 @@ export default function ReturnsView() {
 
     const allocated = allocateRefunds(lines, {
       subtotal: Number(selectedSale.subtotal ?? 0),
-      discount: Number(selectedSale.discount ?? 0),
-      tax: Number(selectedSale.tax ?? 0),
       totalAmount: Number(selectedSale.totalAmount ?? 0),
     });
 
@@ -197,7 +191,7 @@ export default function ReturnsView() {
         {
           description:
             form.status === 'approved'
-              ? `Refunded ${formatGHS(previewTotal)} and restored stock.`
+              ? `Refunded ${money(previewTotal)} and restored stock.`
               : 'Stock and money are untouched until you approve it.',
         }
       );
@@ -318,7 +312,7 @@ export default function ReturnsView() {
                       <TableCell className="font-mono text-xs">{ret.sale?.invoiceNo ?? '-'}</TableCell>
                       <TableCell>{ret.sale?.customer?.name ?? 'Walk-in'}</TableCell>
                       <TableCell className="hidden md:table-cell max-w-[200px] truncate">{ret.reason}</TableCell>
-                      <TableCell className="text-right font-medium">{formatGHS(ret.totalRefund)}</TableCell>
+                      <TableCell className="text-right font-medium">{money(ret.totalRefund)}</TableCell>
                       <TableCell>{getStatusBadge(ret.status)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(ret.createdAt).toLocaleDateString('en-GH')}
@@ -401,7 +395,7 @@ export default function ReturnsView() {
                   ) : (
                     returnableSales.map((sale) => (
                       <SelectItem key={sale.id} value={sale.id}>
-                        {sale.invoiceNo} - {sale.customer?.name ?? 'Walk-in'} ({formatGHS(sale.totalAmount)})
+                        {sale.invoiceNo} - {sale.customer?.name ?? 'Walk-in'} ({money(sale.totalAmount)})
                       </SelectItem>
                     ))
                   )}
@@ -462,7 +456,7 @@ export default function ReturnsView() {
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-medium">{item.productName}</p>
                             <p className="text-xs text-muted-foreground">
-                              {formatGHS(item.unitPrice)} each
+                              {money(item.unitPrice)} each
                               {item.alreadyReturned > 0 && ` · ${item.alreadyReturned} already returned`}
                             </p>
                           </div>
@@ -480,7 +474,7 @@ export default function ReturnsView() {
                             <span className="text-xs text-muted-foreground">/ {item.maxQty}</span>
                           </div>
                           <span className="font-medium text-sm w-28 text-right">
-                            {item.quantity > 0 ? formatGHS(preview) : '—'}
+                            {item.quantity > 0 ? money(preview) : '—'}
                           </span>
                         </div>
                       );
@@ -489,9 +483,9 @@ export default function ReturnsView() {
                 )}
                 <div className="flex justify-end items-baseline gap-3 mt-3 pt-3 border-t">
                   <span className="text-xs text-muted-foreground">
-                    Net of the sale's discount and tax
+                    Shelf price of the units being returned
                   </span>
-                  <span className="font-bold">Total Refund: {formatGHS(previewTotal)}</span>
+                  <span className="font-bold">Total Refund: {money(previewTotal)}</span>
                 </div>
               </div>
             )}

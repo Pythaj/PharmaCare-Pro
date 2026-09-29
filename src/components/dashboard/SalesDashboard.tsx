@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { money } from '@/lib/currency';
 import {
   ShoppingCart,
   Search,
@@ -23,10 +24,6 @@ import {
 } from '@/components/ui/table';
 import { useAppStore } from '@/stores/app-store';
 import type { DashboardStats } from '@/types';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 interface RecentSale {
   id: string;
@@ -122,7 +119,7 @@ export default function SalesDashboard() {
                     </div>
                   </div>
                   <p className="mt-3 text-2xl font-bold">
-                    {card.format === 'currency' ? formatGHS(card.value) : card.value.toLocaleString()}
+                    {card.format === 'currency' ? money(card.value) : card.value.toLocaleString()}
                   </p>
                 </CardContent>
               </Card>
@@ -181,7 +178,7 @@ export default function SalesDashboard() {
                       <TableRow key={sale.id}>
                         <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
                         <TableCell>{sale.customerName ?? 'Walk-in'}</TableCell>
-                        <TableCell className="text-right font-medium">{formatGHS(sale.totalAmount)}</TableCell>
+                        <TableCell className="text-right font-medium">{money(sale.totalAmount)}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge>
                         </TableCell>

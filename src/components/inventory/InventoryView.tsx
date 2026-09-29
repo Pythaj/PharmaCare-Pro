@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { money } from '@/lib/currency';
 import {
   Search,
   Package,
@@ -39,10 +40,6 @@ import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
 import { classifyBatchExpiry, daysUntil } from '@/lib/inventory-alerts';
 import { motion, AnimatePresence } from 'framer-motion';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 // ===== Alert Types =====
 interface OutOfStockItem {
@@ -102,6 +99,12 @@ interface AlertSummary {
 }
 
 interface InventoryAlerts {
+  /**
+   * The window, in days, that produced `expiringSoon` — sent by the API from
+   * `notifications.expiryAlertDays`. The heading quotes this rather than a
+   * literal, so the label cannot claim a different window than the one applied.
+   */
+  expiryWarningDays: number;
   summary: AlertSummary;
   outOfStock: OutOfStockItem[];
   lowStock: LowStockItem[];
@@ -117,6 +120,9 @@ interface ProductWithBatches {
   description?: string | null;
   unit: string;
   reorderLevel: number;
+  /** This branch's threshold, sent by /api/products alongside the chain-wide
+   * `reorderLevel` above. Falls back to it when absent. */
+  effectiveReorderLevel?: number;
   totalStock: number;
   inventoryValue?: number;
   earliestExpiry?: string | null;
@@ -222,10 +228,13 @@ export default function InventoryView() {
 
   const getBatchStatus = (batch: { expiryDate: string; currentQty: number }) => {
     if (batch.currentQty <= 0) return { label: 'Depleted', className: 'bg-slate-100 text-slate-500', dotColor: 'bg-slate-400' };
-    // Shared helpers: same calendar-day maths and same 90-day window as the
-    // API, so a batch never reads "Good" here and "Expiring Soon" on a badge.
+    // Shared helpers: same calendar-day maths and the same configured warning
+    // window the API applied, so a batch never reads "Good" here and "Expiring
+    // Soon" on a badge. `alerts?.expiryWarningDays` is echoed from the server;
+    // absent on the first render, it falls back to the shared default rather
+    // than a second literal that could drift.
     const diffDays = daysUntil(batch.expiryDate);
-    const status = classifyBatchExpiry(batch.expiryDate);
+    const status = classifyBatchExpiry(batch.expiryDate, new Date(), alerts?.expiryWarningDays);
     if (status === 'expired') return { label: 'Expired', className: 'bg-red-100 text-red-700', dotColor: 'bg-red-500' };
     if (diffDays < 30) return { label: `${diffDays}d left`, className: 'bg-red-100 text-red-700', dotColor: 'bg-red-500' };
     if (status === 'expiring_soon') return { label: `${diffDays}d left`, className: 'bg-amber-100 text-amber-700', dotColor: 'bg-amber-500' };
@@ -323,7 +332,7 @@ export default function InventoryView() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Inventory Value</p>
-                <p className="text-2xl font-bold mt-1">{formatGHS(summary?.totalInventoryValue ?? 0)}</p>
+                <p className="text-2xl font-bold mt-1">{money(summary?.totalInventoryValue ?? 0)}</p>
               </div>
               <div className="bg-emerald-50 p-2.5 rounded-xl">
                 <DollarSign className="h-5 w-5 text-emerald-600" />
@@ -502,7 +511,7 @@ export default function InventoryView() {
                             <Clock className="h-4 w-4 text-orange-600" />
                           </div>
                           <CardTitle className="text-sm font-semibold text-orange-800">
-                            Expiring Soon — {alerts.expiringSoon.length} batch{alerts.expiringSoon.length !== 1 ? 'es' : ''} within 90 days
+                            Expiring Soon — {alerts.expiringSoon.length} batch{alerts.expiringSoon.length !== 1 ? 'es' : ''} within {alerts.expiryWarningDays} days
                           </CardTitle>
                           <Badge className="bg-orange-500 hover:bg-orange-600 text-[10px] px-1.5 py-0 h-5 text-white">Caution</Badge>
                         </div>
@@ -707,8 +716,14 @@ export default function InventoryView() {
                 {filteredProducts.length > 0 ? (
                   filteredProducts.map((product) => {
                     const badges = getProductStatusBadge(product);
-                    const stockPercent = product.reorderLevel > 0
-                      ? Math.min((product.totalStock / product.reorderLevel) * 100, 100)
+                    // The threshold this branch compares against. The status badge
+                    // above comes from the server, which already used the branch's
+                    // own value; showing the chain-wide number beside it would make
+                    // "Low Stock" and "reorder at 200" contradict each other for a
+                    // branch that overrode it.
+                    const reorderLevel = product.effectiveReorderLevel ?? product.reorderLevel;
+                    const stockPercent = reorderLevel > 0
+                      ? Math.min((product.totalStock / reorderLevel) * 100, 100)
                       : 100;
                     const isAlert = product.stockStatus !== 'in_stock' || product.hasExpiredBatches || product.hasExpiringBatches;
 
@@ -823,7 +838,7 @@ function ProductRow({
           </div>
         </TableCell>
         <TableCell className="text-right font-mono text-sm text-muted-foreground">
-          {product.reorderLevel} {product.unit}
+          {product.effectiveReorderLevel ?? product.reorderLevel} {product.unit}
         </TableCell>
         <TableCell>
           {product.earliestExpiry ? (
@@ -884,8 +899,8 @@ function ProductRow({
                         <tr key={batch.id} className={`border-b border-dotted ${isExpired ? 'bg-red-50/50' : ''}`}>
                           <td className="py-1.5 font-mono">{batch.batchNumber}</td>
                           <td className="text-right font-mono font-medium">{batch.currentQty}</td>
-                          <td className="text-right">{formatGHS(batch.costPrice)}</td>
-                          <td className="text-right">{formatGHS(batch.sellingPrice)}</td>
+                          <td className="text-right">{money(batch.costPrice)}</td>
+                          <td className="text-right">{money(batch.sellingPrice)}</td>
                           <td className="text-right">
                             <span className={isExpired ? 'text-red-600 font-medium' : ''}>
                               {new Date(batch.expiryDate).toLocaleDateString('en-GH')}

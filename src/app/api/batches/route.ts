@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth, requireAdmin, requireBranchScope } from '@/lib/require-auth'
+import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { branchWhere } from '@/lib/branches'
+import {
+  loadBranchProductOverrides,
+  resolveEffectiveValues,
+} from '@/lib/branch-product-settings'
 
 /** Generates a unique, human-friendly batch number for a product. */
 async function generateBatchNumber(db: any, productId: string): Promise<string> {
@@ -101,8 +105,12 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  try {
-    const body = await request.json()
+    // "All branches" is a read-only view, so there is nothing to inherit from —
+    // an empty map makes every price fall through to the product default.
+    const overrides = await loadBranchProductOverrides(branchId)
+
+    try {
+      const body = await request.json()
     const { productId } = body
 
     if (!productId) {
@@ -115,8 +123,32 @@ export async function POST(request: NextRequest) {
     }
 
     const quantity = Math.max(0, Number(body.quantity ?? 0) || 0)
-    const costPrice = Math.max(0, Number(body.costPrice ?? 0) || 0)
-    const sellingPrice = Math.max(0, Number(body.sellingPrice ?? 0) || 0)
+
+    // Price resolution, in order of authority:
+    //   1. the number on the request (an explicit price always wins)
+    //   2. this branch's BranchProductSetting default
+    //   3. the chain-wide Product default
+    //
+    // This used to be `Number(body.sellingPrice ?? 0) || 0`, so a delivery
+    // received without a price was filed at zero — free stock, a free sale at
+    // the till, and a cost report that silently understated the branch. Falling
+    // back to the product default is what every other price entry point already
+    // did; the branch override is what lets a shop that prices a product
+    // differently stop retyping it on each delivery.
+    const effective = resolveEffectiveValues(
+      product,
+      overrides.get(productId)
+    )
+
+    const costPrice =
+      body.costPrice !== undefined && body.costPrice !== null && body.costPrice !== ''
+        ? Math.max(0, Number(body.costPrice) || 0)
+        : effective.costPrice;
+
+    const sellingPrice =
+      body.sellingPrice !== undefined && body.sellingPrice !== null && body.sellingPrice !== ''
+        ? Math.max(0, Number(body.sellingPrice) || 0)
+        : effective.sellingPrice;
 
     // Expiry: optional — default to +24 months when not supplied or empty.
     let expiryDate = new Date()

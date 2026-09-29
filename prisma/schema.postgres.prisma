@@ -31,6 +31,7 @@ model Branch {
   auditLogs    AuditLog[]
   transfersOut StockTransfer[] @relation("TransferOut")
   transfersIn  StockTransfer[] @relation("TransferIn")
+  productSettings BranchProductSetting[]
 
   @@map("branches")
 }
@@ -109,10 +110,41 @@ model Product {
     batches     Batch[]
     saleItems   SaleItem[]
     transferLines StockTransferLine[]
+    branchSettings BranchProductSetting[]
 
   @@index([active])
   @@index([categoryId])
   @@map("products")
+}
+
+/// Per-branch overrides for the catalogue fields that legitimately differ
+/// between branches. The catalogue itself stays shared; only the reorder
+/// threshold and the default price for NEW batches are branch-specific. Every
+/// column is nullable and NULL means "inherit the chain-wide Product value", so
+/// a branch with no row behaves exactly as it did before.
+/// See the identical comment block in prisma/schema.prisma.
+model BranchProductSetting {
+  id        String   @id @default(cuid())
+  productId String
+  branchId  String
+  /// NULL = inherit `Product.reorderLevel`. 0 is meaningful and distinct from
+  /// NULL: 0 means "never flag as low stock at this branch".
+  reorderLevel Int?
+  /// NULL = inherit `Product.defaultSellingPrice` for newly received batches.
+  /// This does NOT reprice stock already on a shelf — `Batch.sellingPrice` is
+  /// what the till charges and it is already per branch.
+  sellingPrice Float?
+  /// NULL = inherit `Product.defaultCostPrice` for newly received batches.
+  costPrice    Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, branchId])
+  @@index([branchId])
+  @@map("branch_product_settings")
 }
 
 model Batch {
@@ -184,9 +216,11 @@ model Sale {
   invoiceNo     String   @unique
   customerId    String?
   userId        String?
+  /// What the goods came to before payment. With no discount and no tax
+  /// anywhere in this app, this IS the amount charged — `totalAmount` is kept
+  /// as its own column so a sale's charged value is recorded once, at the
+  /// moment of the transaction, and never has to be re-derived from the lines.
   subtotal      Decimal    @default(0)
-  tax           Decimal    @default(0)
-  discount      Decimal    @default(0)
   totalAmount   Decimal    @default(0)
   profit        Decimal    @default(0)
   /// The shop this sale physically happened at. NOT NULL so every sale is reportable.
@@ -257,7 +291,7 @@ model Return {
 // Per-line return tracking: makes cumulative over-return validation possible
 // (a SaleItem can never have more returned quantity than was purchased).
 // refundAmount is the customer's actual money back for this line — the line's
-// share of the sale after discount and tax — so the parts always add up to
+// share of the sale's charged total — so the parts always add up to
 // Return.totalRefund and to what was actually collected.
 model ReturnItem {
   id            String @id @default(cuid())
@@ -307,7 +341,6 @@ model DailySalesRecord {
   closedAt          DateTime?
   totalRevenue      Decimal     @default(0)
   totalProfit       Decimal     @default(0)
-  totalDiscount     Decimal     @default(0)
   totalTransactions Int      @default(0)
   totalItemsSold    Int       @default(0)
   cashTotal         Decimal     @default(0)

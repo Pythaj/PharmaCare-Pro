@@ -148,3 +148,99 @@ export function parseOptionalActive(value: unknown): FieldResult<boolean | undef
   }
   return { ok: true, value };
 }
+
+const MAX_QUANTITY = 10_000_000;
+const MAX_BATCH_NUMBER = 60;
+
+export interface OpeningStock {
+  /** Whole units on the shelf at the receiving branch. */
+  quantity: number;
+  /** The manufacturer's lot number. Blank falls back to the seeded number. */
+  batchNumber: string | null;
+  /** ISO `YYYY-MM-DD`, or null to leave the batch's own expiry alone. */
+  expiryDate: string | null;
+}
+
+/**
+ * Parses the "how many are on the shelf right now?" box on the Add Drug form.
+ *
+ * Absent or zero is a valid, common answer — the drug goes on the catalogue at
+ * every branch with no stock anywhere — so it is NOT an error. That matters:
+ * the form is how every drug is created, and forcing a quantity would punish
+ * the admin for adding a drug before the delivery lands.
+ *
+ * Rejects a non-integer or negative count because a batch's quantity is an
+ * `Int`; a fractional value would be silently truncated by the driver, so the
+ * owner would count 12.5 and the shelf would say 12.
+ */
+export function parseOpeningStock(value: unknown): FieldResult<OpeningStock | null> {
+  if (value === undefined || value === null || value === '') {
+    return { ok: true, value: null };
+  }
+
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, error: 'Opening stock must be an object' };
+  }
+
+  const raw = value as { quantity?: unknown; batchNumber?: unknown; expiryDate?: unknown };
+
+  // `Number('')` is 0, so a cleared field must be caught before coercion or a
+  // blank box would silently post "0 units received".
+  if (raw.quantity === undefined || raw.quantity === null || raw.quantity === '') {
+    return { ok: true, value: null };
+  }
+
+  const n = typeof raw.quantity === 'number' ? raw.quantity : Number(raw.quantity);
+  if (!Number.isFinite(n)) {
+    return { ok: false, error: 'Opening quantity must be a number' };
+  }
+  if (!Number.isInteger(n)) {
+    return { ok: false, error: 'Opening quantity must be a whole number' };
+  }
+  if (n < 0) {
+    return { ok: false, error: 'Opening quantity cannot be negative' };
+  }
+  if (n > MAX_QUANTITY) {
+    return { ok: false, error: `Opening quantity must be ${MAX_QUANTITY} or less` };
+  }
+
+  const batch = parseOptionalString(raw.batchNumber, MAX_BATCH_NUMBER, 'Batch number');
+  if (!batch.ok) return batch;
+
+  let expiry: string | null = null;
+  if (raw.expiryDate !== undefined && raw.expiryDate !== null && raw.expiryDate !== '') {
+    if (typeof raw.expiryDate !== 'string') {
+      return { ok: false, error: 'Expiry date must be text' };
+    }
+    const trimmed = raw.expiryDate.trim();
+    if (trimmed.length > 0) {
+      // Parsed as an explicit local calendar date. `new Date('2026-03-04')` is
+      // UTC midnight, which in a negative-offset timezone is the PREVIOUS day —
+      // a batch expiring 4 March would be reported expired on 3 March.
+      const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+      if (!match) {
+        return { ok: false, error: 'Expiry date must be in YYYY-MM-DD format' };
+      }
+      const year = Number(match[1]);
+      const month = Number(match[2]);
+      const day = Number(match[3]);
+      const asDate = new Date(year, month - 1, day);
+      if (
+        asDate.getFullYear() !== year ||
+        asDate.getMonth() !== month - 1 ||
+        asDate.getDate() !== day
+      ) {
+        return { ok: false, error: 'Expiry date is not a real calendar date' };
+      }
+      expiry = trimmed;
+    }
+  }
+
+  // Zero units carries no batch identity worth recording — the catalogue already
+  // seeds an empty STOCK-001 batch for this product at every branch.
+  if (n === 0) {
+    return { ok: true, value: null };
+  }
+
+  return { ok: true, value: { quantity: n, batchNumber: batch.value, expiryDate: expiry } };
+}

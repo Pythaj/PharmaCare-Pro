@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { money, configuredCurrency } from '@/lib/currency';
 import { useAppStore } from '@/stores/app-store';
+import { cn } from '@/lib/utils';
 import {
   DollarSign,
   TrendingUp,
@@ -34,10 +36,6 @@ import type { ChartDataPoint } from '@/types';
 import { toast } from 'sonner';
 
 // ─── Helpers ────────────────────────────────────────────────────────
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 function getInitials(name: string): string {
   return name
@@ -101,6 +99,33 @@ interface MonthlyRow {
 
 // ─── Component ──────────────────────────────────────────────────────
 
+/**
+ * Which slice of the business a report covers. Mirrors the `scope` the API
+ * returns from `requireBranchScope`: `'branch'` when an admin has a branch
+ * selected, `'all'` for the consolidated view, `null` before the first
+ * successful load.
+ */
+type ReportScope = 'branch' | 'all';
+
+/**
+ * Escapes text interpolated into the print/PDF template.
+ *
+ * `appName` and the period label are free text that already reached that
+ * template unescaped, and a branch name is no safer — an apostrophe in
+ * "Ada's Pharmacy" or an ampersand in a real trading name is enough to break
+ * the markup, and a `<` would let a name inject arbitrary HTML into a document
+ * that is then printed or saved. Escaping is cheaper than a field-length rule
+ * that guesses wrong.
+ */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 export default function ReportsView() {
   const appName = useAppStore((s) => s.appName);
   const [period, setPeriod] = useState<Period>('this_month');
@@ -115,6 +140,19 @@ export default function ReportsView() {
   const [cashierPerformance, setCashierPerformance] = useState<CashierRow[]>([]);
   const [monthlySummary, setMonthlySummary] = useState<MonthlyRow[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Which slice of the business the figures currently on screen describe.
+  //
+  // Taken from the response, never inferred from the store. Every other
+  // consumer in this file assumes `stats.totalRevenue` is "the" revenue, and
+  // the server — the only party that actually filtered — is the only one that
+  // can say whether that total is one shop or the whole chain. A report that
+  // cannot say which is worse than no report: two branches comparing their
+  // monthly figures would be quoting incomparable numbers under one label.
+  const [scope, setScope] = useState<ReportScope | null>(null);
+  // The branch the returned numbers were actually filtered on. Kept separately
+  // from the name so the name can be checked against the store before use.
+  const [scopeBranchId, setScopeBranchId] = useState<string | null>(null);
 
   const periods: { label: string; value: Period }[] = [
     { label: 'Today', value: 'today' },
@@ -180,6 +218,8 @@ export default function ReportsView() {
           setDailyBreakdown(data.dailyBreakdown ?? []);
           setCashierPerformance(data.cashierPerformance ?? []);
           setMonthlySummary(data.monthlySummary ?? []);
+          setScope(data.scope ?? null);
+          setScopeBranchId(data.branchId ?? null);
         }
       } catch {
         if (!cancelled) toast.error('Failed to load report data.');
@@ -214,6 +254,8 @@ export default function ReportsView() {
           setDailyBreakdown(data.dailyBreakdown ?? []);
           setCashierPerformance(data.cashierPerformance ?? []);
           setMonthlySummary(data.monthlySummary ?? []);
+          setScope(data.scope ?? null);
+          setScopeBranchId(data.branchId ?? null);
         }
       } catch {
         toast.error('Failed to load report data.');
@@ -223,6 +265,35 @@ export default function ReportsView() {
   };
 
   // ─── Computed ───────────────────────────────────────────────────
+  // The branch NAME comes from the store, not the response, and that is
+  // deliberate: the API documents that it sends `scope` and `branchId` but not
+  // the name, because the client already holds the name from the session
+  // bootstrap and two sources for one label is two things to get out of step.
+  //
+  // What the server owns is the *decision* — which branch it filtered on — so
+  // the label is only allowed to name a branch the server confirmed. If the
+  // store has since moved to a different branch, the figures on screen still
+  // describe the old one, and naming the new shop would be a straight
+  // misattribution of money. In that window the report says "Branch report"
+  // and waits for the refetch rather than guessing.
+  const activeBranch = useAppStore((s) => s.activeBranch);
+  const branchNameIsCurrent = Boolean(activeBranch && activeBranch.id === scopeBranchId);
+  const scopeLabel =
+    scope === 'all'
+      ? 'All branches'
+      : scope === 'branch' && branchNameIsCurrent
+        ? (activeBranch as { name: string }).name
+        : 'Branch report';
+
+  // The ISO 4217 code for the export column headers.
+  //
+  // The export cells are bare numbers with no currency symbol, so the header is
+  // the only place the unit is stated. It reads the configured currency for the
+  // same reason `money()` does: hardcoding "GHS" here would let an admin change
+  // the currency in Settings and still receive a spreadsheet labelled in cedis
+  // while every figure in it was denominated in something else.
+  const currencyCode = configuredCurrency();
+
   const highestRevenueDay = dailyBreakdown.length > 0
     ? dailyBreakdown.reduce((max, d) => (d.revenue > max.revenue ? d : max), dailyBreakdown[0])
     : null;
@@ -271,6 +342,7 @@ export default function ReportsView() {
     };
     const lines: string[] = [];
     lines.push(`${appName} - Sales Analytics Report`);
+    lines.push(`Scope,${scopeLabel}`);
     lines.push(`Period,${periodLabel}`);
     lines.push(`Generated,${new Date().toLocaleString()}`);
     lines.push('');
@@ -286,7 +358,7 @@ export default function ReportsView() {
 
     if (dailyBreakdown.length > 0) {
       lines.push('--- Daily Sales Breakdown ---');
-      lines.push('Date,Transactions,Revenue (GHS),Profit (GHS),Items Sold,Avg Transaction Value');
+      lines.push('Date,Transactions,Revenue (' + currencyCode + '),Profit (' + currencyCode + '),Items Sold,Avg Transaction Value');
       for (const d of dailyBreakdown) {
         const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
         lines.push(`${d.date},${d.sales},${d.revenue.toFixed(2)},${d.profit.toFixed(2)},${d.items},${avg}`);
@@ -296,7 +368,7 @@ export default function ReportsView() {
 
     if (cashierPerformance.length > 0) {
       lines.push('--- Staff Performance ---');
-      lines.push('Staff Name,Transactions,Revenue (GHS),Profit (GHS),Avg Sale Value');
+      lines.push('Staff Name,Transactions,Revenue (' + currencyCode + '),Profit (' + currencyCode + '),Avg Sale Value');
       for (const c of cashierPerformance) {
         const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
         lines.push(`"${c.name}",${c.sales},${c.revenue.toFixed(2)},${c.profit.toFixed(2)},${avg}`);
@@ -346,6 +418,7 @@ export default function ReportsView() {
     const lines: string[] = [];
 
     lines.push(`${appName} - Sales Analytics Report`);
+    lines.push(`Scope:\t${scopeLabel}`);
     lines.push(`Period:\t${periodLabel}`);
     lines.push(`Generated:\t${new Date().toLocaleString()}`);
     lines.push('');
@@ -358,7 +431,7 @@ export default function ReportsView() {
 
     if (dailyBreakdown.length > 0) {
       lines.push('Daily Sales Breakdown');
-      lines.push('Date\tTransactions\tRevenue (GHS)\tProfit (GHS)\tItems Sold\tAvg Transaction Value');
+      lines.push('Date\\tTransactions\\tRevenue (' + currencyCode + ')\\tProfit (' + currencyCode + ')\\tItems Sold\\tAvg Transaction Value');
       for (const d of dailyBreakdown) {
         const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
         lines.push(`${d.date}\t${d.sales}\t${d.revenue.toFixed(2)}\t${d.profit.toFixed(2)}\t${d.items}\t${avg}`);
@@ -368,7 +441,7 @@ export default function ReportsView() {
 
     if (cashierPerformance.length > 0) {
       lines.push('Staff Performance');
-      lines.push('Staff Name\tTransactions\tRevenue (GHS)\tProfit (GHS)\tAvg Sale Value');
+      lines.push('Staff Name\\tTransactions\\tRevenue (' + currencyCode + ')\\tProfit (' + currencyCode + ')\\tAvg Sale Value');
       for (const c of cashierPerformance) {
         const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
         lines.push(`${c.name}\t${c.sales}\t${c.revenue.toFixed(2)}\t${c.profit.toFixed(2)}\t${avg}`);
@@ -412,28 +485,28 @@ export default function ReportsView() {
     };
 
     const revenueRows = revenueData
-      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+      .map((d) => `<tr><td>${d.name}</td><td class="num">${money(d.value)}</td></tr>`)
       .join('');
 
     const paymentRows = paymentData
-      .map((d) => `<tr><td>${d.name}</td><td class="num">${formatGHS(d.value)}</td></tr>`)
+      .map((d) => `<tr><td>${d.name}</td><td class="num">${money(d.value)}</td></tr>`)
       .join('');
 
     const productRows = topProducts
-      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${formatGHS(p.revenue)}</td></tr>`)
+      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${money(p.revenue)}</td></tr>`)
       .join('');
 
     const dailyRows = dailyBreakdown
       .map((d) => {
         const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
-        return `<tr><td>${d.date}</td><td class="num">${d.sales}</td><td class="num">${formatGHS(d.revenue)}</td><td class="num">${formatGHS(d.profit)}</td><td class="num">${d.items}</td><td class="num">${formatGHS(Number(avg))}</td></tr>`;
+        return `<tr><td>${d.date}</td><td class="num">${d.sales}</td><td class="num">${money(d.revenue)}</td><td class="num">${money(d.profit)}</td><td class="num">${d.items}</td><td class="num">${money(Number(avg))}</td></tr>`;
       })
       .join('');
 
     const cashierRows = cashierPerformance
       .map((c) => {
         const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
-        return `<tr><td>${c.name}</td><td class="num">${c.sales}</td><td class="num">${formatGHS(c.revenue)}</td><td class="num">${formatGHS(c.profit)}</td><td class="num">${formatGHS(Number(avg))}</td></tr>`;
+        return `<tr><td>${c.name}</td><td class="num">${c.sales}</td><td class="num">${money(c.revenue)}</td><td class="num">${money(c.profit)}</td><td class="num">${money(Number(avg))}</td></tr>`;
       })
       .join('');
 
@@ -464,17 +537,17 @@ export default function ReportsView() {
 </style>
 </head>
 <body>
-  <h1>${appName} - Sales Analytics</h1>
-  <p class="subtitle">Period: ${periodLabel} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</p>
+  <h1>${escapeHtml(appName)} - Sales Analytics</h1>
+  <p class="subtitle">Scope: ${escapeHtml(scopeLabel)} &nbsp;|&nbsp; Period: ${escapeHtml(periodLabel)} &nbsp;|&nbsp; Generated: ${new Date().toLocaleString()}</p>
 
   <div class="stats-grid">
     <div class="stat-card">
       <div class="label">Total Revenue</div>
-      <div class="value">${formatGHS(s.totalRevenue)}</div>
+      <div class="value">${money(s.totalRevenue)}</div>
     </div>
     <div class="stat-card profit">
       <div class="label">Total Profit</div>
-      <div class="value">${formatGHS(s.totalProfit)}</div>
+      <div class="value">${money(s.totalProfit)}</div>
     </div>
     <div class="stat-card margin">
       <div class="label">Profit Margin</div>
@@ -486,7 +559,7 @@ export default function ReportsView() {
     </div>
     <div class="stat-card">
       <div class="label">Avg Transaction</div>
-      <div class="value">${formatGHS(s.avgSaleValue)}</div>
+      <div class="value">${money(s.avgSaleValue)}</div>
     </div>
     <div class="stat-card">
       <div class="label">Items Sold</div>
@@ -556,6 +629,34 @@ export default function ReportsView() {
   // ─── Render ─────────────────────────────────────────────────────
   return (
     <div className="space-y-6 p-4 md:p-6">
+      {/* ─── Scope Banner ───
+          Every figure below is scoped, and the scope is not inferable from the
+          numbers. Naming it here is what makes two reports comparable, and
+          stops a branch total being read as the whole business's takings. */}
+      {!loading && scope && (
+        <div
+          className={cn(
+            'flex items-center gap-2 text-sm',
+            scope === 'all' ? 'text-violet-700' : 'text-slate-600'
+          )}
+        >
+          <span className="font-medium">Scope:</span>
+          <span
+            className={cn(
+              'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold',
+              scope === 'all'
+                ? 'bg-violet-100 text-violet-800'
+                : 'bg-slate-200 text-slate-700'
+            )}
+          >
+            {scope === 'all' ? 'All branches (consolidated)' : scopeLabel}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {periodLabel}
+          </span>
+        </div>
+      )}
+
       {/* ─── Header: Period Selector, Date Range, Export ─── */}
       <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
         <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
@@ -636,7 +737,7 @@ export default function ReportsView() {
                   </div>
                   <p className="text-xs text-muted-foreground font-medium">Total Revenue</p>
                 </div>
-                <p className="text-lg font-bold">{formatGHS(stats?.totalRevenue ?? 0)}</p>
+                <p className="text-lg font-bold">{money(stats?.totalRevenue ?? 0)}</p>
                 <div className="flex items-center gap-1 mt-1">
                   <ArrowUpRight className="h-3 w-3 text-emerald-500" />
                   <span className="text-[11px] text-emerald-600 font-medium">Sales</span>
@@ -653,7 +754,7 @@ export default function ReportsView() {
                   </div>
                   <p className="text-xs text-muted-foreground font-medium">Total Profit</p>
                 </div>
-                <p className="text-lg font-bold text-teal-600">{formatGHS(stats?.totalProfit ?? 0)}</p>
+                <p className="text-lg font-bold text-teal-600">{money(stats?.totalProfit ?? 0)}</p>
                 <div className="flex items-center gap-1 mt-1">
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-teal-600 border-teal-200 bg-teal-50">
                     {profitMargin}% margin
@@ -687,7 +788,7 @@ export default function ReportsView() {
                   </div>
                   <p className="text-xs text-muted-foreground font-medium">Avg Transaction</p>
                 </div>
-                <p className="text-lg font-bold">{formatGHS(stats?.avgSaleValue ?? 0)}</p>
+                <p className="text-lg font-bold">{money(stats?.avgSaleValue ?? 0)}</p>
                 <div className="flex items-center gap-1 mt-1">
                   <span className="text-[11px] text-muted-foreground">Per transaction</span>
                 </div>
@@ -839,9 +940,9 @@ export default function ReportsView() {
                           </Badge>
                         )}
                       </div>
-                      <p className="text-lg font-bold">{formatGHS(m.revenue)}</p>
+                      <p className="text-lg font-bold">{money(m.revenue)}</p>
                       <p className="text-xs text-muted-foreground">
-                        Profit: <span className="text-teal-600 font-medium">{formatGHS(m.profit)}</span>
+                        Profit: <span className="text-teal-600 font-medium">{money(m.profit)}</span>
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {m.sales} sales · {m.items} items
@@ -895,8 +996,8 @@ export default function ReportsView() {
                 <TableRow>
                   <TableHead>Date</TableHead>
                   <TableHead className="text-right">Transactions</TableHead>
-                  <TableHead className="text-right">Revenue (GHS)</TableHead>
-                  <TableHead className="text-right">Profit (GHS)</TableHead>
+                  <TableHead className="text-right">Revenue ({currencyCode})</TableHead>
+                  <TableHead className="text-right">Profit ({currencyCode})</TableHead>
                   <TableHead className="text-right">Items Sold</TableHead>
                   <TableHead className="text-right">Avg. Transaction</TableHead>
                 </TableRow>
@@ -932,10 +1033,10 @@ export default function ReportsView() {
                             </div>
                           </TableCell>
                           <TableCell className="text-right font-mono">{d.sales}</TableCell>
-                          <TableCell className="text-right font-medium">{formatGHS(d.revenue)}</TableCell>
-                          <TableCell className="text-right text-teal-600 font-medium">{formatGHS(d.profit)}</TableCell>
+                          <TableCell className="text-right font-medium">{money(d.revenue)}</TableCell>
+                          <TableCell className="text-right text-teal-600 font-medium">{money(d.profit)}</TableCell>
                           <TableCell className="text-right font-mono">{d.items}</TableCell>
-                          <TableCell className="text-right font-mono text-muted-foreground">{formatGHS(avgTxn)}</TableCell>
+                          <TableCell className="text-right font-mono text-muted-foreground">{money(avgTxn)}</TableCell>
                         </TableRow>
                       );
                     })}
@@ -943,13 +1044,13 @@ export default function ReportsView() {
                     <TableRow className="bg-gray-50 font-semibold border-t-2 border-gray-200">
                       <TableCell>Totals</TableCell>
                       <TableCell className="text-right font-mono">{dailyTotals.sales}</TableCell>
-                      <TableCell className="text-right">{formatGHS(dailyTotals.revenue)}</TableCell>
-                      <TableCell className="text-right text-teal-600">{formatGHS(dailyTotals.profit)}</TableCell>
+                      <TableCell className="text-right">{money(dailyTotals.revenue)}</TableCell>
+                      <TableCell className="text-right text-teal-600">{money(dailyTotals.profit)}</TableCell>
                       <TableCell className="text-right font-mono">{dailyTotals.items}</TableCell>
                       <TableCell className="text-right font-mono">
                         {dailyTotals.sales > 0
-                          ? formatGHS(dailyTotals.revenue / dailyTotals.sales)
-                          : formatGHS(0)}
+                          ? money(dailyTotals.revenue / dailyTotals.sales)
+                          : money(0)}
                       </TableCell>
                     </TableRow>
                   </>
@@ -986,8 +1087,8 @@ export default function ReportsView() {
                 <TableRow>
                   <TableHead>Staff Member</TableHead>
                   <TableHead className="text-right">Transactions</TableHead>
-                  <TableHead className="text-right">Revenue (GHS)</TableHead>
-                  <TableHead className="text-right">Profit (GHS)</TableHead>
+                  <TableHead className="text-right">Revenue ({currencyCode})</TableHead>
+                  <TableHead className="text-right">Profit ({currencyCode})</TableHead>
                   <TableHead className="text-right">Avg. Sale Value</TableHead>
                 </TableRow>
               </TableHeader>
@@ -1017,9 +1118,9 @@ export default function ReportsView() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono">{c.sales}</TableCell>
-                      <TableCell className="text-right font-medium">{formatGHS(c.revenue)}</TableCell>
-                      <TableCell className="text-right text-teal-600 font-medium">{formatGHS(c.profit)}</TableCell>
-                      <TableCell className="text-right font-mono text-muted-foreground">{formatGHS(avgSale)}</TableCell>
+                      <TableCell className="text-right font-medium">{money(c.revenue)}</TableCell>
+                      <TableCell className="text-right text-teal-600 font-medium">{money(c.profit)}</TableCell>
+                      <TableCell className="text-right font-mono text-muted-foreground">{money(avgSale)}</TableCell>
                     </TableRow>
                   );
                 })}
@@ -1079,7 +1180,7 @@ export default function ReportsView() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono">{product.quantity}</TableCell>
-                      <TableCell className="text-right font-medium">{formatGHS(product.revenue)}</TableCell>
+                      <TableCell className="text-right font-medium">{money(product.revenue)}</TableCell>
                     </TableRow>
                   ))
                 ) : (

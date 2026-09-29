@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { money } from '@/lib/currency';
 import {
   DollarSign,
   TrendingUp,
@@ -31,10 +32,6 @@ import { toast } from 'sonner';
 import { useAppStore } from '@/stores/app-store';
 import type { DashboardStats, ChartDataPoint } from '@/types';
 
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
-
 interface RecentSale {
   id: string;
   invoiceNo: string;
@@ -43,6 +40,9 @@ interface RecentSale {
   paymentMethod: string;
   createdAt: string;
   userName?: string;
+  /** Null only in the consolidated view, where the sale is from every branch. */
+  branchName?: string | null;
+  branchCode?: string | null;
 }
 
 interface RecentPurchase {
@@ -74,6 +74,10 @@ interface AuditLogEntry {
 
 export default function AdminDashboard() {
   const navigate = useAppStore((s) => s.navigate);
+// The branch column is only useful when the list can span branches. With one
+// branch selected every row would repeat the same shop name, which is noise
+// that pushes the amount and cashier columns off a phone screen.
+const showBranch = !useAppStore((s) => s.activeBranch);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [chartData, setChartData] = useState<{
     dailySales: ChartDataPoint[];
@@ -124,6 +128,8 @@ export default function AdminDashboard() {
               paymentMethod: s.paymentMethod,
               createdAt: s.createdAt,
               userName: s.user?.name,
+              branchName: s.branch?.name ?? null,
+              branchCode: s.branch?.code ?? null,
             })),
             recentPurchases: (data.recentPurchases ?? []).map((p: any) => ({
               id: p.id,
@@ -255,7 +261,7 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {overviewCards.map((card) => {
           const Icon = card.icon;
-          const displayValue = card.isCount ? card.value.toLocaleString() : formatGHS(card.value);
+          const displayValue = card.isCount ? card.value.toLocaleString() : money(card.value);
           return (
             <Card
               key={card.label}
@@ -379,6 +385,10 @@ export default function AdminDashboard() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Invoice#</TableHead>
+                    {/* Only meaningful on the consolidated view: when a single
+                        branch is selected every row says the same thing, so the
+                        column is hidden rather than repeated nine times. */}
+                    {showBranch ? <TableHead>Branch</TableHead> : null}
                     <TableHead>Customer</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
                     <TableHead>Payment</TableHead>
@@ -395,8 +405,22 @@ export default function AdminDashboard() {
                         onClick={(e) => { e.stopPropagation(); navigate('sales-history'); toast.success(`Viewing sale details for ${sale.invoiceNo}`); }}
                       >
                         <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
+                        {showBranch ? (
+                          <TableCell className="text-xs">
+                            {sale.branchName ? (
+                              <span className="flex items-center gap-1.5">
+                                <Badge variant="outline" className="font-mono text-[10px]">
+                                  {sale.branchCode}
+                                </Badge>
+                                <span className="truncate">{sale.branchName}</span>
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">-</span>
+                            )}
+                          </TableCell>
+                        ) : null}
                         <TableCell>{sale.customerName ?? 'Walk-in'}</TableCell>
-                        <TableCell className="text-right">{formatGHS(sale.totalAmount)}</TableCell>
+                        <TableCell className="text-right">{money(sale.totalAmount)}</TableCell>
                         <TableCell>
                           <Badge variant="outline" className="text-xs">{sale.paymentMethod}</Badge>
                         </TableCell>
@@ -445,7 +469,7 @@ export default function AdminDashboard() {
                       >
                         <TableCell className="font-mono text-xs">{purchase.invoiceNo}</TableCell>
                         <TableCell>{purchase.supplierName ?? '-'}</TableCell>
-                        <TableCell className="text-right">{formatGHS(purchase.totalAmount)}</TableCell>
+                        <TableCell className="text-right">{money(purchase.totalAmount)}</TableCell>
                         <TableCell className="text-xs text-muted-foreground">
                           {new Date(purchase.createdAt).toLocaleDateString('en-GH')}
                         </TableCell>

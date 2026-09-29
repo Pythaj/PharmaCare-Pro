@@ -3,15 +3,22 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchWhere } from '@/lib/branches'
 import { toNumber } from '@/lib/utils'
+import { localDateKey } from '@/lib/dates'
 
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-function pad(n: number): string {
-  return String(n).padStart(2, '0')
-}
-
-function toDateString(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+/**
+ * Turns a `YYYY-MM-DD` key back into a LOCAL-midnight Date so it can be
+ * formatted.
+ *
+ * `new Date('2026-01-05')` is the trap this avoids: without a time component
+ * JavaScript parses that as UTC midnight, so anywhere west of Greenwich the
+ * formatter renders it as the 4th. Splitting the key and using the numeric
+ * Date constructor keeps it on the intended local day.
+ */
+function dateFromKey(key: string): Date {
+  const [year, month, day] = key.split('-').map(Number)
+  return new Date(year, month - 1, day)
 }
 
 /**
@@ -101,12 +108,41 @@ export async function GET(request: NextRequest) {
     const avgSaleValue = totalSales > 0 ? totalRevenue / totalSales : 0
 
     // --- Revenue Chart Data (by day) ---
-    const revenueByDay: Record<string, number> = {}
+    // Grouped on the ISO local-day KEY, never on a formatted label.
+    //
+    // This used to bucket on `toLocaleDateString('en-US', { month: 'short',
+    // day: 'numeric' })`, which produces "Jan 5" with no year. On a `this_year`
+    // report — or any range longer than twelve months — 5 Jan and 5 Jan of the
+    // following year produced the SAME key, so the second day's takings
+    // overwrote the first and the chart, the CSV and the print export all
+    // reported a number that was never true. Grouping on `YYYY-MM-DD` makes the
+    // collision structurally impossible; the short label is applied afterwards
+    // and is presentation only.
+    const revenueByDay = new Map<string, number>()
     for (const sale of rows) {
-      const day = sale.createdAt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-      revenueByDay[day] = (revenueByDay[day] ?? 0) + sale.totalAmount
+      const key = localDateKey(sale.createdAt)
+      revenueByDay.set(key, (revenueByDay.get(key) ?? 0) + sale.totalAmount)
     }
-    const revenueData = Object.entries(revenueByDay).map(([name, value]) => ({ name, value }))
+
+    // With the buckets now correctly separate, two "Jan 5" labels would be
+    // ambiguous — so the year is shown only when the data really does span
+    // more than one, keeping the common single-year chart uncluttered.
+    const yearsInRange = new Set([...revenueByDay.keys()].map((k) => k.slice(0, 4)))
+    const spansMultipleYears = yearsInRange.size > 1
+
+    const revenueData = [...revenueByDay.entries()]
+      // Chronological. The old object-literal approach relied on insertion
+      // order, which is the order Prisma returned rows in — not the order the
+      // chart should read.
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, value]) => ({
+        name: dateFromKey(key).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          ...(spansMultipleYears ? { year: 'numeric' as const } : {}),
+        }),
+        value,
+      }))
 
     // --- Payment Method Distribution ---
     const paymentByMethod: Record<string, number> = {}
@@ -144,7 +180,7 @@ export async function GET(request: NextRequest) {
     > = {}
 
     for (const sale of rows) {
-      const dateKey = toDateString(sale.createdAt)
+      const dateKey = localDateKey(sale.createdAt)
       if (!dailyMap[dateKey]) {
         dailyMap[dateKey] = { date: dateKey, sales: 0, revenue: 0, profit: 0, items: 0 }
       }

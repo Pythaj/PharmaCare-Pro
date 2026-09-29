@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchWhere } from '@/lib/branches'
-import { EXPIRY_WARNING_DAYS } from '@/lib/inventory-alerts'
+import { getExpiryAlertDays } from '@/lib/server-settings'
+import { classifyStock } from '@/lib/inventory-alerts'
+import {
+  createEffectiveValueResolver,
+  loadBranchProductOverrides,
+} from '@/lib/branch-product-settings'
 
 /**
  * GET /api/dashboard/stats
@@ -33,7 +38,13 @@ export async function GET(request: NextRequest) {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
     const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-    const expiryHorizon = new Date(now.getTime() + EXPIRY_WARNING_DAYS * 24 * 60 * 60 * 1000)
+    // The expiry horizon follows `notifications.expiryAlertDays` rather than the
+    // hardcoded 90, so the dashboard's "expiring soon" tile agrees with the
+    // Inventory alerts list — which already reads the setting. Two screens
+    // warning about different windows for the same batch is how a pharmacist
+    // ends up trusting the one that is quieter.
+    const expiryWarningDays = await getExpiryAlertDays()
+    const expiryHorizon = new Date(now.getTime() + expiryWarningDays * 24 * 60 * 60 * 1000)
 
     // Branch boundary applies to everything below; the personal-till boundary
     // is layered on top for non-admins.
@@ -43,6 +54,14 @@ export async function GET(request: NextRequest) {
     // Batch queries have no `user`, so they take the branch boundary alone.
     const stockScope = branchScope
     const since = (from: Date) => ({ createdAt: { gte: from } })
+
+    // The reorder threshold is per-branch, resolved in one query. On "All
+    // branches" this is empty, so every product falls back to the chain-wide
+    // `Product.reorderLevel` — the honest answer when there is no single branch
+    // to answer for.
+    const resolveValues = createEffectiveValueResolver(
+      await loadBranchProductOverrides(auth.scope!.branchId)
+    )
 
     const [
       todaySalesResult,
@@ -103,7 +122,7 @@ export async function GET(request: NextRequest) {
         where: { ...stockScope, quantity: { gt: 0 } },
         _sum: { quantity: true },
       }),
-      // Expiring soon: inside the 90-day window and NOT already expired.
+      // Expiring soon: inside the configured window and NOT already expired.
       db.batch.count({
         where: {
           ...stockScope,
@@ -138,15 +157,22 @@ export async function GET(request: NextRequest) {
     for (const product of productRows) {
       const stock = stockByProductId.get(product.id) ?? 0
       if (stock > 0) productsInStock += 1
-      // In stock but at or below the reorder level (zero-stock is counted by
-      // its own out-of-stock figure, not as "low").
-      if (stock > 0 && product.reorderLevel > 0 && stock <= product.reorderLevel) {
+      // The shared classifier, not a fourth inline copy of the rule. It agreed
+      // with `classifyStock` today, but duplicating the definition is how the
+      // inventory screen and this tile end up disagreeing after one of them is
+      // edited. Zero stock is deliberately not "low" — it has its own figure.
+      if (classifyStock(stock, resolveValues(product).reorderLevel) === 'low_stock') {
         lowStockCount += 1
       }
     }
 
     return NextResponse.json({
-      scope: isAdmin ? 'all' : 'own',
+      // Reflects the boundary the figures were actually computed under. This
+      // used to answer 'all' for every admin, so an admin parked on Branch A was
+      // told — by the API the UI trusts — that the numbers spanned the business.
+      scope: isAdmin ? (auth.scope!.branchId ? 'branch' : 'all') : 'own',
+      branchId: auth.scope!.branchId ?? null,
+      branch: auth.branch ?? null,
       todaySales: Number(todaySalesResult._sum.totalAmount || 0),
       weeklySales: Number(weeklySalesResult._sum.totalAmount || 0),
       monthlySales: Number(monthlySalesResult._sum.totalAmount || 0),

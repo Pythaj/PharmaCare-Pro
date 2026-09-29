@@ -5,6 +5,11 @@ import { logAudit, getClientIp } from '@/lib/audit'
 import { branchRelationWhere, branchWhere } from '@/lib/branches'
 import { recomputeDailyRecord, ensureDailyRecord } from '@/lib/daily-sales'
 
+/** Money is stored and printed to 2dp, so it is computed to 2dp. */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 class ValidationError extends Error {}
 
 function pad2(n: number) {
@@ -76,8 +81,6 @@ function normalizeSale(sale: any) {
   return {
     ...sale,
     subtotal: Number(sale.subtotal),
-    tax: Number(sale.tax),
-    discount: Number(sale.discount),
     totalAmount: Number(sale.totalAmount),
     profit: Number(sale.profit),
     items: sale.items.map((item: any) => ({
@@ -196,8 +199,6 @@ export async function POST(request: NextRequest) {
     const {
       customerId,
       items,
-      discount = 0,
-      tax = 0,
       paymentMethod = 'cash',
       notes,
       saleDate,
@@ -218,13 +219,6 @@ export async function POST(request: NextRequest) {
     if (!validPaymentMethods.includes(paymentMethod)) {
       return NextResponse.json(
         { error: 'Invalid payment method' },
-        { status: 400 }
-      )
-    }
-
-    if (typeof discount !== 'number' || discount < 0 || typeof tax !== 'number' || tax < 0) {
-      return NextResponse.json(
-        { error: 'Discount and tax must be non-negative numbers' },
         { status: 400 }
       )
     }
@@ -284,10 +278,28 @@ export async function POST(request: NextRequest) {
           if (item.batchId) {
         // Explicit batch (POS sends per-batch cart lines) — price is the
         // batch's configured sellingPrice. Expired batches can never sell.
-        const batch = await tx.batch.findUnique({
-          where: { id: item.batchId },
+        //
+        // Branch-scoped, and this is the single most important line in the
+        // handler. A Batch belongs to exactly ONE branch (Batch.branchId is
+        // NOT NULL precisely so this cannot be skipped), so resolving the id
+        // alone would let a cashier at Branch A sell units that are physically
+        // on Branch B's shelf — decrementing stock this till does not own, and
+        // stamping another branch's costPrice into this branch's profit.
+        //
+        // `findFirst` rather than `findUnique`: Prisma's unique `where` accepts
+        // only unique fields, so a branch filter can only be expressed on a
+        // general filter. The consequence is that a foreign or missing batch is
+        // reported identically ("not found") on purpose — distinguishing them
+        // would turn this into an existence oracle for other branches' batch
+        // ids. The real reason is written to the server log below.
+        const batch = await tx.batch.findFirst({
+          where: { ...branchWhere(auth.scope!), id: item.batchId },
         })
         if (!batch) {
+          console.error(
+            `[POST /api/sales] branch ${branchId} cannot sell batch ${item.batchId}: ` +
+              `no such batch, or it belongs to another branch`
+          )
           throw new ValidationError(`Batch ${item.batchId} not found`)
         }
         if (batch.productId !== item.productId) {
@@ -326,13 +338,19 @@ export async function POST(request: NextRequest) {
         // No batch: FEFO across eligible (non-expired) batches. Because
         // batches can carry different prices, each source batch becomes its
         // own line so the receipt math is always exact.
+        //
+        // Branch-scoped for the same reason as the explicit-batch path above,
+        // and this one is easier to miss because it has no branchId in sight to
+        // prompt the question: without the filter it would treat every branch's
+        // shelf as this till's inventory, quietly selling Branch B's drugs at
+        // Branch A's counter and then decrementing Branch B's balance.
         const product = await tx.product.findUnique({ where: { id: item.productId } })
         if (!product) {
           throw new ValidationError(`Product ${item.productId} not found`)
         }
 
         const availableBatches = await tx.batch.findMany({
-          where: { productId: item.productId, quantity: { gt: 0 } },
+          where: { ...branchWhere(auth.scope!), productId: item.productId, quantity: { gt: 0 } },
           orderBy: { expiryDate: 'asc' },
         })
 
@@ -413,12 +431,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // A discount can never drive the total below zero
-    if (discount > subtotal) {
-      throw new ValidationError('Discount cannot be greater than the subtotal')
-    }
-
-    const totalAmount = subtotal - discount + tax
+    // What the customer is charged is the sum of the lines. This app has no
+    // discount and no tax anywhere — Ghanaian retail pharmacy shelf prices are
+    // VAT-INCLUSIVE, so a separate tax line would double-charge every customer
+    // — so the total is the subtotal by definition. It is still computed (not
+    // aliased) so the charged figure is derived from the same rounded line
+    // totals that are persisted, and the two can never disagree by a cent.
+    const totalAmount = round2(subtotal)
 
     const newSale = await tx.sale.create({
       data: {
@@ -427,8 +446,6 @@ export async function POST(request: NextRequest) {
         userId,
         branchId,
         subtotal,
-        tax,
-        discount,
         totalAmount,
         profit,
         paymentMethod,

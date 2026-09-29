@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { money } from '@/lib/currency';
 import { Plus, Search, ChevronDown, ChevronRight, Pencil, Trash2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -29,7 +30,12 @@ interface CustomerWithPurchases extends Customer {
 }
 
 export default function CustomersView() {
-  const { canManageProducts, isAdmin } = usePermissions();
+  // Only `isAdmin` is needed, and it gates exactly what the server gates:
+  // PATCH and DELETE on /api/customers/[id] are `requireAdmin`, while GET, the
+  // list and the Add button below are open to any signed-in staff. Reaching
+  // for a `canManage*` flag here would only invite a future edit that gates the
+  // Add button on a permission the API never checks.
+  const { isAdmin } = usePermissions();
   const [customers, setCustomers] = useState<CustomerWithPurchases[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -195,10 +201,6 @@ export default function CustomersView() {
     }
   };
 
-  function formatGHS(value: number): string {
-    return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-  }
-
   return (
     <div className="space-y-4 p-6">
       <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
@@ -253,8 +255,7 @@ export default function CustomersView() {
                         expandedRow={expandedRow}
                         purchaseHistory={purchaseHistory}
                         loadingHistory={loadingHistory}
-                        formatGHS={formatGHS}
-                        onExpand={handleExpandRow}
+                                               onExpand={handleExpandRow}
                         onEdit={handleEditCustomer}
                         onDelete={handleDeleteCustomer}
                         showActions={isAdmin}
@@ -376,7 +377,6 @@ function CustomerRow({
   expandedRow,
   purchaseHistory,
   loadingHistory,
-  formatGHS,
   onExpand,
   onEdit,
   onDelete,
@@ -387,7 +387,6 @@ function CustomerRow({
   expandedRow: string | null;
   purchaseHistory: { invoiceNo: string; totalAmount: number; createdAt: number | string }[];
   loadingHistory: boolean;
-  formatGHS: (v: number) => string;
   onExpand: (id: string) => void;
   onEdit: (c: CustomerWithPurchases) => void;
   onDelete: (c: CustomerWithPurchases) => void;
@@ -404,7 +403,7 @@ function CustomerRow({
         <TableCell>{customer.phone ?? '-'}</TableCell>
         <TableCell className="hidden lg:table-cell max-w-[200px] truncate">{customer.address ?? '-'}</TableCell>
         <TableCell className="text-right text-muted-foreground">{(customer._count?.sales ?? 0).toLocaleString()}</TableCell>
-        <TableCell className="text-right font-medium">{formatGHS(customer.totalPurchases ?? 0)}</TableCell>
+        <TableCell className="text-right font-medium">{money(customer.totalPurchases ?? 0)}</TableCell>
         {showActions && (
         <TableCell>
           <div className="flex items-center gap-1">
@@ -452,7 +451,7 @@ function CustomerRow({
                     {purchaseHistory.map((sale, i) => (
                       <tr key={i} className="border-b border-dotted">
                         <td className="py-1.5 font-mono">{sale.invoiceNo}</td>
-                        <td className="text-right">{formatGHS(sale.totalAmount)}</td>
+                        <td className="text-right">{money(sale.totalAmount)}</td>
                         <td className="text-right">{new Date(sale.createdAt).toLocaleDateString('en-GH')}</td>
                       </tr>
                     ))}

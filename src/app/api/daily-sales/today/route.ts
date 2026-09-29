@@ -100,7 +100,6 @@ export async function GET(request: NextRequest) {
         ...record,
         totalRevenue: Number(record.totalRevenue),
         totalProfit: Number(record.totalProfit),
-        totalDiscount: Number(record.totalDiscount),
         cashTotal: Number(record.cashTotal),
         cardTotal: Number(record.cardTotal),
         mobileMoneyTotal: Number(record.mobileMoneyTotal),
@@ -108,8 +107,6 @@ export async function GET(request: NextRequest) {
       sales: todaySales.map((s) => ({
         ...s,
         subtotal: Number(s.subtotal),
-        tax: Number(s.tax),
-        discount: Number(s.discount),
         totalAmount: Number(s.totalAmount),
         profit: Number(s.profit),
         items: s.items.map((item) => ({

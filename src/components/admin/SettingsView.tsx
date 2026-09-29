@@ -7,7 +7,6 @@ import {
   Phone,
   Mail,
   MapPin,
-  Percent,
   Receipt,
   Monitor,
   ShoppingCart,
@@ -51,6 +50,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import RemotePanel from '@/components/admin/RemotePanel';
+import BranchResetPanel from '@/components/admin/BranchResetPanel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -297,7 +297,6 @@ export default function SettingsView() {
   const [data, setData] = useState<DataSettings>(defaults.data);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [clearing, setClearing] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // System uptime tracking
@@ -401,39 +400,80 @@ export default function SettingsView() {
     return { pharmacy, receipt, display, pos, notifications, business, data };
   }, [pharmacy, receipt, display, pos, notifications, business, data]);
 
-  // Save all settings at once (API first, localStorage as backup)
+  // Save all settings at once.
+  //
+  // The three outcomes are kept genuinely distinct, because the previous
+  // version collapsed two of them. It threw on any non-OK response and caught
+  // it in the same block that wrote localStorage, so a 403 ("only an admin may
+  // save settings") and a 500 both reported "Settings saved locally" — the
+  // owner walked away believing a change the database had just refused was
+  // live. A server that ANSWERS has told us something; only a request that
+  // never arrives is genuinely "backend unavailable".
   const handleSave = async () => {
     setSaving(true);
     const current = gatherSettings();
-    setAppName(current.pharmacy.appName.trim());
-    setAppTagline(current.pharmacy.tagline.trim());
+
+    type SaveOutcome = 'saved' | 'offline' | 'rejected' | 'uncacheable';
+    let outcome: SaveOutcome = 'saved';
+    let serverMessage = '';
+
     try {
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ settings: flattenSettings(current) }),
       });
-      if (res.ok) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
-        // Drop the memoized settings promise so already-mounted consumers
-        // re-fetch the freshly saved values on their next load.
-        invalidateSettingsCache();
-        setSaved(true);
-        toast.success('Settings saved successfully');
-        setTimeout(() => setSaved(false), 2000);
-        return;
+
+      if (!res.ok) {
+        // The server responded and did not accept the change. Nothing is
+        // written locally either: a local copy that disagrees with the
+        // database would be silently overwritten on the next load and would
+        // make the app look configured when it is not.
+        outcome = 'rejected';
+        const body = await res.json().catch(() => null);
+        serverMessage =
+          typeof body?.error === 'string' ? body.error : `The server rejected the save (HTTP ${res.status})`;
       }
-      throw new Error(`API returned ${res.status}`);
     } catch {
+      // Genuine network failure — the request never reached the server. This
+      // is the one case where a local-only copy is an honest fallback, because
+      // the values were never sent anywhere to be contradicted.
+      outcome = 'offline';
+    }
+
+    if (outcome === 'saved' || outcome === 'offline') {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(current));
-        toast.warning('Settings saved locally (backend unavailable)');
       } catch {
-        toast.error('Failed to save settings');
+        // A full or blocked storage quota must not be reported as a saved
+        // setting — the value would exist in memory only and vanish on reload.
+        outcome = 'uncacheable';
       }
-    } finally {
-      setSaving(false);
     }
+
+    if (outcome === 'saved') {
+      // Drop the memoized settings promise so already-mounted consumers
+      // re-fetch the freshly saved values on their next load.
+      invalidateSettingsCache();
+      // The app name and tagline are persisted through the store, so they are
+      // applied on success only. Doing it before the request left the sidebar
+      // and login page showing a new name for a change the server had refused.
+      setAppName(current.pharmacy.appName.trim());
+      setAppTagline(current.pharmacy.tagline.trim());
+      setSaved(true);
+      toast.success('Settings saved successfully');
+      setTimeout(() => setSaved(false), 2000);
+    } else if (outcome === 'offline') {
+      toast.warning('Could not reach the server — settings kept on this device only', {
+        description: 'They will not reach other devices until the connection is restored.',
+      });
+    } else if (outcome === 'uncacheable') {
+      toast.error('Settings were saved to the database but could not be cached on this device');
+    } else {
+      toast.error(`Settings not saved — ${serverMessage}`);
+    }
+
+    setSaving(false);
   };
 
   // Export all data as JSON
@@ -488,22 +528,10 @@ export default function SettingsView() {
     }
   };
 
-  // Clear all sales data
-  const handleClearSales = async () => {
-    setClearing(true);
-    try {
-      const res = await fetch('/api/sales?confirm=yes', { method: 'DELETE' });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        throw new Error(d.error || 'Failed to clear sales data');
-      }
-      toast.success('All sales data cleared');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to clear sales data');
-    } finally {
-      setClearing(false);
-    }
-  };
+  // NOTE: the old "clear all sales" handler that lived here called
+  // `DELETE /api/sales?confirm=yes`, which deleted every sale in EVERY branch.
+  // It is replaced by the branch-scoped, counted reset in BranchResetPanel,
+  // mounted on the Data & Security tab below.
 
   // Toggle a day in closedDays
   const toggleClosedDay = (dayValue: string) => {
@@ -1064,23 +1092,6 @@ export default function SettingsView() {
                     </div>
                   </div>
 
-                  <div className="w-full sm:w-1/2">
-                    <Label htmlFor="tax-rate" className="text-sm font-medium">Tax Rate</Label>
-                    <div className="relative mt-1.5">
-                      <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        id="tax-rate"
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="100"
-                        value={pharmacy.taxRate}
-                        onChange={(e) => setPharmacy({ ...pharmacy, taxRate: Number(e.target.value) || 0 })}
-                        className="pl-10"
-                        placeholder="0"
-                      />
-                    </div>
-                  </div>
                 </CardContent>
               </Card>
 
@@ -1182,25 +1193,6 @@ export default function SettingsView() {
                   />
                 </div>
 
-                <div className="space-y-3">
-                  {toggleRow(
-                    'show-tax-receipt',
-                    <Percent className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Show Tax on Receipt',
-                    'Display the tax breakdown line on printed receipts',
-                    receipt.showTax,
-                    (checked) => setReceipt({ ...receipt, showTax: checked }),
-                  )}
-                  {toggleRow(
-                    'show-discount-receipt',
-                    <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Show Discount on Receipt',
-                    'Display applied discounts as a separate line item',
-                    receipt.showDiscount,
-                    (checked) => setReceipt({ ...receipt, showDiscount: checked }),
-                  )}
-                </div>
-
                 <div className="w-full sm:w-1/2">
                   <Label htmlFor="receipt-width" className="text-sm font-medium">Receipt Width</Label>
                   <Select
@@ -1246,25 +1238,6 @@ export default function SettingsView() {
                         <SelectItem value="insurance">Insurance</SelectItem>
                       </SelectContent>
                     </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="default-discount" className="text-sm font-medium flex items-center gap-1.5">
-                      <Percent className="h-3.5 w-3.5 text-muted-foreground" />
-                      Default Discount (%)
-                    </Label>
-                    <div className="relative mt-1.5">
-                      <Input
-                        id="default-discount"
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.5"
-                        value={pos.defaultDiscount}
-                        onChange={(e) => setPos({ ...pos, defaultDiscount: Number(e.target.value) || 0 })}
-                        placeholder="0"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
-                    </div>
                   </div>
                 </div>
 
@@ -1881,53 +1854,28 @@ export default function SettingsView() {
                     )}
                     {exporting ? 'Exporting...' : 'Export All Data'}
                   </Button>
-                  <AlertDialog>
-                    <AlertDialogTrigger asChild>
-                      <Button
-                        variant="destructive"
-                        className="flex-1 h-11"
-                        disabled={clearing}
-                      >
-                        {clearing ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-4 w-4 mr-2" />
-                        )}
-                        {clearing ? 'Clearing...' : 'Clear Sales Data'}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle className="flex items-center gap-2">
-                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-destructive/10 text-destructive">
-                            <Trash2 className="h-4 w-4" />
-                          </span>
-                          Clear All Sales Data?
-                        </AlertDialogTitle>
-                        <AlertDialogDescription className="text-sm leading-relaxed">
-                          This action <strong className="text-foreground">cannot be undone</strong>. This will
-                          permanently delete all sales records, sale items, and related return records from the
-                          system. Product inventory and customer data will be preserved.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={handleClearSales}
-                          className="bg-destructive hover:bg-destructive/90 text-white"
-                        >
-                          Yes, Clear All Sales
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Export creates a JSON backup of all system data. Sales data clear affects transactions only.
+                  Export creates a JSON backup of all system data.
                 </p>
               </CardContent>
             </Card>
           )}
+
+          {/*
+            The branch-scoped reset lives on its own card directly beneath the
+            data card, and it REPLACES the old "Clear Sales Data" button that used
+            to sit above.
+
+            That button called `DELETE /api/sales?confirm=yes`, which wiped every
+            sale in the business regardless of which branch the admin was
+            standing in, and was "confirmed" by a query string the client chose.
+            In a multi-branch app that is the exact accident this feature was
+            asked to make impossible: one shop wanting a clean slate would take
+            the other shops' takings with it. Clearing a branch is now an
+            explicit, counted, branch-scoped operation below.
+          */}
+          {activeTab === 'data' && <BranchResetPanel />}
 
           {/* ── About ─────────────────────────────────── */}
           {activeTab === 'account' && (

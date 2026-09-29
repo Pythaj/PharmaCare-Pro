@@ -2,7 +2,7 @@
  * Single source of truth for application settings (Rule 18).
  *
  * The canonical store is the SystemSetting database table, keyed by
- * dot-notation strings (e.g. "pharmacy.taxRate"). A localStorage copy under
+ * dot-notation strings (e.g. "pharmacy.name"). A localStorage copy under
  * STORAGE_KEY mirrors the same nested shape for fast/offline reads —
  * written through by SettingsView and consumers of usePharmacySettings().
  */
@@ -16,7 +16,6 @@ export interface PharmacyInfo {
   address: string;
   phone: string;
   email: string;
-  taxRate: number;
   logoUrl: string;
   faviconUrl: string;
 }
@@ -25,8 +24,6 @@ export interface ReceiptSettings {
   headerText: string;
   footerText: string;
   width: string;
-  showTax: boolean;
-  showDiscount: boolean;
 }
 
 export interface DisplaySettings {
@@ -39,7 +36,6 @@ export interface DisplaySettings {
 export interface POSSettings {
   defaultPaymentMethod: string;
   autoPrintReceipt: boolean;
-  defaultDiscount: number;
   requireCustomer: boolean;
   allowNegativeStock: boolean;
   maxLineItems: number;
@@ -88,7 +84,6 @@ export const defaultSettings: AllSettings = {
     address: '123 Health Street, Accra, Ghana',
     phone: '+233 30 123 4567',
     email: 'info@greenlifepharmacy.com',
-    taxRate: 12.5,
     logoUrl: '',
     faviconUrl: '',
   },
@@ -96,8 +91,6 @@ export const defaultSettings: AllSettings = {
     headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
     footerText: 'Thank you for your purchase!',
     width: '80mm',
-    showTax: true,
-    showDiscount: false,
   },
   display: {
     currency: 'GHS',
@@ -108,7 +101,6 @@ export const defaultSettings: AllSettings = {
   pos: {
     defaultPaymentMethod: 'cash',
     autoPrintReceipt: true,
-    defaultDiscount: 0,
     requireCustomer: false,
     // Out-of-stock drugs stay sellable (recorded as backorders) so the client
     // can keep making sales while waiting on replenishment.

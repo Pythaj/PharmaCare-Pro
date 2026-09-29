@@ -71,7 +71,6 @@ export async function GET(
         ...record,
         totalRevenue: Number(record.totalRevenue),
         totalProfit: Number(record.totalProfit),
-        totalDiscount: Number(record.totalDiscount),
         cashTotal: Number(record.cashTotal),
         cardTotal: Number(record.cardTotal),
         mobileMoneyTotal: Number(record.mobileMoneyTotal),
@@ -79,8 +78,6 @@ export async function GET(
       sales: sales.map((s) => ({
         ...s,
         subtotal: Number(s.subtotal),
-        tax: Number(s.tax),
-        discount: Number(s.discount),
         totalAmount: Number(s.totalAmount),
         profit: Number(s.profit),
         items: s.items.map((item) => ({
@@ -150,13 +147,11 @@ export async function PATCH(
       const totals = sales.map((s) => ({
         totalAmount: toNumber(s.totalAmount),
         profit: toNumber(s.profit),
-        discount: toNumber(s.discount),
         paymentMethod: s.paymentMethod,
       }))
 
       const totalRevenue = totals.reduce((sum, s) => sum + s.totalAmount, 0)
       const totalProfit = totals.reduce((sum, s) => sum + s.profit, 0)
-      const totalDiscount = totals.reduce((sum, s) => sum + s.discount, 0)
       const totalTransactions = totals.length
       const totalItemsSold = sales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
       const cashTotal = totals.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
@@ -171,7 +166,6 @@ export async function PATCH(
           closedAt: new Date(),
           totalRevenue,
           totalProfit,
-          totalDiscount,
           totalTransactions,
           totalItemsSold,
           cashTotal,

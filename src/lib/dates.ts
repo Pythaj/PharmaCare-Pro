@@ -29,9 +29,21 @@ export function localDateKey(date: Date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-/** `YYYY-MM` in LOCAL time — the key used for month buckets. */
+/**
+ * `YYYY-MM` in LOCAL time — the key used for month buckets.
+ *
+ * The month is 1-based and zero-padded. The previous version used a raw
+ * `getMonth()`, which is 0-indexed, so January produced `2026-0` and October
+ * produced `2026-10`. Both are wrong in the same way: `2026-10` sorts BEFORE
+ * `2026-2` as a string, so any caller that ordered months by key got a
+ * scrambled year. Nothing in the app was affected yet because the only caller
+ * (`dashboard/charts`) iterates the range explicitly rather than sorting by
+ * key — which is exactly the sort of thing that breaks silently the day
+ * someone adds a second caller. Keys must be sortable, or they are not keys.
+ */
 export function localMonthKey(date: Date = new Date()): string {
-  return `${date.getFullYear()}-${date.getMonth()}`;
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  return `${date.getFullYear()}-${month}`;
 }
 
 /** Local midnight `days` before the local day containing `date`. */

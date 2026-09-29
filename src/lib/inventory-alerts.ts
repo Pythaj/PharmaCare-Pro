@@ -10,9 +10,18 @@
  *  - out of stock  : total stock across in-stock batches is 0
  *  - low stock     : in stock, but at or below the product's reorder level
  *  - expired       : batch expiry date is in the past
- *  - expiring soon : expires within EXPIRY_WARNING_DAYS (not yet expired)
+ *  - expiring soon : expires within the configured warning window (not yet expired)
  */
 
+/**
+ * Fallback warning window, used only when a caller has no configured value.
+ *
+ * The real value is `notifications.expiryAlertDays`, read on the server by
+ * `getExpiryAlertDays` and threaded in through the `warningDays` parameters
+ * below. This constant is what those parameters default to, so it is a fallback
+ * rather than the policy — anything that classifies expiry in a request handler
+ * should pass the configured value in.
+ */
 export const EXPIRY_WARNING_DAYS = 90;
 export const EXPIRY_CRITICAL_DAYS = 30;
 
@@ -43,25 +52,35 @@ export function isOutOfStock(totalStock: number): boolean {
   return totalStock <= 0;
 }
 
-/** Expiry status of a single batch. */
+/**
+ * Expiry status of a single batch.
+ *
+ * `warningDays` defaults to `EXPIRY_WARNING_DAYS` so existing callers keep
+ * their current behaviour, but the window is a parameter because it is the
+ * owner's to configure: `notifications.expiryAlertDays` is the real answer, and
+ * an endpoint that cannot pass it will keep warning at 90 days regardless of
+ * what the Settings screen displays.
+ */
 export function classifyBatchExpiry(
   expiryDate: Date | string,
-  now: Date = new Date()
+  now: Date = new Date(),
+  warningDays: number = EXPIRY_WARNING_DAYS
 ): ExpiryStatus {
   const days = daysUntil(expiryDate, now);
   if (days < 0) return 'expired';
-  if (days < EXPIRY_WARNING_DAYS) return 'expiring_soon';
+  if (days < warningDays) return 'expiring_soon';
   return 'good';
 }
 
 /** Combined product expiry status — expired wins over expiring. */
 export function classifyProductExpiry(
   batchExpiries: (Date | string)[],
-  now: Date = new Date()
+  now: Date = new Date(),
+  warningDays: number = EXPIRY_WARNING_DAYS
 ): ExpiryStatus {
   let result: ExpiryStatus = 'good';
   for (const expiry of batchExpiries) {
-    const status = classifyBatchExpiry(expiry, now);
+    const status = classifyBatchExpiry(expiry, now, warningDays);
     if (status === 'expired') return 'expired';
     if (status === 'expiring_soon') result = 'expiring_soon';
   }

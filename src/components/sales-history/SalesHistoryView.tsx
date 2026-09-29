@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef, useMemo, Fragment } from 'react';
+import { money, configuredCurrency } from '@/lib/currency';
 import {
   CalendarDays,
   DollarSign,
@@ -24,7 +25,6 @@ import {
   CircleDot,
   Calendar,
   BarChart3,
-  AlertTriangle,
   FileText,
   RefreshCw,
   Save,
@@ -45,7 +45,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -82,10 +81,6 @@ import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
 import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
 import type { DailySalesRecord, Sale, SaleItem, User } from '@/types';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-GH', {
@@ -209,10 +204,10 @@ function AuditGroupHeader({ group }: { group: AuditGroup }) {
         </Badge>
       </div>
       <div className="flex items-center gap-2 text-[10px] shrink-0">
-        {group.cash > 0 && <span className="text-green-600 font-semibold">Cash {formatGHS(group.cash)}</span>}
-        {group.card > 0 && <span className="text-blue-600 font-semibold">Card {formatGHS(group.card)}</span>}
-        {group.momo > 0 && <span className="text-purple-600 font-semibold">MoMo {formatGHS(group.momo)}</span>}
-        <span className="font-bold text-slate-800">{formatGHS(group.revenue)}</span>
+        {group.cash > 0 && <span className="text-green-600 font-semibold">Cash {money(group.cash)}</span>}
+        {group.card > 0 && <span className="text-blue-600 font-semibold">Card {money(group.card)}</span>}
+        {group.momo > 0 && <span className="text-purple-600 font-semibold">MoMo {money(group.momo)}</span>}
+        <span className="font-bold text-slate-800">{money(group.revenue)}</span>
       </div>
     </div>
   );
@@ -223,6 +218,9 @@ export default function DailySalesRegister() {
   // Receipt branding comes from system settings (single source of truth)
   const { settings } = usePharmacySettings();
   const { isAdmin } = usePermissions();
+  // ISO 4217 code for the cash-count label and input prefix, so the unit shown
+  // beside the field matches the unit the reconciliation is actually in.
+  const currencyCode = configuredCurrency();
   const [activeTab, setActiveTab] = useState('today');
 
   // Today's data
@@ -326,10 +324,10 @@ export default function DailySalesRegister() {
     try {
       const notes = [
         closingNotes,
-        cashCounted ? `Cash counted: GHS ${parseFloat(cashCounted).toFixed(2)}` : '',
-        cashCounted && todayRecord ? `Expected cash: GHS ${todayRecord.cashTotal.toFixed(2)}` : '',
+        cashCounted ? `Cash counted: ${money(parseFloat(cashCounted))}` : '',
+        cashCounted && todayRecord ? `Expected cash: ${money(todayRecord.cashTotal)}` : '',
         cashCounted && todayRecord
-          ? `Cash difference: GHS ${(parseFloat(cashCounted) - todayRecord.cashTotal).toFixed(2)}`
+          ? `Cash difference: ${money(parseFloat(cashCounted) - todayRecord.cashTotal)}`
           : '',
       ].filter(Boolean).join(' | ');
 
@@ -486,10 +484,10 @@ export default function DailySalesRegister() {
   <div class="info"><strong>Customer:</strong> ${sale.customer?.name ?? 'Walk-in'}</div>
   <table>
     <thead><tr><th>Item</th><th style="text-align:center">Qty</th><th style="text-align:right">Total</th></tr></thead>
-    <tbody>${items.map((item) => `<tr><td>${item.product?.name ?? 'Product'}</td><td style="text-align:center">${item.quantity}</td><td style="text-align:right">${formatGHS(item.total)}</td></tr>`).join('')}</tbody>
+    <tbody>${items.map((item) => `<tr><td>${item.product?.name ?? 'Product'}</td><td style="text-align:center">${item.quantity}</td><td style="text-align:right">${money(item.total)}</td></tr>`).join('')}</tbody>
   </table>
   <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:bold;border-top:2px dashed #ccc;padding-top:8px;margin-top:8px">
-    <span>TOTAL:</span><span>${formatGHS(sale.totalAmount)}</span>
+    <span>TOTAL:</span><span>{money(sale.totalAmount)}</span>
   </div>
   <div class="footer"><p>${settings.receipt.footerText}</p></div>
   <div style="text-align:center;margin-top:20px">
@@ -506,6 +504,13 @@ export default function DailySalesRegister() {
   const isOpen = todayRecord?.status === 'open';
   const avgSale = todayRecord && todayRecord.totalTransactions > 0
     ? todayRecord.totalRevenue / todayRecord.totalTransactions
+    : 0;
+
+  // Gross margin: profit as a share of what was taken. Guarded on revenue
+  // because a day with sales but no recorded profit (or none at all) must
+  // read 0% rather than NaN on the card.
+  const grossMargin = todayRecord && todayRecord.totalRevenue > 0
+    ? Math.round((todayRecord.totalProfit / todayRecord.totalRevenue) * 100)
     : 0;
 
   return (
@@ -621,14 +626,14 @@ export default function DailySalesRegister() {
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
                   <StatCard
                     label="Total Revenue"
-                    value={formatGHS(todayRecord.totalRevenue)}
+                    value={money(todayRecord.totalRevenue)}
                     icon={DollarSign}
                     iconBg="bg-emerald-500"
                     trend="up"
                   />
                   <StatCard
                     label="Total Profit"
-                    value={formatGHS(todayRecord.totalProfit)}
+                    value={money(todayRecord.totalProfit)}
                     icon={TrendingUp}
                     iconBg="bg-teal-500"
                     trend="up"
@@ -649,13 +654,13 @@ export default function DailySalesRegister() {
                   />
                   <StatCard
                     label="Avg. Sale"
-                    value={formatGHS(avgSale)}
+                    value={money(avgSale)}
                     icon={BarChart3}
                     iconBg="bg-emerald-600"
                   />
                   <StatCard
-                    label="Discounts"
-                    value={formatGHS(todayRecord.totalDiscount)}
+                    label="Margin"
+                    value={`${grossMargin}%`}
                     icon={ArrowDownRight}
                     iconBg="bg-amber-500"
                   />
@@ -670,7 +675,7 @@ export default function DailySalesRegister() {
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Cash Payments</p>
-                        <p className="text-lg font-bold text-green-700">{formatGHS(todayRecord.cashTotal)}</p>
+                        <p className="text-lg font-bold text-green-700">{money(todayRecord.cashTotal)}</p>
                       </div>
                     </CardContent>
                   </Card>
@@ -681,7 +686,7 @@ export default function DailySalesRegister() {
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Card Payments</p>
-                        <p className="text-lg font-bold text-blue-700">{formatGHS(todayRecord.cardTotal)}</p>
+                        <p className="text-lg font-bold text-blue-700">{money(todayRecord.cardTotal)}</p>
                       </div>
                     </CardContent>
                   </Card>
@@ -692,7 +697,7 @@ export default function DailySalesRegister() {
                       </div>
                       <div>
                         <p className="text-xs text-muted-foreground">Mobile Money</p>
-                        <p className="text-lg font-bold text-purple-700">{formatGHS(todayRecord.mobileMoneyTotal)}</p>
+                        <p className="text-lg font-bold text-purple-700">{money(todayRecord.mobileMoneyTotal)}</p>
                       </div>
                     </CardContent>
                   </Card>
@@ -841,8 +846,7 @@ export default function DailySalesRegister() {
                   onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
                   onBackfill={() => { setPosPresetDate(record.date); navigate('pos'); }}
                   onVoid={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
-                  formatGHS={formatGHS}
-                  formatDate={formatDate}
+                                   formatDate={formatDate}
                   onExpandSale={handleExpandSale}
                   expandedSaleId={expandedSaleId}
                   expandedSaleItems={expandedSaleItems}
@@ -910,24 +914,24 @@ export default function DailySalesRegister() {
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                       <div className="space-y-1">
                         <p className="text-xs text-muted-foreground">Total Revenue</p>
-                        <p className="text-lg font-bold text-emerald-600">{formatGHS(todayRecord.totalRevenue)}</p>
+                        <p className="text-lg font-bold text-emerald-600">{money(todayRecord.totalRevenue)}</p>
                       </div>
                       <div className="space-y-1">
                         <p className="text-xs text-muted-foreground">Total Profit</p>
-                        <p className="text-lg font-bold text-teal-600">{formatGHS(todayRecord.totalProfit)}</p>
+                        <p className="text-lg font-bold text-teal-600">{money(todayRecord.totalProfit)}</p>
                       </div>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
                       <div className="rounded-md bg-green-50 p-2 text-center">
-                        <p className="text-green-700 font-semibold">{formatGHS(todayRecord.cashTotal)}</p>
+                        <p className="text-green-700 font-semibold">{money(todayRecord.cashTotal)}</p>
                         <p className="text-green-600">Cash</p>
                       </div>
                       <div className="rounded-md bg-blue-50 p-2 text-center">
-                        <p className="text-blue-700 font-semibold">{formatGHS(todayRecord.cardTotal)}</p>
+                        <p className="text-blue-700 font-semibold">{money(todayRecord.cardTotal)}</p>
                         <p className="text-blue-600">Card</p>
                       </div>
                       <div className="rounded-md bg-purple-50 p-2 text-center">
-                        <p className="text-purple-700 font-semibold">{formatGHS(todayRecord.mobileMoneyTotal)}</p>
+                        <p className="text-purple-700 font-semibold">{money(todayRecord.mobileMoneyTotal)}</p>
                         <p className="text-purple-600">MoMo</p>
                       </div>
                     </div>
@@ -937,12 +941,8 @@ export default function DailySalesRegister() {
                       <span className="font-medium">{todayRecord.totalItemsSold}</span>
                     </div>
                     <div className="flex justify-between text-xs">
-                      <span className="text-muted-foreground">Discounts Given</span>
-                      <span className="font-medium text-amber-600">{formatGHS(todayRecord.totalDiscount)}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
                       <span className="text-muted-foreground">Average Sale</span>
-                      <span className="font-medium">{formatGHS(todayRecord.totalTransactions > 0 ? todayRecord.totalRevenue / todayRecord.totalTransactions : 0)}</span>
+                      <span className="font-medium">{money(todayRecord.totalTransactions > 0 ? todayRecord.totalRevenue / todayRecord.totalTransactions : 0)}</span>
                     </div>
                     {previousDayStats && (
                       <>
@@ -951,7 +951,7 @@ export default function DailySalesRegister() {
                         <div className="flex justify-between text-xs">
                           <span className="text-muted-foreground">Revenue</span>
                           <span className={`font-medium ${todayRecord.totalRevenue >= previousDayStats.revenue ? 'text-emerald-600' : 'text-red-500'}`}>
-                            {formatGHS(todayRecord.totalRevenue - previousDayStats.revenue)}
+                            {money(todayRecord.totalRevenue - previousDayStats.revenue)}
                             <span className="text-[10px] ml-1">
                               ({todayRecord.totalRevenue > 0 ? (((todayRecord.totalRevenue - previousDayStats.revenue) / previousDayStats.revenue) * 100).toFixed(1) : '0'}%)
                             </span>
@@ -976,9 +976,9 @@ export default function DailySalesRegister() {
 
                   <div className="rounded-lg border bg-card p-4 space-y-4">
                     <div className="space-y-2">
-                      <Label htmlFor="cash-counted">Actual Cash Counted (GHS)</Label>
+                      <Label htmlFor="cash-counted">Actual Cash Counted ({currencyCode})</Label>
                       <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">GHS</span>
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground font-medium">{currencyCode}</span>
                         <Input
                           id="cash-counted"
                           type="number"
@@ -1006,11 +1006,11 @@ export default function DailySalesRegister() {
                       >
                         <div className="flex justify-between items-center">
                           <span className="font-medium">Expected Cash</span>
-                          <span className="font-semibold">{formatGHS(todayRecord.cashTotal)}</span>
+                          <span className="font-semibold">{money(todayRecord.cashTotal)}</span>
                         </div>
                         <div className="flex justify-between items-center mt-1">
                           <span className="font-medium">Counted Cash</span>
-                          <span className="font-semibold">{formatGHS(parseFloat(cashCounted))}</span>
+                          <span className="font-semibold">{money(parseFloat(cashCounted))}</span>
                         </div>
                         <Separator className="my-2" />
                         <div className="flex justify-between items-center">
@@ -1023,7 +1023,7 @@ export default function DailySalesRegister() {
                               : 'text-red-600'
                           }`}>
                             {parseFloat(cashCounted) - todayRecord.cashTotal >= 0 ? '+' : ''}
-                            {formatGHS(parseFloat(cashCounted) - todayRecord.cashTotal)}
+                            {money(parseFloat(cashCounted) - todayRecord.cashTotal)}
                             {Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01 && ' ✓'}
                           </span>
                         </div>
@@ -1056,7 +1056,7 @@ export default function DailySalesRegister() {
                     {cashCounted && (
                       <div className="flex items-center gap-2 text-sm">
                         <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                        <span>Cash counted: <strong>{formatGHS(parseFloat(cashCounted))}</strong></span>
+                        <span>Cash counted: <strong>{money(parseFloat(cashCounted))}</strong></span>
                       </div>
                     )}
                   </div>
@@ -1163,11 +1163,11 @@ export default function DailySalesRegister() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Total Revenue</p>
-                  <p className="text-xl font-bold text-emerald-600">{formatGHS(closedRecord.totalRevenue)}</p>
+                  <p className="text-xl font-bold text-emerald-600">{money(closedRecord.totalRevenue)}</p>
                 </div>
                 <div className="rounded-lg border p-3">
                   <p className="text-xs text-muted-foreground">Total Profit</p>
-                  <p className="text-xl font-bold text-teal-600">{formatGHS(closedRecord.totalProfit)}</p>
+                  <p className="text-xl font-bold text-teal-600">{money(closedRecord.totalProfit)}</p>
                 </div>
               </div>
 
@@ -1178,19 +1178,19 @@ export default function DailySalesRegister() {
                   <span className="flex items-center gap-1.5">
                     <Banknote className="h-3.5 w-3.5 text-green-600" /> Cash
                   </span>
-                  <span className="font-semibold">{formatGHS(closedRecord.cashTotal)}</span>
+                  <span className="font-semibold">{money(closedRecord.cashTotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="flex items-center gap-1.5">
                     <CreditCard className="h-3.5 w-3.5 text-blue-600" /> Card
                   </span>
-                  <span className="font-semibold">{formatGHS(closedRecord.cardTotal)}</span>
+                  <span className="font-semibold">{money(closedRecord.cardTotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="flex items-center gap-1.5">
                     <Smartphone className="h-3.5 w-3.5 text-purple-600" /> Mobile Money
                   </span>
-                  <span className="font-semibold">{formatGHS(closedRecord.mobileMoneyTotal)}</span>
+                  <span className="font-semibold">{money(closedRecord.mobileMoneyTotal)}</span>
                 </div>
                 <Separator />
                 <div className="flex justify-between text-sm">
@@ -1201,12 +1201,14 @@ export default function DailySalesRegister() {
                   <span className="text-muted-foreground">Items Sold</span>
                   <span className="font-semibold">{closedRecord.totalItemsSold}</span>
                 </div>
-                {closedRecord.totalDiscount > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Discounts Given</span>
-                    <span className="font-semibold text-amber-600">{formatGHS(closedRecord.totalDiscount)}</span>
-                  </div>
-                )}
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Gross Margin</span>
+                  <span className="font-semibold">
+                    {closedRecord.totalRevenue > 0
+                      ? `${Math.round((closedRecord.totalProfit / closedRecord.totalRevenue) * 100)}%`
+                      : '0%'}
+                  </span>
+                </div>
               </div>
 
               {/* Profit Margin */}
@@ -1231,11 +1233,11 @@ export default function DailySalesRegister() {
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash Reconciliation</p>
                   <div className="flex justify-between text-sm">
                     <span>Expected Cash</span>
-                    <span>{formatGHS(closedRecord.cashTotal)}</span>
+                    <span>{money(closedRecord.cashTotal)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>Counted Cash</span>
-                    <span>{formatGHS(parseFloat(cashCounted))}</span>
+                    <span>{money(parseFloat(cashCounted))}</span>
                   </div>
                   <Separator />
                   <div className={`flex justify-between text-sm font-bold ${
@@ -1246,7 +1248,7 @@ export default function DailySalesRegister() {
                       : 'text-red-600'
                   }`}>
                     <span>Difference</span>
-                    <span>{parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}{formatGHS(parseFloat(cashCounted) - closedRecord.cashTotal)}</span>
+                    <span>{parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}{money(parseFloat(cashCounted) - closedRecord.cashTotal)}</span>
                   </div>
                 </div>
               )}
@@ -1323,22 +1325,21 @@ export default function DailySalesRegister() {
   <div class="grid-2">
     <div class="card">
       <p class="label">Total Revenue</p>
-      <p class="value-green text-lg">${formatGHS(closedRecord.totalRevenue)}</p>
+      <p class="value-green text-lg">{money(closedRecord.totalRevenue)}</p>
     </div>
     <div class="card">
       <p class="label">Total Profit</p>
-      <p class="value-teal text-lg">${formatGHS(closedRecord.totalProfit)}</p>
+      <p class="value-teal text-lg">{money(closedRecord.totalProfit)}</p>
     </div>
   </div>
   <div class="card">
     <p class="title-sm">Payment Breakdown</p>
-    <div class="flex"><span>&#x1f4b5; Cash</span><span>${formatGHS(closedRecord.cashTotal)}</span></div>
-    <div class="flex"><span>&#x1f0cf; Card</span><span>${formatGHS(closedRecord.cardTotal)}</span></div>
-    <div class="flex"><span>&#x1f4f1; Mobile Money</span><span>${formatGHS(closedRecord.mobileMoneyTotal)}</span></div>
+    <div class="flex"><span>&#x1f4b5; Cash</span><span>{money(closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>&#x1f0cf; Card</span><span>{money(closedRecord.cardTotal)}</span></div>
+    <div class="flex"><span>&#x1f4f1; Mobile Money</span><span>{money(closedRecord.mobileMoneyTotal)}</span></div>
     <div class="sep"></div>
     <div class="flex"><span class="label">Transactions</span><span>${closedRecord.totalTransactions}</span></div>
     <div class="flex"><span class="label">Items Sold</span><span>${closedRecord.totalItemsSold}</span></div>
-    ${closedRecord.totalDiscount > 0 ? `<div class="flex"><span class="label">Discounts</span><span class="value-amber">${formatGHS(closedRecord.totalDiscount)}</span></div>` : ''}
   </div>
   ${closedRecord.totalRevenue > 0 ? `
   <div class="card">
@@ -1347,10 +1348,10 @@ export default function DailySalesRegister() {
   ${cashCounted ? `
   <div class="card">
     <p class="title-sm">Cash Reconciliation</p>
-    <div class="flex"><span>Expected Cash</span><span>${formatGHS(closedRecord.cashTotal)}</span></div>
-    <div class="flex"><span>Counted Cash</span><span>${formatGHS(parseFloat(cashCounted))}</span></div>
+    <div class="flex"><span>Expected Cash</span><span>{money(closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>Counted Cash</span><span>{money(parseFloat(cashCounted))}</span></div>
     <div class="sep"></div>
-    <div class="flex"><span>Difference</span><span class="${Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01 ? 'value-green' : parseFloat(cashCounted) > closedRecord.cashTotal ? 'value-amber' : 'value-red'}">${parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}${formatGHS(parseFloat(cashCounted) - closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>Difference</span><span class="${Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01 ? 'value-green' : parseFloat(cashCounted) > closedRecord.cashTotal ? 'value-amber' : 'value-red'}">${parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}${money(parseFloat(cashCounted) - closedRecord.cashTotal)}</span></div>
   </div>` : ''}
   ${closingNotes ? `<div class="card"><p class="title-sm">Notes</p><p style="font-size:13px">${closingNotes}</p></div>` : ''}
   <div class="text-center" style="margin-top:20px">
@@ -1505,8 +1506,8 @@ function SaleRow({
         <TableCell className="text-center">
           <Badge variant="outline" className="text-xs">{sale.items?.length ?? 0}</Badge>
         </TableCell>
-        <TableCell className="text-right font-semibold">{formatGHS(sale.totalAmount)}</TableCell>
-        <TableCell className="text-right text-emerald-600 font-medium hidden md:table-cell">{formatGHS(sale.profit)}</TableCell>
+        <TableCell className="text-right font-semibold">{money(sale.totalAmount)}</TableCell>
+        <TableCell className="text-right text-emerald-600 font-medium hidden md:table-cell">{money(sale.profit)}</TableCell>
         <TableCell className="hidden sm:table-cell">
           <PaymentBadge method={sale.paymentMethod} />
         </TableCell>
@@ -1564,17 +1565,12 @@ function SaleRow({
                     <tr key={item.id} className="border-b border-dotted">
                       <td className="py-1.5">{item.product?.name ?? 'Product'}</td>
                       <td className="text-center">{item.quantity}</td>
-                      <td className="text-right">{formatGHS(item.unitPrice)}</td>
-                      <td className="text-right font-medium">{formatGHS(item.total)}</td>
+                      <td className="text-right">{money(item.unitPrice)}</td>
+                      <td className="text-right font-medium">{money(item.total)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              {sale.discount > 0 && (
-                <div className="flex justify-end mt-2 text-xs text-amber-600">
-                  Discount: -{formatGHS(sale.discount)}
-                </div>
-              )}
             </div>
           </TableCell>
         </TableRow>
@@ -1606,7 +1602,6 @@ function PastDayCard({
   onReopen,
   onVoid,
   onBackfill,
-  formatGHS: fmtGHS,
   formatDate: fmtDate,
   onExpandSale,
   expandedSaleId,
@@ -1621,7 +1616,6 @@ function PastDayCard({
   onReopen: () => void;
   onVoid: (sale: Sale) => void;
   onBackfill: () => void;
-  formatGHS: (v: number) => string;
   formatDate: (d: string) => string;
   onExpandSale: (saleId: string, items?: SaleItem[]) => void;
   expandedSaleId: string | null;
@@ -1725,7 +1719,7 @@ function PastDayCard({
     const headers = ['Time', 'Invoice#', 'Product', 'Batch', 'Qty', 'Unit Price', 'Total', 'Payment', 'Cashier', 'Customer'];
     const rows = filteredItems.map(i => [
       i.time, i.invoiceNo, i.productName, i.batchNumber,
-      i.quantity.toString(), fmtGHS(i.unitPrice), fmtGHS(i.total),
+      i.quantity.toString(), money(i.unitPrice), money(i.total),
       i.paymentMethod, i.cashierName, i.customerName,
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -1765,11 +1759,11 @@ function PastDayCard({
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div>
                 <p className="text-xs text-muted-foreground">Revenue</p>
-                <p className="font-bold">{fmtGHS(record.totalRevenue)}</p>
+                <p className="font-bold">{money(record.totalRevenue)}</p>
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Profit</p>
-                <p className="font-bold text-emerald-600">{fmtGHS(record.totalProfit)}</p>
+                <p className="font-bold text-emerald-600">{money(record.totalProfit)}</p>
               </div>
             </div>
 
@@ -1791,15 +1785,15 @@ function PastDayCard({
             <div className="flex items-center gap-3 mt-2 text-[10px] text-muted-foreground">
               <span className="flex items-center gap-0.5">
                 <Banknote className="h-3 w-3 text-green-500" />
-                {fmtGHS(record.cashTotal)}
+                {money(record.cashTotal)}
               </span>
               <span className="flex items-center gap-0.5">
                 <CreditCard className="h-3 w-3 text-blue-500" />
-                {fmtGHS(record.cardTotal)}
+                {money(record.cardTotal)}
               </span>
               <span className="flex items-center gap-0.5">
                 <Smartphone className="h-3 w-3 text-purple-500" />
-                {fmtGHS(record.mobileMoneyTotal)}
+                {money(record.mobileMoneyTotal)}
               </span>
             </div>
 
@@ -1925,7 +1919,7 @@ function PastDayCard({
                                           <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatTime(sale.createdAt)}</TableCell>
                                           <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
                                           <TableCell className="text-xs">{sale.customer?.name ?? 'Walk-in'}</TableCell>
-                                          <TableCell className="text-right text-sm font-medium">{fmtGHS(sale.totalAmount)}</TableCell>
+                                          <TableCell className="text-right text-sm font-medium">{money(sale.totalAmount)}</TableCell>
                                           <TableCell><PaymentBadge method={sale.paymentMethod} /></TableCell>
                                           {isAdmin && (
                                             <TableCell className="w-12">
@@ -1950,7 +1944,7 @@ function PastDayCard({
                                                     <tr key={item.id} className="border-b border-dotted">
                                                       <td className="py-1">{item.product?.name ?? 'Product'}</td>
                                                       <td className="text-center py-1">{item.quantity}</td>
-                                                      <td className="text-right py-1">{fmtGHS(item.total)}</td>
+                                                      <td className="text-right py-1">{money(item.total)}</td>
                                                     </tr>
                                                   ))}
                                                 </tbody>
@@ -1993,8 +1987,8 @@ function PastDayCard({
                                     <TableCell className="text-xs font-medium">{item.productName}</TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground font-mono">{item.batchNumber}</TableCell>
                                     <TableCell className="text-xs text-center">{item.quantity} {item.productUnit}</TableCell>
-                                    <TableCell className="text-xs text-right">{fmtGHS(item.unitPrice)}</TableCell>
-                                    <TableCell className="text-xs text-right font-semibold">{fmtGHS(item.total)}</TableCell>
+                                    <TableCell className="text-xs text-right">{money(item.unitPrice)}</TableCell>
+                                    <TableCell className="text-xs text-right font-semibold">{money(item.total)}</TableCell>
                                     <TableCell><PaymentBadge method={item.paymentMethod} /></TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground">{item.cashierName}</TableCell>
                                     <TableCell className="text-[11px] font-mono text-muted-foreground">{item.invoiceNo}</TableCell>
@@ -2049,9 +2043,9 @@ function PastDayCard({
                                       <TableCell className="text-xs text-center">
                                         <Badge variant="secondary" className="text-[10px] font-mono">{p.totalQty}</Badge>
                                       </TableCell>
-                                      <TableCell className="text-xs text-right">{fmtGHS(p.avgPrice)}</TableCell>
-                                      <TableCell className="text-xs text-right font-semibold">{fmtGHS(p.totalRevenue)}</TableCell>
-                                      <TableCell className="text-xs text-right text-emerald-600 font-medium">{fmtGHS(p.totalProfit)}</TableCell>
+                                      <TableCell className="text-xs text-right">{money(p.avgPrice)}</TableCell>
+                                      <TableCell className="text-xs text-right font-semibold">{money(p.totalRevenue)}</TableCell>
+                                      <TableCell className="text-xs text-right text-emerald-600 font-medium">{money(p.totalProfit)}</TableCell>
                                       <TableCell className="text-xs text-right">
                                         <span className={`font-medium ${p.totalRevenue > 0 ? (p.totalProfit / p.totalRevenue) * 100 > 30 ? 'text-emerald-600' : (p.totalProfit / p.totalRevenue) * 100 > 15 ? 'text-amber-600' : 'text-red-500' : ''}`}>
                                           {p.totalRevenue > 0 ? ((p.totalProfit / p.totalRevenue) * 100).toFixed(1) + '%' : '-'}

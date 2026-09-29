@@ -6,7 +6,12 @@
  * Source of truth is the SystemSetting table via GET /api/settings;
  * a localStorage mirror (SETTINGS_STORAGE_KEY) provides instant offline
  * reads and is written through on every successful fetch. Consumers such
- * as POSView use this for VAT rate, receipt branding and behaviour flags.
+ * as POSView use this for receipt branding and behaviour flags.
+ *
+ * `mergeSettings` copies only the sections and keys that still exist in
+ * `defaultSettings`, so a mirror written by an older build cannot inject a
+ * removed setting (a stale `pharmacy.taxRate`, say) back into live state. The
+ * server applies the same rule on read — see `RETIRED_SETTING_KEYS`.
  *
  * The API call is memoized at module level so mounting many consumers
  * (POS, SalesHistory, the app shell) results in a single /api/settings

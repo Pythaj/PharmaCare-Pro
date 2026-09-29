@@ -1,7 +1,8 @@
 'use client';
 
 import { useAppStore } from '@/stores/app-store';
-import { getPageName } from './Sidebar';
+import { money } from '@/lib/currency';
+import { getPageName } from '@/lib/nav';
 import { BranchSwitcher } from './BranchSwitcher';
 import { cn } from '@/lib/utils';
 import {
@@ -46,10 +47,6 @@ import {
 } from '@/components/ui/dialog';
 import { useEffect, useState, useCallback, useRef, type KeyboardEvent } from 'react';
 import { toast } from 'sonner';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
 
 function formatDuration(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
@@ -286,21 +283,21 @@ function ProfileDialog() {
                         <TrendingUp className="h-3 w-3" style={{ color: 'var(--accent-primary)' }} />
                         <span className="text-[10px] font-medium text-slate-500">All Time</span>
                       </div>
-                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.totalSales)}</p>
+                      <p className="text-base font-bold text-slate-800">{money(stats.totalSales)}</p>
                     </div>
                     <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
                         <Clock className="h-3 w-3 text-blue-500" />
                         <span className="text-[10px] font-medium text-slate-500">This Week</span>
                       </div>
-                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.weekSales)}</p>
+                      <p className="text-base font-bold text-slate-800">{money(stats.weekSales)}</p>
                     </div>
                     <div className="rounded-lg bg-white/80 p-3 text-center shadow-sm" style={{ borderColor: 'var(--accent-primary-border)' }}>
                       <div className="flex items-center justify-center gap-1 mb-1">
                         <Award className="h-3 w-3" style={{ color: 'var(--accent-primary)' }} />
                         <span className="text-[10px] font-medium text-slate-500">Today</span>
                       </div>
-                      <p className="text-base font-bold text-slate-800">{formatGHS(stats.todaySales)}</p>
+                      <p className="text-base font-bold text-slate-800">{money(stats.todaySales)}</p>
                     </div>
                   </div>
                 ) : (

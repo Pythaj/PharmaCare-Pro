@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireBranchScope } from '@/lib/require-auth';
 import { classifyBatchExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts';
+import { getExpiryAlertDays } from '@/lib/server-settings';
+import {
+  createEffectiveValueResolver,
+  loadBranchProductOverrides,
+} from '@/lib/branch-product-settings';
 
 /**
  * GET /api/inventory/alerts
@@ -9,7 +14,9 @@ import { classifyBatchExpiry, classifyStock, daysUntil } from '@/lib/inventory-a
  * Classification comes from lib/inventory-alerts, the same helpers the product
  * list, dashboard stats and dashboard recent panels use — so a product can never
  * be "low stock" here and "in stock" there, and "expiring soon" always means
- * the same 90-day window that excludes already-expired stock.
+ * the same window that excludes already-expired stock. That window is the
+ * owner's `notifications.expiryAlertDays`, and it is echoed back in the
+ * response so the client labels the list with the number actually applied.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireBranchScope(request);
@@ -20,6 +27,13 @@ export async function GET(request: NextRequest) {
   try {
     const now = new Date();
 
+    // The "expiring soon" horizon is the owner's configured
+    // `notifications.expiryAlertDays`, not the hardcoded 90 that
+    // EXPIRY_WARNING_DAYS holds. The Settings screen already displayed the saved
+    // value, so a shop that asked for 14-day warnings was shown "14" and
+    // continued to get 90 with no way to tell the two apart.
+    const expiryWarningDays = await getExpiryAlertDays();
+
     // The catalogue is shared across branches, but AVAILABILITY is not. Every
     // figure below — total stock, reorder shortfall, expiry warnings, inventory
     // value — is derived from this branch's batches only. Summing the whole
@@ -27,6 +41,13 @@ export async function GET(request: NextRequest) {
     // well-stocked because a different shop is full, which is precisely the
     // mistake that lets a customer be promised medicine that is not there.
     const branchId = auth.scope!.branchId;
+
+    // The reorder threshold is per-branch. `Product.reorderLevel` is the
+    // chain-wide default; a branch that orders a different volume overrides it
+    // in BranchProductSetting. Comparing this branch's stock against the
+    // chain-wide number was the cross-branch leak — it made one shop's reorder
+    // policy move another's low-stock list.
+    const resolveValues = createEffectiveValueResolver(await loadBranchProductOverrides(branchId));
 
     const products = await db.product.findMany({
       where: { active: true },
@@ -113,7 +134,7 @@ export async function GET(request: NextRequest) {
       for (const batch of product.batches) {
         if (batch.quantity <= 0) continue;
 
-        const status = classifyBatchExpiry(batch.expiryDate, now);
+        const status = classifyBatchExpiry(batch.expiryDate, now, expiryWarningDays);
         if (status === 'good') continue;
 
         const days = daysUntil(batch.expiryDate, now);
@@ -136,8 +157,10 @@ export async function GET(request: NextRequest) {
       }
 
       // Stock alerts come from the shared classifier, so a reorder level of 0
-      // ("never reorder") can never flag a stocked product as low.
-      const stockStatus = classifyStock(totalStock, product.reorderLevel);
+      // ("never reorder") can never flag a stocked product as low. The threshold
+      // is this branch's, not the chain-wide default.
+      const effective = resolveValues(product);
+      const stockStatus = classifyStock(totalStock, effective.reorderLevel);
 
       if (stockStatus === 'out_of_stock') {
         outOfStock.push({
@@ -146,7 +169,7 @@ export async function GET(request: NextRequest) {
           genericName: product.genericName,
           categoryName: product.category?.name ?? null,
           unit: product.unit,
-          reorderLevel: product.reorderLevel,
+          reorderLevel: effective.reorderLevel,
           totalStock: 0,
         });
       } else if (stockStatus === 'low_stock') {
@@ -157,13 +180,18 @@ export async function GET(request: NextRequest) {
           categoryName: product.category?.name ?? null,
           unit: product.unit,
           totalStock,
-          reorderLevel: product.reorderLevel,
-          shortage: product.reorderLevel - totalStock,
+          reorderLevel: effective.reorderLevel,
+          shortage: effective.reorderLevel - totalStock,
         });
       }
     }
 
     return NextResponse.json({
+      // Echoed so the client can label the list with the window that actually
+      // produced it. Without this the UI hardcodes a number to describe its own
+      // contents, which is how "within 90 days" outlived the setting becoming
+      // configurable.
+      expiryWarningDays,
       summary: {
         totalItems,
         itemsInStock,

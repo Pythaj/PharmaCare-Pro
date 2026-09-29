@@ -42,7 +42,6 @@ export async function GET(request: NextRequest) {
         ...r,
         totalRevenue: Number(r.totalRevenue),
         totalProfit: Number(r.totalProfit),
-        totalDiscount: Number(r.totalDiscount),
         cashTotal: Number(r.cashTotal),
         cardTotal: Number(r.cardTotal),
         mobileMoneyTotal: Number(r.mobileMoneyTotal),
@@ -122,13 +121,11 @@ export async function POST(request: NextRequest) {
     const totals = sales.map((s) => ({
       totalAmount: toNumber(s.totalAmount),
       profit: toNumber(s.profit),
-      discount: toNumber(s.discount),
       paymentMethod: s.paymentMethod,
     }))
 
     const totalRevenue = totals.reduce((sum, s) => sum + s.totalAmount, 0)
     const totalProfit = totals.reduce((sum, s) => sum + s.profit, 0)
-    const totalDiscount = totals.reduce((sum, s) => sum + s.discount, 0)
     const totalTransactions = totals.length
     const totalItemsSold = sales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
     const cashTotal = totals.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
@@ -143,7 +140,6 @@ export async function POST(request: NextRequest) {
         openedBy: validUserId,
         totalRevenue,
         totalProfit,
-        totalDiscount,
         totalTransactions,
         totalItemsSold,
         cashTotal,

@@ -7,8 +7,10 @@ export type Page =
   | 'products'
   | 'inventory'
   | 'sales-history'
+  | 'customers'
   | 'returns'
   | 'reports'
+  | 'branch-performance'
   | 'users'
   | 'audit-logs'
   | 'branches'
@@ -18,6 +20,10 @@ export type Page =
 /** Pages restricted to admin role only */
 export const ADMIN_ONLY_PAGES: Page[] = [
   'admin-dashboard', 'returns', 'reports',
+  // Every branch side by side. Deliberately NOT reachable by switching the
+  // active branch: the value of this page is the comparison, and a
+  // branch-scoped version of it would answer a question nobody asked.
+  'branch-performance',
   'users', 'audit-logs', 'settings', 'inventory',
   // Creating a branch is an owner-level decision: it decides where money is
   // attributed for the rest of the business's life.
@@ -27,6 +33,19 @@ export const ADMIN_ONLY_PAGES: Page[] = [
   // shelves to a competitor.
   'transfers',
 ];
+
+/**
+ * Deliberately NOT in `ADMIN_ONLY_PAGES`: the customer book is shared by both
+ * roles.
+ *
+ * A `Customer` row has no `branchId` — one person who shops at two branches is
+ * one customer, not two — and the API reflects that: GET and POST require only
+ * `requireAuth`, because a cashier must be able to register a walk-in at the
+ * till. Only PATCH and DELETE are `requireAdmin`, since rewriting or erasing
+ * another branch's customer history is an owner's decision. `CustomersView`
+ * mirrors that split exactly (the Add button is ungated; edit and delete are
+ * admin-only).
+ */
 
 export type UserRole = 'admin' | 'sales';
 
@@ -99,6 +118,18 @@ export interface Product {
   updatedAt: string;
   category?: Category;
   _count?: { batches: number; saleItems: number };
+  /**
+   * The threshold this branch actually compares stock against, which is the
+   * branch's own override when one exists and the chain-wide `reorderLevel`
+   * otherwise. `reorderLevel` above stays the chain-wide value because the edit
+   * form round-trips it — answering that field with the effective value would let
+   * saving a branch override publish it as a global change.
+   */
+  effectiveReorderLevel?: number;
+  reorderLevelIsBranchOverride?: boolean;
+  /** Default price for a batch received here without an explicit price. */
+  effectiveSellingPrice?: number;
+  effectiveCostPrice?: number;
 }
 
 export interface Batch {
@@ -147,8 +178,6 @@ export interface Sale {
   /** Shop the sale was rung up at. */
   branchId?: string;
   subtotal: number;
-  tax: number;
-  discount: number;
   totalAmount: number;
   profit: number;
   paymentMethod: string;
@@ -184,7 +213,7 @@ export interface ReturnItem {
   returnId: string;
   saleItemId: string;
   quantity: number;
-  /** What the customer actually got back for this line, after discount/tax. */
+  /** What the customer actually got back for this line. */
   refundAmount: number;
   saleItem?: {
     unitPrice: number;
@@ -266,7 +295,6 @@ export interface DailySalesRecord {
   closedAt?: string;
   totalRevenue: number;
   totalProfit: number;
-  totalDiscount: number;
   totalTransactions: number;
   totalItemsSold: number;
   cashTotal: number;

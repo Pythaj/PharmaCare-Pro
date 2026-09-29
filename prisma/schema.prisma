@@ -36,6 +36,7 @@ model Branch {
   auditLogs    AuditLog[]
   transfersOut StockTransfer[] @relation("TransferOut")
   transfersIn  StockTransfer[] @relation("TransferIn")
+  productSettings BranchProductSetting[]
 
   @@map("branches")
 }
@@ -116,10 +117,62 @@ model Product {
     batches     Batch[]
     saleItems   SaleItem[]
     transferLines StockTransferLine[]
+    branchSettings BranchProductSetting[]
 
   @@index([active])
   @@index([categoryId])
   @@map("products")
+}
+
+/// Per-branch overrides for the catalogue fields that legitimately differ
+/// between branches.
+///
+/// The catalogue itself stays shared — Panadol is Panadol in every branch, and
+/// duplicating the product per shop would create exactly the drift this is
+/// meant to prevent. But two things on a product are *not* the same in every
+/// shop:
+///
+///  1. `Product.reorderLevel`. A flagship branch ordering 200 units of a
+///     product and a village branch ordering 20 cannot both be served by one
+///     number. Because the threshold was global while the stock it was compared
+///     against is branch-scoped, setting it at Branch A silently moved Branch B's
+///     "low stock" line and reorder shortfall with it. That is a genuine
+///     cross-branch leak, not a display detail.
+///
+///  2. The default price for NEW batches. `Batch.sellingPrice` is already
+///     per-branch and is what the till actually charges, so this column does
+///     NOT reprice stock already on a shelf — it only supplies the starting
+///     value when a batch is received without an explicit price, so a branch
+///     that prices a product differently does not have to remember to retype
+///     it on every delivery.
+///
+/// Every column is nullable and NULL means "inherit the chain-wide Product
+/// value", so a row is only created when an admin deliberately overrides
+/// something. A branch with no row behaves exactly as it did before.
+model BranchProductSetting {
+  id        String   @id @default(cuid())
+  productId String
+  branchId  String
+  /// NULL = inherit `Product.reorderLevel`. 0 is meaningful and distinct from
+  /// NULL: 0 means "never flag as low stock at this branch", NULL means "use
+  /// whatever the chain-wide setting says".
+  reorderLevel Int?
+  /// NULL = inherit `Product.defaultSellingPrice` when receiving a new batch.
+  sellingPrice Float?
+  /// NULL = inherit `Product.defaultCostPrice` when receiving a new batch.
+  costPrice    Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  /// One override row per (product, branch). Without this, two concurrent
+  /// saves could write competing thresholds for the same branch and the winner
+  /// would be arbitrary.
+  @@unique([productId, branchId])
+  @@index([branchId])
+  @@map("branch_product_settings")
 }
 
 model Batch {
@@ -198,9 +251,11 @@ model Sale {
   invoiceNo     String   @unique
   customerId    String?
   userId        String?
+  /// What the goods came to before payment. With no discount and no tax
+  /// anywhere in this app, this IS the amount charged — `totalAmount` is kept
+  /// as its own column so a sale's charged value is recorded once, at the
+  /// moment of the transaction, and never has to be re-derived from the lines.
   subtotal      Decimal    @default(0)
-  tax           Decimal    @default(0)
-  discount      Decimal    @default(0)
   totalAmount   Decimal    @default(0)
   profit        Decimal    @default(0)
   /// The shop this sale physically happened at. Every branch figure in the
@@ -274,7 +329,7 @@ model Return {
 // Per-line return tracking: makes cumulative over-return validation possible
 // (a SaleItem can never have more returned quantity than was purchased).
 // refundAmount is the customer's actual money back for this line — the line's
-// share of the sale after discount and tax — so the parts always add up to
+// share of the sale's charged total — so the parts always add up to
 // Return.totalRefund and to what was actually collected.
 model ReturnItem {
   id            String @id @default(cuid())
@@ -328,7 +383,6 @@ model DailySalesRecord {
   closedAt          DateTime?
   totalRevenue      Decimal     @default(0)
   totalProfit       Decimal     @default(0)
-  totalDiscount     Decimal     @default(0)
   totalTransactions Int      @default(0)
   totalItemsSold    Int       @default(0)
   cashTotal         Decimal     @default(0)

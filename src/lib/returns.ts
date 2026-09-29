@@ -3,12 +3,17 @@
  * returns (Rule 18). Shared by POST /api/returns and DELETE /api/returns/[id]
  * so a refund can never be priced one way and the sale's status judged another.
  *
- * A sale is priced as:  totalAmount = subtotal - discount + tax
- * (see POST /api/sales). A refund must give back what the customer actually
- * paid for the returned units, so every line is refunded its *pro-rata share of
- * the net total* — not the raw shelf price. Refunding shelf price would
- * over-refund any discounted sale and under-refund any taxed one, and the sale
- * status check (refunded >= totalAmount) would then never line up.
+ * A refund must give back what the customer actually paid for the returned
+ * units. This app has no discount and no tax, so every sale it writes has
+ * `totalAmount === subtotal` and each line is refunded its own shelf price.
+ *
+ * The proration below still runs against the *recorded* pair rather than
+ * assuming they are equal, because sales written before discount and tax were
+ * removed can have a charged total below their shelf-price subtotal. Refunding
+ * those at shelf price would hand back more cash than was ever collected and
+ * the sale's status check (refunded >= totalAmount) would never line up. The
+ * factor is 1 for every new sale, so this costs nothing and keeps old receipts
+ * refundable to the cent.
  */
 
 /** Currency is handled to 2 decimals, so comparisons need half-a-cent slack. */
@@ -26,18 +31,15 @@ export function isReturnStatus(value: unknown): value is ReturnStatus {
 export interface SalePricing {
   /** Sum of every line's shelf price (unitPrice x quantity). */
   subtotal: number;
-  /** Flat discount taken off the whole sale. */
-  discount: number;
-  /** Flat tax added to the whole sale. */
-  tax: number;
-  /** What the customer actually paid: subtotal - discount + tax. */
+  /** What the customer was actually charged. Equals `subtotal` for new sales. */
   totalAmount: number;
 }
 
 /**
- * Price of one line as a share of the sale's net total.
- * Falls back to shelf price when the sale has no subtotal to prorate against
- * (a fully discounted / zero-value sale), which keeps the maths finite.
+ * Price of one line as a share of the sale's charged total.
+ * Always 1 for a sale this app wrote; see the note at the top of this file.
+ * Falls back to shelf price when there is no subtotal to prorate against,
+ * which keeps the maths finite.
  */
 export function netRefundFactor(sale: SalePricing): number {
   if (!(sale.subtotal > 0)) return 1;
@@ -52,7 +54,7 @@ export interface RefundLineInput {
 }
 
 export interface RefundLine extends RefundLineInput {
-  /** Shelf price of the returned units, before discount/tax. */
+  /** Shelf price of the returned units. */
   grossAmount: number;
   /** What the customer actually gets back for this line. */
   refundAmount: number;
@@ -146,6 +148,10 @@ export function isSaleStatus(value: unknown): value is SaleStatus {
 
 interface BatchUpdater {
   batch: {
+    findFirst(args: {
+      where: { id: string; branchId: string };
+      select: { id: true };
+    }): Promise<unknown>;
     update(args: {
       where: { id: string };
       data: { quantity: { increment: number } };
@@ -163,14 +169,41 @@ export interface StockLine {
  * their original batch (an approved return) and -1 to take them out again (a
  * return being voided). Lines without a batch (items sold without one) are
  * skipped — there is nothing to adjust.
+ *
+ * `ownerBranchId` is the branch that sold the goods, and it is REQUIRED rather
+ * than optional so that adding a new caller cannot silently skip the check.
+ * A return is the one place stock is credited *without* the caller naming a
+ * batch of its own: `batchId` comes from the original sale item, so nothing
+ * about the request is checked against the shelf being credited. The branch is
+ * therefore re-asserted here, in the one function that performs the credit,
+ * instead of being trusted at each call site.
+ *
+ * `POST /api/sales` no longer allows a sale to reference another branch's
+ * batch, so for correctly-written data this check always passes. It exists for
+ * data written before that fix: without it, refunding a legacy sale would
+ * credit a foreign branch's shelf — inventing inventory in a shop that never
+ * held the goods. A mismatched line is logged and skipped rather than thrown,
+ * because the customer is owed the refund either way.
  */
 export async function applyReturnStock(
   tx: BatchUpdater,
   lines: StockLine[],
-  direction: 1 | -1
+  direction: 1 | -1,
+  ownerBranchId: string
 ): Promise<void> {
   for (const line of lines) {
     if (!line.batchId || line.quantity <= 0) continue;
+    const owned = await tx.batch.findFirst({
+      where: { id: line.batchId, branchId: ownerBranchId },
+      select: { id: true },
+    });
+    if (!owned) {
+      console.error(
+        `[applyReturnStock] batch ${line.batchId} is not owned by branch ${ownerBranchId} — ` +
+          `skipped returning ${line.quantity} unit(s). Pre-existing cross-branch data; reconcile manually.`
+      );
+      continue;
+    }
     await tx.batch.update({
       where: { id: line.batchId },
       data: { quantity: { increment: direction * line.quantity } },

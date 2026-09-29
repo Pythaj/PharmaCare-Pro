@@ -44,7 +44,6 @@ async function main() {
     { key: 'pharmacy.appName', value: 'PharmaCare Pro' },
     { key: 'pharmacy.tagline', value: 'Premium Pharmacy Management System' },
     { key: 'pharmacy.currency', value: 'GHS' },
-    { key: 'pharmacy.taxRate', value: '0' },
   ];
   for (const s of settings) {
     await db.systemSetting.upsert({

@@ -28,7 +28,6 @@ export function ThemeInitializer() {
     } else {
       applyThemeVars(accentTheme);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Apply CSS vars whenever theme changes

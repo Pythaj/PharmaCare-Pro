@@ -1,7 +1,10 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'react';
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, X, PackagePlus, Boxes, RefreshCcw, Package, Loader2 } from 'lucide-react';
+import { money, configuredCurrency } from '@/lib/currency';
+import { useAppStore } from '@/stores/app-store';
+import { cn } from '@/lib/utils';
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, PackagePlus, Boxes, RefreshCcw, Package, Loader2, Building2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -46,14 +49,6 @@ import { usePermissions } from '@/hooks/use-permissions';
 import { notifyCatalogueChanged } from '@/lib/catalogue-events';
 import { useCatalogueSync } from '@/lib/use-catalogue-sync';
 import type { Product, Batch, Category } from '@/types';
-
-function formatGHS(value: number): string {
-  return new Intl.NumberFormat('en-GH', { style: 'currency', currency: 'GHS' }).format(value);
-}
-
-function formatNum(value: number): string {
-  return new Intl.NumberFormat('en-GH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
-}
 
 function calcMargin(cost: number, selling: number): number {
   if (!selling || selling <= 0) return 0;
@@ -261,11 +256,6 @@ const DRUG_KNOWLEDGE: Record<string, DrugKnowledge> = {
   MOUTH: { category: 'Oral Care', genericName: 'Mouthwash', unit: 'bottle' },
 };
 
-/** Normalise a name for fuzzy matching: UPPER + strip everything non-alphanumeric. */
-function normalizeKey(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
-
 // ─── Premium Margin Badge ───
 function MarginBadge({ cost, selling }: { cost: number; selling: number }) {
   const margin = calcMargin(cost, selling);
@@ -398,7 +388,7 @@ function MarkupCalculator({
           <div className="rounded-lg bg-white/60 border border-slate-100 px-2.5 py-2 text-center">
             <p className="text-[9px] text-slate-400 uppercase tracking-wider">Profit</p>
             <p className={`text-sm font-bold tabular-nums mt-0.5 ${profit > 0 ? 'text-emerald-600' : profit < 0 ? 'text-red-500' : 'text-slate-500'}`}>
-              {formatGHS(profit)}
+              {money(profit)}
             </p>
           </div>
           <div className="rounded-lg bg-white/60 border border-slate-100 px-2.5 py-2 text-center">
@@ -496,7 +486,7 @@ function InlinePriceEditor({
           className="group inline-flex items-center gap-1.5 font-bold text-emerald-700 hover:text-emerald-800 transition-colors rounded-md px-1.5 py-0.5 -mx-1.5 hover:bg-emerald-50/80"
           onClick={(e) => e.stopPropagation()}
         >
-          {product.defaultSellingPrice > 0 ? formatGHS(product.defaultSellingPrice) : <span className="text-amber-500 font-medium text-xs">Set Price</span>}
+          {product.defaultSellingPrice > 0 ? money(product.defaultSellingPrice) : <span className="text-amber-500 font-medium text-xs">Set Price</span>}
           <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-500" />
         </button>
       </PopoverTrigger>
@@ -564,7 +554,7 @@ function InlinePriceEditor({
             }`}>
               <span className="text-[10px] text-slate-500">Profit per unit</span>
               <span className={`text-xs font-bold tabular-nums ${profit > 0 ? 'text-emerald-700' : profit < 0 ? 'text-red-600' : 'text-slate-500'}`}>
-                {formatGHS(profit)} · {margin.toFixed(1)}% margin
+                {money(profit)} · {margin.toFixed(1)}% margin
               </span>
             </div>
           )}
@@ -648,6 +638,14 @@ function InlinePriceEditor({
 
 export default function ProductsView() {
   const { canManageProducts } = usePermissions();
+  // Null means the consolidated "All branches" view, where receiving stock has
+  // no single destination. The server refuses such a receipt; the UI says so
+  // first.
+  const activeBranch = useAppStore((s) => s.activeBranch);
+  // ISO 4217 code for the price-field labels and prefixes. Read from the
+  // configured currency so the unit shown beside a price input is the unit the
+  // price is actually charged in.
+  const currencyCode = configuredCurrency();
   const [products, setProducts] = useState<ProductWithStock[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [search, setSearch] = useState('');
@@ -655,6 +653,9 @@ export default function ProductsView() {
   const [loading, setLoading] = useState(true);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  // `openingQuantity` is a string, not a number, so a half-typed "1" of "100"
+  // is not clobbered to 0 by `parseFloat('1') || 0` on every keystroke. It is
+  // parsed once, at save time, and the server revalidates it.
   const [addForm, setAddForm] = useState({
     name: '',
     genericName: '',
@@ -663,6 +664,9 @@ export default function ProductsView() {
     reorderLevel: 10,
     defaultCostPrice: 0,
     defaultSellingPrice: 0,
+    openingQuantity: '',
+    openingBatchNumber: '',
+    openingExpiry: '',
   });
   // Track an auto-detected category/generic so we can show a clear "auto-filled"
   // affordance without clobbering deliberate edits by the owner.
@@ -829,9 +833,13 @@ export default function ProductsView() {
   const getProductStatusBadges = (product: ProductWithStock) => {
     const badges: { label: string; className: string }[] = [];
 
-    if (product.totalStock === 0) {
+    // The server already classified this with the branch's own reorder level.
+    // Recomputing it here from the chain-wide `reorderLevel` is what let this
+    // row read "In Stock" while the inventory screen and the alerts list said
+    // "Low Stock" for the same product.
+    if (product.stockStatus === 'out_of_stock') {
       badges.push({ label: 'Out of Stock', className: 'bg-red-500 text-white hover:bg-red-500' });
-    } else if (product.totalStock <= product.reorderLevel) {
+    } else if (product.stockStatus === 'low_stock') {
       badges.push({ label: 'Low Stock', className: 'bg-amber-100 text-amber-700 hover:bg-amber-100 border-amber-300' });
     }
 
@@ -875,18 +883,52 @@ export default function ProductsView() {
 
   const handleAddProduct = async () => {
     if (!addForm.name.trim()) { toast.error('Product name is required'); return; }
+
+    // Checked here so the admin gets an instant, specific message instead of a
+    // round-trip. The server refuses it too — this is a courtesy, not the guard.
+    const openingQty = addForm.openingQuantity.trim() === '' ? 0 : Number(addForm.openingQuantity);
+    if (!Number.isFinite(openingQty) || !Number.isInteger(openingQty) || openingQty < 0) {
+      toast.error('Opening quantity must be a whole number of 0 or more');
+      return;
+    }
+    if (openingQty > 0 && !activeBranch) {
+      toast.error('Select the branch holding this stock, or set the quantity to 0');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const res = await fetch('/api/products', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(addForm),
+        body: JSON.stringify({
+          name: addForm.name,
+          genericName: addForm.genericName,
+          categoryId: addForm.categoryId,
+          unit: addForm.unit,
+          reorderLevel: addForm.reorderLevel,
+          defaultCostPrice: addForm.defaultCostPrice,
+          defaultSellingPrice: addForm.defaultSellingPrice,
+          // Sent as a nested object rather than flat fields so the server can
+          // tell "no opening stock" from "opening stock of zero".
+          initialStock: {
+            quantity: openingQty,
+            batchNumber: addForm.openingBatchNumber.trim() || undefined,
+            expiryDate: addForm.openingExpiry || undefined,
+          },
+        }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Failed to add product');
       }
-      toast.success(`"${addForm.name}" added with price ${formatGHS(addForm.defaultSellingPrice)}`);
+      const saved = await res.json().catch(() => null);
+      const stocked = saved?.openingStock;
+      toast.success(
+        stocked
+          ? `"${addForm.name}" added — ${stocked.quantity} unit(s) stocked at ${stocked.branchName ?? activeBranch?.name}`
+          : `"${addForm.name}" added with price ${money(addForm.defaultSellingPrice)}`
+      );
       setShowAddDialog(false);
       setAddAutoDetected(false);
       setAddForm({
@@ -897,6 +939,9 @@ export default function ProductsView() {
         reorderLevel: 10,
         defaultCostPrice: 0,
         defaultSellingPrice: 0,
+        openingQuantity: '',
+        openingBatchNumber: '',
+        openingExpiry: '',
       });
       notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
@@ -1064,8 +1109,12 @@ export default function ProductsView() {
       key: `new-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       batchNumber: `BATCH-${String(editBatches.length + 1).padStart(3, '0')}`,
       quantity: 0,
-      costPrice: 0,
-      sellingPrice: 0,
+      // Prefilled from the effective (branch-aware) defaults rather than 0. A new
+      // row used to start at zero prices, and a stock count entered without
+      // noticing was filed at 0 — free medicine on the shelf, and a cost report
+      // that silently understated the branch.
+      costPrice: editProduct?.effectiveCostPrice ?? editProduct?.defaultCostPrice ?? 0,
+      sellingPrice: editProduct?.effectiveSellingPrice ?? editProduct?.defaultSellingPrice ?? 0,
       expiryDate: toDateInputValue(exp),
     };
     setEditBatches((prev) => [...prev, row]);
@@ -1098,6 +1147,22 @@ export default function ProductsView() {
     }
     if (!activeBatch?.batchNumber.trim()) {
       toast.info('Leave batch number blank to auto-generate one.');
+    }
+
+    // Receiving stock means putting it on a specific shelf, so it needs a
+    // specific shop. The server refuses without one — this says why first,
+    // instead of letting the user fill in a whole batch and then read a 400.
+    // Only NEW batches are blocked: editing a batch that already exists at the
+    // selected branch is a different operation, and with no branch selected
+    // there is nothing to update anyway (the edit list is branch-scoped, so it
+    // is empty).
+    const addingNewBatches = editBatches.some((r) => !r.id);
+    if (addingNewBatches && !activeBranch) {
+      toast.error(
+        'Select the branch receiving this stock first. Stock belongs to one branch — it is never shared.',
+        { duration: 6000 }
+      );
+      return;
     }
 
     setSavingEdit(true);
@@ -1375,7 +1440,7 @@ export default function ProductsView() {
                           </TableCell>
                           <TableCell className="text-right hidden md:table-cell">
                             {product.defaultCostPrice > 0 ? (
-                              <span className="text-xs text-slate-500 font-mono">{formatGHS(product.defaultCostPrice)}</span>
+                              <span className="text-xs text-slate-500 font-mono">{money(product.defaultCostPrice)}</span>
                             ) : (
                               <span className="text-slate-300 text-xs">—</span>
                             )}
@@ -1388,7 +1453,7 @@ export default function ProductsView() {
                               />
                             ) : (
                               product.defaultSellingPrice > 0 ? (
-                                <span className="font-bold text-emerald-700 text-sm">{formatGHS(product.defaultSellingPrice)}</span>
+                                <span className="font-bold text-emerald-700 text-sm">{money(product.defaultSellingPrice)}</span>
                               ) : (
                                 <span className="text-amber-500 font-medium text-xs">Not set</span>
                               )
@@ -1575,8 +1640,8 @@ export default function ProductsView() {
                                             <tr key={batch.id || `batch-${batch.batchNumber}`} className={`border-b border-dotted ${isExpired ? 'bg-red-50/40' : ''}`}>
                                               <td className="py-1.5 font-mono">{batch.batchNumber}</td>
                                               <td className="text-right font-mono font-medium">{batch.currentQty}</td>
-                                              <td className="text-right font-mono">{formatGHS(batch.costPrice)}</td>
-                                              <td className="text-right font-mono font-semibold text-emerald-700">{formatGHS(batch.sellingPrice)}</td>
+                                              <td className="text-right font-mono">{money(batch.costPrice)}</td>
+                                              <td className="text-right font-mono font-semibold text-emerald-700">{money(batch.sellingPrice)}</td>
                                               <td className="text-center">
                                                 <span className={`text-[10px] font-semibold tabular-nums ${
                                                   batchMargin > 0 ? 'text-emerald-600' : batchMargin < 0 ? 'text-red-500' : 'text-slate-400'
@@ -1643,6 +1708,9 @@ export default function ProductsView() {
             reorderLevel: 10,
             defaultCostPrice: 0,
             defaultSellingPrice: 0,
+            openingQuantity: '',
+            openingBatchNumber: '',
+            openingExpiry: '',
           });
           setAddAutoDetected(false);
         }
@@ -1656,7 +1724,9 @@ export default function ProductsView() {
               </div>
               Add New Product
             </DialogTitle>
-            <DialogDescription>Set up the product details and pricing below.</DialogDescription>
+            <DialogDescription>
+              Set up the product details and pricing, then record how many are on the shelf.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
             {/* Basic Info Section */}
@@ -1758,7 +1828,7 @@ export default function ProductsView() {
                 {/* Price inputs */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-slate-500 font-medium uppercase tracking-wider">Cost Price (GHS)</Label>
+                    <Label className="text-[11px] text-slate-500 font-medium uppercase tracking-wider">Cost Price ({currencyCode})</Label>
                     <div className="relative">
                       <Input
                         type="number"
@@ -1769,12 +1839,12 @@ export default function ProductsView() {
                         onChange={(e) => setAddForm({ ...addForm, defaultCostPrice: parseFloat(e.target.value) || 0 })}
                         className="h-10 bg-white/80 border-emerald-200/60 focus-visible:ring-emerald-300/50 font-mono text-sm pl-8"
                       />
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-medium">GHS</span>
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-medium">{currencyCode}</span>
                     </div>
                     <p className="text-[10px] text-slate-400">What you paid the supplier</p>
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] text-emerald-700 font-semibold uppercase tracking-wider">Selling Price (GHS)</Label>
+                    <Label className="text-[11px] text-emerald-700 font-semibold uppercase tracking-wider">Selling Price ({currencyCode})</Label>
                     <div className="relative">
                       <Input
                         type="number"
@@ -1785,7 +1855,7 @@ export default function ProductsView() {
                         onChange={(e) => setAddForm({ ...addForm, defaultSellingPrice: parseFloat(e.target.value) || 0 })}
                         className="h-10 bg-white/80 border-emerald-300/60 focus-visible:ring-emerald-400/50 font-mono text-sm font-bold text-emerald-700 pl-8"
                       />
-                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-emerald-500 font-semibold">GHS</span>
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-emerald-500 font-semibold">{currencyCode}</span>
                     </div>
                     <p className="text-[10px] text-emerald-600/60">What the customer pays</p>
                   </div>
@@ -1798,6 +1868,98 @@ export default function ProductsView() {
                   onCostChange={(v) => setAddForm({ ...addForm, defaultCostPrice: v })}
                   onSellingChange={(v) => setAddForm({ ...addForm, defaultSellingPrice: v })}
                 />
+              </div>
+            </div>
+
+            {/* ─── Opening Stock Section ─── */}
+            <div className="space-y-4">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                <div className="h-1 w-4 rounded-full bg-slate-300" />
+                Opening Stock
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <Label className="text-xs font-medium" htmlFor="add-opening-qty">
+                      Quantity in Stock
+                    </Label>
+                    <Input
+                      id="add-opening-qty"
+                      type="number"
+                      inputMode="numeric"
+                      min="0"
+                      step="1"
+                      placeholder="0"
+                      value={addForm.openingQuantity}
+                      onChange={(e) => setAddForm({ ...addForm, openingQuantity: e.target.value })}
+                      className="mt-1"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Leave at 0 to add the drug without stock.
+                    </p>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium" htmlFor="add-opening-batch">
+                      Batch No. <span className="text-slate-400 font-normal">(optional)</span>
+                    </Label>
+                    <Input
+                      id="add-opening-batch"
+                      placeholder="e.g. LOT-2291"
+                      maxLength={60}
+                      value={addForm.openingBatchNumber}
+                      onChange={(e) => setAddForm({ ...addForm, openingBatchNumber: e.target.value })}
+                      className="mt-1"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Manufacturer's lot number.</p>
+                  </div>
+                  <div>
+                    <Label className="text-xs font-medium" htmlFor="add-opening-expiry">
+                      Expiry <span className="text-slate-400 font-normal">(optional)</span>
+                    </Label>
+                    <Input
+                      id="add-opening-expiry"
+                      type="date"
+                      value={addForm.openingExpiry}
+                      onChange={(e) => setAddForm({ ...addForm, openingExpiry: e.target.value })}
+                      className="mt-1"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">Used for expiry alerts.</p>
+                  </div>
+                </div>
+
+                {/* Where the units will land. Stock is owned by one branch, so
+                    this is not decoration: on "All branches" the save is
+                    refused rather than guessed at. */}
+                <div
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-[11px] leading-relaxed ${
+                    addForm.openingQuantity.trim() !== '' && Number(addForm.openingQuantity) > 0 && !activeBranch
+                      ? 'border-amber-300 bg-amber-50 text-amber-800'
+                      : 'border-slate-200 bg-white text-slate-500'
+                  }`}
+                >
+                  <Building2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    {addForm.openingQuantity.trim() !== '' && Number(addForm.openingQuantity) > 0 ? (
+                      activeBranch ? (
+                        <>
+                          These units will be stocked at{' '}
+                          <span className="font-semibold text-slate-700">{activeBranch.name}</span>. The drug
+                          is added to every branch&rsquo;s catalogue; only this branch holds stock.
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-semibold">Select a branch</span> in the top bar to record
+                          this quantity. Stock belongs to one branch, so it cannot be filed while viewing
+                          all branches.
+                        </>
+                      )
+                    ) : (
+                      <>
+                        The drug will appear at every branch with zero stock until a quantity is received.
+                      </>
+                    )}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
@@ -1845,11 +2007,11 @@ export default function ProductsView() {
                   <div className="space-y-2">
                     <div>
                       <p className="text-[10px] text-slate-400">Cost</p>
-                      <p className="text-base font-semibold font-mono">{formatGHS(editPriceProduct.defaultCostPrice ?? 0)}</p>
+                      <p className="text-base font-semibold font-mono">{money(editPriceProduct.defaultCostPrice ?? 0)}</p>
                     </div>
                     <div>
                       <p className="text-[10px] text-slate-400">Selling</p>
-                      <p className="text-base font-bold font-mono text-emerald-700">{formatGHS(editPriceProduct.defaultSellingPrice ?? 0)}</p>
+                      <p className="text-base font-bold font-mono text-emerald-700">{money(editPriceProduct.defaultSellingPrice ?? 0)}</p>
                     </div>
                     <div className="pt-1.5 border-t border-slate-200/60">
                       <MarginBadge cost={editPriceProduct.defaultCostPrice ?? 0} selling={editPriceProduct.defaultSellingPrice ?? 0} />
@@ -1901,16 +2063,16 @@ export default function ProductsView() {
                   <div className="text-xs">
                     {editSellingPrice !== (editPriceProduct.defaultSellingPrice ?? 0) && (
                       <span className="font-medium">
-                        Selling: {formatGHS(editPriceProduct.defaultSellingPrice ?? 0)} → {formatGHS(editSellingPrice)}
+                        Selling: {money(editPriceProduct.defaultSellingPrice ?? 0)} → {money(editSellingPrice)}
                         {' '}
                         <span className={editSellingPrice > (editPriceProduct.defaultSellingPrice ?? 0) ? 'text-emerald-600' : 'text-red-500'}>
-                          ({editSellingPrice > (editPriceProduct.defaultSellingPrice ?? 0) ? '+' : ''}{formatGHS(editSellingPrice - (editPriceProduct.defaultSellingPrice ?? 0))})
+                          ({editSellingPrice > (editPriceProduct.defaultSellingPrice ?? 0) ? '+' : ''}{money(editSellingPrice - (editPriceProduct.defaultSellingPrice ?? 0))})
                         </span>
                       </span>
                     )}
                     {editCostPrice !== (editPriceProduct.defaultCostPrice ?? 0) && (
                       <span className="text-muted-foreground ml-2">
-                        Cost: {formatGHS(editCostPrice - (editPriceProduct.defaultCostPrice ?? 0))}
+                        Cost: {money(editCostPrice - (editPriceProduct.defaultCostPrice ?? 0))}
                       </span>
                     )}
                   </div>
@@ -2109,7 +2271,10 @@ export default function ProductsView() {
                       </Select>
                     </div>
                     <div>
-                      <Label className="text-xs font-medium">Reorder Level</Label>
+                      <Label className="text-xs font-medium">
+                        Reorder Level{' '}
+                        <span className="font-normal text-slate-400">(all branches)</span>
+                      </Label>
                       <Input
                         type="number"
                         min="0"
@@ -2119,6 +2284,12 @@ export default function ProductsView() {
                       />
                     </div>
                   </div>
+
+                  <BranchReorderLevel
+                    product={editProduct}
+                    chainWideLevel={editForm.reorderLevel}
+                    activeBranch={activeBranch}
+                  />
                 </div>
               </div>
 
@@ -2138,6 +2309,37 @@ export default function ProductsView() {
                     <PackagePlus className="h-3.5 w-3.5 mr-1" />
                     Add Batch
                   </Button>
+                </div>
+
+                {/* Stated up front rather than only on save: the batches below
+                    are entered before anything is rejected, and a user who only
+                    discovers the rule from an error has already done the work
+                    twice. */}
+                <div
+                  className={cn(
+                    'flex items-start gap-2 rounded-lg border px-3 py-2 text-xs',
+                    activeBranch
+                      ? 'border-slate-200 bg-slate-50 text-slate-600'
+                      : 'border-amber-300 bg-amber-50 text-amber-900'
+                  )}
+                >
+                  <Building2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    {activeBranch ? (
+                      <>
+                        Stock entered here is received at{' '}
+                        <span className="font-semibold">{activeBranch.name}</span>. It will
+                        not appear in any other branch&rsquo;s inventory — to move stock
+                        between branches, use a stock transfer.
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-semibold">No branch selected.</span> Stock
+                        must be received at one branch, so choose a branch from the
+                        switcher before adding a batch. There is no shared stock pool.
+                      </>
+                    )}
+                  </span>
                 </div>
 
                 {editBatches.length === 0 ? (
@@ -2231,7 +2433,7 @@ export default function ProductsView() {
                                   <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Total Value</Label>
                                   <div className="mt-1 h-9 rounded-md bg-slate-50 border border-slate-200 px-2 flex items-center">
                                     <span className="text-sm font-mono text-slate-600">
-                                      {formatGHS((Number(row.costPrice) || 0) * (Number(row.quantity) || 0))}
+                                      {money((Number(row.costPrice) || 0) * (Number(row.quantity) || 0))}
                                     </span>
                                   </div>
                                 </div>
@@ -2241,7 +2443,7 @@ export default function ProductsView() {
                             {/* Prices row */}
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Cost Price (GHS)</Label>
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Cost Price ({currencyCode})</Label>
                                 <div className="relative">
                                   <Input
                                     type="number"
@@ -2251,11 +2453,11 @@ export default function ProductsView() {
                                     onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { costPrice: parseFloat(e.target.value) || 0 }); }}
                                     className="mt-1 font-mono text-sm h-9 pl-8"
                                   />
-                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-medium">GHS</span>
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-medium">{currencyCode}</span>
                                 </div>
                               </div>
                               <div>
-                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Selling Price (GHS)</Label>
+                                <Label className="text-[10px] text-slate-400 font-medium uppercase tracking-wide">Selling Price ({currencyCode})</Label>
                                 <div className="relative">
                                   <Input
                                     type="number"
@@ -2265,7 +2467,7 @@ export default function ProductsView() {
                                     onChange={(e) => { setEditActiveBatchKey(row.key); updateBatchRow(row.key, { sellingPrice: parseFloat(e.target.value) || 0 }); }}
                                     className="mt-1 font-mono font-bold text-emerald-700 text-sm h-9 pl-8"
                                   />
-                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-emerald-500 font-medium">GHS</span>
+                                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[10px] text-emerald-500 font-medium">{currencyCode}</span>
                                 </div>
                               </div>
                             </div>
@@ -2273,7 +2475,7 @@ export default function ProductsView() {
                             {/* Live margin badge */}
                             <div className="flex items-center justify-between">
                               <span className="text-[10px] text-slate-400">
-                                Profit per {editForm.unit}: {formatGHS((Number(row.sellingPrice) || 0) - (Number(row.costPrice) || 0))}
+                                Profit per {editForm.unit}: {money((Number(row.sellingPrice) || 0) - (Number(row.costPrice) || 0))}
                               </span>
                               <MarginBadge cost={row.costPrice} selling={row.sellingPrice} />
                             </div>
@@ -2380,6 +2582,152 @@ export default function ProductsView() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+/**
+ * Per-branch reorder level, shown directly beneath the chain-wide field.
+ *
+ * ## Why this exists as its own control
+ *
+ * The threshold a branch actually warns at is a branch decision, but the field
+ * that used to set it was the single shared one. An owner who set 200 for a
+ * flagship branch silently pushed every other shop's low-stock line to 200 as
+ * well — and had no way to see or undo it, because the UI showed one number as
+ * if it applied everywhere.
+ *
+ * So the chain-wide value keeps its own field, clearly labelled, and this adds
+ * the local override next to it. Saving is explicit: it writes to
+ * `/api/products/[id]/branch-settings`, never to the product, so a local change
+ * cannot become a global one. The button label states which is which for the
+ * same reason the label does.
+ *
+ * `null` (inherit) and `0` (never reorder locally) are kept distinct in the UI,
+ * because they are distinct in the data and conflating them would make it
+ * impossible to silence an alert at one branch without silencing it everywhere.
+ */
+function BranchReorderLevel({
+  product,
+  chainWideLevel,
+  activeBranch,
+}: {
+  product: ProductWithStock;
+  chainWideLevel: number;
+  activeBranch: { name: string } | null;
+}) {
+  const hasOverride = Boolean(product.reorderLevelIsBranchOverride);
+  const [enabled, setEnabled] = useState(hasOverride);
+  const [level, setLevel] = useState<number>(product.effectiveReorderLevel ?? chainWideLevel);
+  const [saving, setSaving] = useState(false);
+
+  // Re-sync when the dialog is reopened on a different product.
+  useEffect(() => {
+    setEnabled(Boolean(product.reorderLevelIsBranchOverride));
+    setLevel(product.effectiveReorderLevel ?? chainWideLevel);
+  }, [product.id, product.reorderLevelIsBranchOverride, product.effectiveReorderLevel, chainWideLevel]);
+
+  if (!activeBranch) {
+    return (
+      <p className="text-xs text-slate-400">
+        Select a branch to give it its own reorder level. Without a branch selected
+        there is no single shelf to apply a local threshold to.
+      </p>
+    );
+  }
+
+  const save = async (next: number | null) => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/products/${product.id}/branch-settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reorderLevel: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        toast.error(body.error ?? 'Failed to save the branch reorder level.');
+        return;
+      }
+      // The list subscribes to this via useCatalogueSync, so this is what makes
+      // the low-stock badge and the reorder level shown here agree.
+      notifyCatalogueChanged();
+      toast.success(
+        next === null
+          ? `${product.name} now uses the chain-wide reorder level of ${chainWideLevel} at ${activeBranch.name}.`
+          : `${product.name} will warn at ${next} at ${activeBranch.name} only.`
+      );
+    } catch {
+      toast.error('Could not reach the server. Your change was not saved.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 space-y-2.5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="space-y-0.5">
+          <Label className="text-xs font-medium flex items-center gap-1.5">
+            <Building2 className="h-3.5 w-3.5 text-slate-400" />
+            Reorder level for {activeBranch.name}
+          </Label>
+          <p className="text-xs text-slate-500">
+            {hasOverride ? (
+              <>
+                This branch warns at{' '}
+                <span className="font-semibold text-slate-700">
+                  {product.effectiveReorderLevel}
+                </span>
+                , overriding the chain-wide {chainWideLevel}.
+              </>
+            ) : (
+              <>
+                Currently inheriting the chain-wide level of{' '}
+                <span className="font-semibold text-slate-700">{chainWideLevel}</span>.
+              </>
+            )}
+          </p>
+        </div>
+        <Switch
+          checked={enabled}
+          onCheckedChange={(checked) => {
+            setEnabled(checked);
+            if (!checked) void save(null);
+          }}
+          disabled={saving}
+          aria-label="Use a branch-specific reorder level"
+        />
+      </div>
+
+      {enabled ? (
+        <div className="flex items-end gap-2">
+          <div className="flex-1">
+            <Label className="text-xs text-slate-500" htmlFor="branch-reorder-level">
+              Warn when stock at {activeBranch.name} falls to
+            </Label>
+            <Input
+              id="branch-reorder-level"
+              type="number"
+              min="0"
+              value={level}
+              onChange={(e) => setLevel(Math.max(0, Number(e.target.value) || 0))}
+              className="mt-1"
+            />
+            <p className="text-xs text-slate-400 mt-1">
+              0 means never flag this product as low at this branch.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            disabled={saving}
+            onClick={() => void save(level)}
+          >
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Save for this branch
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

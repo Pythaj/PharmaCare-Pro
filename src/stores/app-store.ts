@@ -1,9 +1,39 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Page, User, CartItem, Branch } from '@/types';
-import { ADMIN_ONLY_PAGES } from '@/types';
+import { resolvePageForRole } from '@/lib/nav';
 
 export type AccentTheme = 'emerald' | 'blue' | 'violet' | 'rose' | 'amber' | 'teal';
+
+/**
+ * The breakpoint the layout switches between the two representations of the
+ * navigation. Below it the nav is a modal drawer; at or above it the nav is a
+ * fixed rail. Must match the `lg` / `1024px` classes in `page.tsx`, `Header`
+ * and `Sidebar` (Rule 18).
+ */
+const NAV_BREAKPOINT_PX = 1024;
+
+/**
+ * Whether the navigation should start fully shown.
+ *
+ * One flag serves both breakpoints by design: `lg:hidden` and `hidden lg:block`
+ * guarantee only one of the drawer or the rail is ever mounted, so "open" simply
+ * means "show the navigation in its fullest form for this screen size".
+ *
+ * That makes the *default* breakpoint-dependent, which is the whole point of
+ * the fix. Hard-coding `true` meant a phone restored from localStorage loaded
+ * with the modal drawer already covering the content, backdrop and all, with
+ * no scroll position to return to. The rail genuinely should default open —
+ * on a pharmacy POS the nav is primary navigation — but a drawer must not.
+ *
+ * The `typeof window` guard matters: this module is also evaluated while
+ * Next prerenders the client bundle, where there is no window. Assume desktop
+ * there, and let the effect in `page.tsx` correct it on mount.
+ */
+function defaultSidebarOpen(): boolean {
+  if (typeof window === 'undefined') return true;
+  return window.innerWidth >= NAV_BREAKPOINT_PX;
+}
 
 interface AppState {
   // App Branding
@@ -86,7 +116,8 @@ export const useAppStore = create<AppState>()(
   
   // Navigation
   currentPage: 'login',
-  sidebarOpen: true,
+  // Viewport-correct: the rail starts expanded, the mobile drawer starts closed.
+  sidebarOpen: defaultSidebarOpen(),
   
   // POS Cart
   cart: [],
@@ -137,16 +168,13 @@ export const useAppStore = create<AppState>()(
   },
   
   navigate: (page) => set((state) => {
-    // Prevent sales users from navigating to admin-only pages
-    const adminOnly = ADMIN_ONLY_PAGES;
-    if (state.currentUser?.role !== 'admin' && adminOnly.includes(page)) {
-      return {}; // No-op: don't navigate to admin pages
-    }
-    // Redirect admin from sales-dashboard to admin-dashboard
-    if (state.currentUser?.role === 'admin' && page === 'sales-dashboard') {
-      return { currentPage: 'admin-dashboard' };
-    }
-    return { currentPage: page };
+    // The role -> page rule lives in @/lib/nav so this guard and the router's
+    // render-time guard cannot disagree about where a request should land. An
+    // off-limits page resolves to the role's dashboard instead of being ignored,
+    // which keeps the visible page and `currentPage` in agreement.
+    const resolved = resolvePageForRole(state.currentUser?.role, page);
+    if (resolved === state.currentPage) return {};
+    return { currentPage: resolved };
   }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -200,7 +228,12 @@ export const useAppStore = create<AppState>()(
         isAuthenticated: state.isAuthenticated,
         loginTime: state.loginTime,
         currentPage: state.currentPage,
-        sidebarOpen: state.sidebarOpen,
+        // `sidebarOpen` is deliberately NOT persisted. Its meaning is relative
+        // to the viewport, so a value saved on a desktop (rail expanded) is
+        // `true` — and restoring that on a phone opened the modal drawer over
+        // the app on every single load. Re-deriving it per load via
+        // `defaultSidebarOpen()` is correct on both sides of the breakpoint;
+        // persisting it could never be correct on both.
         accentTheme: state.accentTheme,
         appName: state.appName,
         appTagline: state.appTagline,
