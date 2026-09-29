@@ -14,7 +14,10 @@
  *   - the bulk import only stocked the branch that ran it;
  *   - a price edit changed the product row while the POS kept charging
  *     `min(batch.sellingPrice)`, i.e. the old number, at every branch;
- *   - expired batches counted as sellable stock and set the price charged.
+ *   - expired batches counted as sellable stock and set the price charged;
+ *   - an opening count typed when adding a drug was discarded, because the
+ *     seeder's quantity-0 starter batch was already there for the upsert to
+ *     match.
  *
  * Reading the code cannot catch any of that, so this drives the real route
  * handlers over HTTP and asserts the end state.
@@ -83,6 +86,9 @@ function check(name, condition, detail) {
 const stamp = Date.now();
 const DRUG_A = `ZZ Prop Test A ${stamp}`;
 const DRUG_B = `ZZ Prop Test B ${stamp}`;
+const DRUG_C = `ZZ Opening Stock C ${stamp}`;
+const DRUG_D = `ZZ Opening Stock D ${stamp}`;
+const DRUG_E = `ZZ Opening Stock E ${stamp}`;
 const NEW_BRANCH_CODE = `P${String(stamp).slice(-6)}`;
 
 async function login() {
@@ -335,7 +341,100 @@ async function main() {
     cookie = adminCookie;
   }
 
-  // ── 9. The revision token moves when the catalogue changes ────────────────
+  // ── 9. Opening stock entered on a new drug actually lands ────────────────
+  // Section 1 proves a drug is created with NO stock, which is correct when the
+  // owner does not type a count. It says nothing about the case where they do:
+  // `seedCatalogueForAllBranches` runs first in the same transaction and has
+  // already created a quantity-0 STOCK-001 row for the target branch, so an
+  // upsert with an empty `update` matched that row and dropped the typed count
+  // while still answering 201. The drug read as stocked and had nothing to sell,
+  // and no type check or schema validation can see that.
+  //
+  // The session is still parked on `stockBranch` from section 5.
+  const OPEN_QTY = 37;
+  const withStock = await request('POST', '/api/products', {
+    name: DRUG_C,
+    unit: 'pcs',
+    reorderLevel: 5,
+    defaultCostPrice: 4,
+    defaultSellingPrice: 9,
+    initialStock: { quantity: OPEN_QTY },
+  });
+  check('POST /api/products with opening stock succeeds', withStock.status === 201,
+    `status ${withStock.status} ${withStock.raw.slice(0, 200)}`);
+  const productCId = withStock.json?.id;
+
+  const stockedDetail = await request('GET', `/api/products/${productCId}`);
+  const stockBranchBatches = (stockedDetail.json?.batches ?? []).filter(
+    (b) => b.branchId === stockBranch.id
+  );
+  const totalAtStockBranch = stockBranchBatches.reduce((n, b) => n + Number(b.quantity || 0), 0);
+  check('opening quantity with no batch number lands on the seeded batch',
+    totalAtStockBranch === OPEN_QTY, `expected ${OPEN_QTY}, found ${totalAtStockBranch}`);
+
+  // The seeded starter batch, not a second row, so the drug has not gained a
+  // duplicate batch identity at the branch.
+  check('opening stock does not create a duplicate batch at the branch',
+    stockBranchBatches.length === 1,
+    `${stockBranchBatches.length} batch rows: ${stockBranchBatches.map((b) => b.batchNumber).join(',')}`);
+
+  // And nowhere else. Copying the count to every branch would let a shop sell
+  // units it does not physically hold.
+  const elsewhere = (stockedDetail.json?.batches ?? []).filter((b) => b.branchId !== stockBranch.id);
+  const leaked = elsewhere.filter((b) => Number(b.quantity || 0) > 0);
+  check('opening stock is not copied to other branches', leaked.length === 0,
+    `${leaked.length} foreign branch(es) credited`);
+
+  // A real batch number is the deliberate alternative, and must not disturb the
+  // catalogue rows the seeder made.
+  const BATCH_NO = `OPN-${String(stamp).slice(-6)}`;
+  const custom = await request('POST', '/api/products', {
+    name: DRUG_D,
+    unit: 'pcs',
+    reorderLevel: 5,
+    defaultCostPrice: 4,
+    defaultSellingPrice: 9,
+    initialStock: { quantity: 12, batchNumber: BATCH_NO },
+  });
+  check('POST /api/products with a custom batch number succeeds', custom.status === 201,
+    `status ${custom.status} ${custom.raw.slice(0, 200)}`);
+  const customDetail = await request('GET', `/api/products/${custom.json?.id}`);
+  const customBatch = (customDetail.json?.batches ?? []).find(
+    (b) => b.batchNumber === BATCH_NO
+  );
+  check('opening stock honours an explicit batch number',
+    !!customBatch && Number(customBatch.quantity) === 12,
+    `batch ${BATCH_NO}: ${customBatch ? customBatch.quantity : 'missing'}`);
+
+  // A starter batch is priced at the catalogue figure, never 0, because the POS
+  // charges min(batch.sellingPrice) and a quantity-only PATCH would otherwise
+  // sell the counted stock for nothing.
+  check('opening batch is priced from the catalogue, not 0',
+    customBatch && Number(customBatch.sellingPrice) > 0,
+    `sellingPrice=${customBatch?.sellingPrice}`);
+
+  // A count with no branch is refused rather than filed somewhere arbitrary.
+  await request('POST', '/api/auth/branch', { branchId: 'all' });
+  const noBranch = await request('POST', '/api/products', {
+    name: DRUG_E,
+    unit: 'pcs',
+    reorderLevel: 5,
+    defaultCostPrice: 4,
+    defaultSellingPrice: 9,
+    initialStock: { quantity: 5 },
+  });
+  check('opening stock is refused when no branch is selected', noBranch.status === 400,
+    `status ${noBranch.status} ${noBranch.raw.slice(0, 160)}`);
+
+  // The refusal must be total: a rejected count must not leave a drug behind
+  // that looks added to the owner but has no stock.
+  const afterReject = findByName(await listProducts(), DRUG_E);
+  check('a refused opening count leaves no half-created drug', !afterReject, DRUG_E);
+
+  // Restore the branch the rest of the suite expects.
+  await request('POST', '/api/auth/branch', { branchId: stockBranch.id });
+
+  // ── 10. The revision token moves when the catalogue changes ────────────────
   const rev1 = await request('GET', '/api/catalogue-revision');
   check('catalogue revision endpoint responds', rev1.status === 200, `status ${rev1.status}`);
   check('catalogue revision returns a token', typeof rev1.json?.revision === 'string',
