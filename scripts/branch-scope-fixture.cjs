@@ -68,8 +68,6 @@ async function seed() {
       userId: admin.id,
       branchId: branch.id,
       subtotal: 8,
-      tax: 0,
-      discount: 0,
       totalAmount: 8,
       profit: 4.5,
       status: 'completed',
