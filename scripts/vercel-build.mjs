@@ -49,6 +49,20 @@ if (isCloud) {
   console.log('[build] Backfilling pre-branch data with a default branch');
   run('prisma db execute --schema prisma/schema.postgres.prisma --file scripts/backfill-branch.sql');
 
+  // MUST also run before `prisma db push`, and for a different reason: db push
+  // DROPs the retired `sales.tax`, `sales.discount` and
+  // `daily_sales_records.totalDiscount` columns, and those hold real historical
+  // money figures on every sale rung before tax/discount was removed. The
+  // --accept-data-loss below is required for the unique keys, and without this
+  // step it would silently authorise destroying them as well.
+  //
+  // So this copies every non-zero figure into two @@ignore()d tables first, then
+  // asserts the copy is complete. Nothing is destroyed; if the archive cannot be
+  // proven complete the build stops with the columns still in place, because a
+  // failure here means db push has not run yet.
+  console.log('[build] Archiving the retired tax/discount figures before they are dropped');
+  run('prisma db execute --schema prisma/schema.postgres.prisma --file scripts/archive-legacy-money.sql');
+
   console.log('[build] Applying schema to cloud database (prisma db push)');
   run('prisma db push --schema prisma/schema.postgres.prisma --skip-generate --accept-data-loss');
 

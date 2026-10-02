@@ -481,3 +481,45 @@ model StockTransferLine {
   @@index([sourceBatchId])
   @@map("stock_transfer_lines")
 }
+
+/// Historic VAT charged per sale, preserved from the retired tax/discount feature.
+///
+/// `sales.tax` and `sales.discount` were dropped from the schema when that
+/// feature was removed, but the figures on past sales are the shop's tax history
+/// and cannot be thrown away. `scripts/archive-legacy-money.sql` copies every
+/// non-zero value here on the deploy that drops the columns, so the money stays
+/// in the pharmacy's own database, keyed to the invoice it belongs to.
+///
+/// `@@ignore()` is the load-bearing part: Prisma will neither create, alter nor
+/// drop this table, so no future schema push can destroy it.
+model LegacySaleMoney {
+  /// `Sale.id` of the row the figures came from.
+  saleId    String
+  /// The invoice number as printed on the receipt, so the row can be matched to
+  /// paper without needing the sales table at all.
+  invoiceNo String
+  soldAt    DateTime
+  tax       Decimal
+  discount  Decimal
+  archivedAt DateTime @default(now())
+
+  @@ignore()
+  @@map("legacy_sale_money")
+}
+
+/// Historic discount per trading day, preserved from the same retired feature.
+///
+/// The register's own `daily_sales_records.totalDiscount` was dropped with it;
+/// this is where that figure lives now. `@@ignore()` for the same reason as
+/// `LegacySaleMoney`.
+model LegacyDailyDiscount {
+  /// `DailySalesRecord.id` the figure came from.
+  recordId      String
+  /// `DailySalesRecord.date` (YYYY-MM-DD) as the register keyed it.
+  businessDate  String
+  totalDiscount Decimal
+  archivedAt    DateTime @default(now())
+
+  @@ignore()
+  @@map("legacy_daily_discount")
+}
