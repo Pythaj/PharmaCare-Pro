@@ -139,7 +139,8 @@ export function BranchSwitcher() {
           )}
           <span className="max-w-[9rem] truncate text-sm font-medium">
             {isAll ? 'All branches' : activeBranch?.name ?? 'Current branch'}
-          </span>          <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400" />
+          </span>
+          <ChevronsUpDown className="h-3.5 w-3.5 text-slate-400" />
         </Button>
       </DropdownMenuTrigger>
 
