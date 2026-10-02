@@ -305,6 +305,11 @@ export interface DailySalesRecord {
   updatedAt: string;
   opener?: User;
   closer?: User;
+  /** The one shop whose till this register is. There is no branchless register. */
+  branchId?: string;
+  /** Needed to label the day: a register card that does not say which branch it
+   *  belongs to is unusable the moment the owner has more than one. */
+  branch?: Branch;
 }
 
 export interface DailySalesDetail extends DailySalesRecord {

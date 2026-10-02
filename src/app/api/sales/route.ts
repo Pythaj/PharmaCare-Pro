@@ -83,13 +83,22 @@ function normalizeSale(sale: any) {
     subtotal: Number(sale.subtotal),
     totalAmount: Number(sale.totalAmount),
     profit: Number(sale.profit),
-    items: sale.items.map((item: any) => ({
-      ...item,
-      quantity: Number(item.quantity),
-      unitPrice: Number(item.unitPrice),
-      costPrice: Number(item.costPrice),
-      total: Number(item.total),
-    })),
+    items: sale.items.map((item: any) => {
+      const quantity = Number(item.quantity)
+      const returnedQuantity = (item.returnItems ?? []).reduce(
+        (sum: number, r: any) => sum + Number(r.quantity ?? 0),
+        0
+      )
+      return {
+        ...item,
+        quantity,
+        unitPrice: Number(item.unitPrice),
+        costPrice: Number(item.costPrice),
+        total: Number(item.total),
+        returnedQuantity,
+        returnableQuantity: Math.max(0, quantity - returnedQuantity),
+      }
+    }),
   }
 }
 
@@ -112,6 +121,12 @@ export async function GET(request: NextRequest) {
     const limit = limitParam
       ? Math.min(Math.max(parseInt(limitParam, 10) || 50, 1), 500)
       : 50
+    // 1-based page. Only meaningful together with `total`: this route used to
+    // return only the first `limit` rows with no indication that more existed,
+    // so the sales register silently truncated a busy day at 60 records and the
+    // owner had no way to know invoices were missing.
+    const pageParam = searchParams.get('page')
+    const page = pageParam ? Math.max(parseInt(pageParam, 10) || 1, 1) : 1
 
     // Branch is the outer boundary and is applied FIRST, so every later
     // refinement (date, cashier) can only narrow within it. An admin sitting on
@@ -144,15 +159,33 @@ export async function GET(request: NextRequest) {
           include: {
             product: { select: { id: true, name: true, unit: true } },
             batch: { select: { id: true, batchNumber: true } },
+            // Refund state per line, so the register can show returned
+            // quantities instead of presenting a partly-returned invoice as a
+            // full one.
+            returnItems: {
+              where: { return: { status: { in: ['approved', 'pending'] } } },
+              select: { quantity: true },
+            },
           },
         },
         _count: { select: { returns: true } },
       },
       orderBy: { createdAt: 'desc' },
       take: limit,
+      // Skip only when paging. Without a `page` the behaviour is byte-identical
+      // to before, so existing callers cannot start missing their first rows.
+      ...(page > 1 ? { skip: (page - 1) * limit } : {}),
     })
 
-    return NextResponse.json({ sales: sales.map(normalizeSale) })
+    const total = await db.sale.count({ where })
+
+    return NextResponse.json({
+      sales: sales.map(normalizeSale),
+      total,
+      page,
+      limit,
+      totalPages: Math.max(1, Math.ceil(total / limit)),
+    })
   } catch (error) {
     console.error('Sales list error:', error)
     return NextResponse.json(

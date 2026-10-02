@@ -57,9 +57,21 @@ export async function GET(
       include: {
         user: { select: { id: true, name: true } },
         customer: { select: { id: true, name: true, phone: true } },
+        branch: { select: { id: true, name: true, code: true } },
         items: {
           include: {
             product: { select: { id: true, name: true, unit: true } },
+            // The register's Batch column rendered "-" for every row because this
+            // include never asked for the batch, while the UI, the CSV export and
+            // /api/sales/[id] all expected it.
+            batch: { select: { id: true, batchNumber: true } },
+            // Refund state per line. Without it the register shows a day as if
+            // nothing was returned against it, so the day's item counts and
+            // revenue do not reconcile with the POS.
+            returnItems: {
+              where: { return: { status: { in: ['approved', 'pending'] } } },
+              select: { quantity: true },
+            },
           },
         },
       },
@@ -69,24 +81,36 @@ export async function GET(
     return NextResponse.json({
       record: {
         ...record,
-        totalRevenue: Number(record.totalRevenue),
-        totalProfit: Number(record.totalProfit),
-        cashTotal: Number(record.cashTotal),
-        cardTotal: Number(record.cardTotal),
-        mobileMoneyTotal: Number(record.mobileMoneyTotal),
+        totalRevenue: toNumber(record.totalRevenue),
+        totalProfit: toNumber(record.totalProfit),
+        cashTotal: toNumber(record.cashTotal),
+        cardTotal: toNumber(record.cardTotal),
+        mobileMoneyTotal: toNumber(record.mobileMoneyTotal),
       },
       sales: sales.map((s) => ({
         ...s,
-        subtotal: Number(s.subtotal),
-        totalAmount: Number(s.totalAmount),
-        profit: Number(s.profit),
-        items: s.items.map((item) => ({
-          ...item,
-          quantity: Number(item.quantity),
-          unitPrice: Number(item.unitPrice),
-          costPrice: Number(item.costPrice),
-          total: Number(item.total),
-        })),
+        subtotal: toNumber(s.subtotal),
+        totalAmount: toNumber(s.totalAmount),
+        profit: toNumber(s.profit),
+        items: s.items.map((item) => {
+          const quantity = Number(item.quantity)
+          const returnedQuantity = (item.returnItems ?? []).reduce(
+            (sum: number, r: any) => sum + Number(r.quantity ?? 0),
+            0
+          )
+          return {
+            ...item,
+            quantity,
+            unitPrice: toNumber(item.unitPrice),
+            costPrice: toNumber(item.costPrice),
+            total: toNumber(item.total),
+            returnedQuantity,
+            // Never negative: a return cannot exceed the sale, but a
+            // hand-edited row must not present "5 sold, 7 returned" as 2
+            // still returnable to a cashier.
+            returnableQuantity: Math.max(0, quantity - returnedQuantity),
+          }
+        }),
       })),
     })
   } catch (error) {

@@ -20,6 +20,9 @@ const BASE = { host: '127.0.0.1', port: Number(process.env.BRANCH_TEST_PORT || 8
 const QA_BATCH = 'QA-ISO-batch';
 const QA_SALE = 'QA-ISO-sale';
 const QA_RETURN = 'QA-ISO-return';
+/** The batch NUMBER the fixture prints, which is not the batch id above. The
+ *  register's Batch column shows the number, so that is what we assert on. */
+const QA_BATCH_NUMBER = 'QA-ISO-B1';
 const EMAIL = 'qa.tester@local.invalid';
 const PASSWORD = 'QaIsolation!2026';
 
@@ -76,6 +79,149 @@ function contains(rowset, id) {
   return JSON.stringify(rowset ?? null).includes(id);
 }
 
+/**
+ * The admin Daily Sales Register contract.
+ *
+ * The consolidated view used to answer 400 "Select a branch to view its daily
+ * register", which the client swallowed — so an owner on "All branches" was
+ * shown "No sales record found for today" on a day with plenty of sales. These
+ * assertions lock in that it now works, and that the fix did not quietly cost
+ * branch scoping, batch identity or refund visibility.
+ */
+async function registerTests() {
+  console.log('\n== daily register: consolidated (all branches) ==');
+  await request('POST', '/api/auth/branch', { branchId: 'all' });
+
+  const today = localDayKey();
+  const consolidated = await request('GET', '/api/daily-sales/today');
+
+  check(
+    'GET /api/daily-sales/today answers on the consolidated view',
+    consolidated.status === 200,
+    `status ${consolidated.status} ${consolidated.raw.slice(0, 200)}`
+  );
+  check(
+    'consolidated register is labelled as the all-branches scope',
+    consolidated.json?.scope === 'all',
+    `scope ${consolidated.json?.scope}`
+  );
+
+  const entries = consolidated.json?.branches ?? [];
+  check('consolidated register returns one entry per active branch', Array.isArray(entries) && entries.length > 0, `${entries.length} entries`);
+
+  const qaEntry = entries.find((e) => e?.branch?.code === 'QA');
+  check('the QA branch has its own section', !!qaEntry, JSON.stringify(entries.map((e) => e?.branch?.code)).slice(0, 200));
+  check('each section is named for its branch', !!(qaEntry?.branch?.name), 'QA section has no branch name');
+
+  const qaSales = qaEntry?.sales ?? [];
+  const qaSale = qaSales.find((s) => s.id === QA_SALE);
+  check('the QA branch section shows the QA sale', !!qaSale, `saw ${qaSales.length} sales`);
+
+  // The Batch column in the register rendered "-" forever because this route
+  // never included the batch, while the UI, the CSV export and /api/sales all
+  // expected a batch number.
+  const qaLine = (qaSale?.items ?? [])[0];
+  check(
+    'register line items carry their batch number',
+    qaLine?.batch?.batchNumber === QA_BATCH_NUMBER,
+    `batchNumber ${JSON.stringify(qaLine?.batch ?? null)}`
+  );
+  // Line items carry no branch of their own — the sale does, and the sale sits
+  // inside the branch section. What has to hold is that the two agree, because
+  // a sale filed under the wrong section is a branch leak that no "hides the QA
+  // row" assertion can see.
+  check(
+    'a sale is filed under its own branch section',
+    !!qaSale?.branch?.id && qaSale.branch.id === qaEntry?.branch?.id,
+    `sale branch ${qaSale?.branch?.id ?? 'none'} in section ${qaEntry?.branch?.id ?? 'none'}`
+  );
+  check('register sales carry their branch', qaSale?.branch?.code === 'QA', `branch ${JSON.stringify(qaSale?.branch ?? null)}`);
+
+  // The fixture returns 1 of the 1 unit sold. The register showed the sale as if
+  // nothing had been returned against it.
+  check(
+    'register line items expose returned quantities',
+    Number(qaLine?.returnedQuantity) === 1,
+    `returnedQuantity ${qaLine?.returnedQuantity}`
+  );
+  check(
+    'returnable quantity never exceeds the quantity sold',
+    Number(qaLine?.returnableQuantity) === 0,
+    `returnableQuantity ${qaLine?.returnableQuantity}`
+  );
+
+  // The client used to send ?userId=<self> unconditionally, which once the route
+  // started honouring it would have cut an admin's own register down to only the
+  // sales they personally rang.
+  const nobody = await request('GET', `/api/daily-sales/today?userId=${QA_SALE}-not-a-cashier`);
+  const nobodySales = (nobody.json?.branches ?? []).reduce((sum, e) => sum + (e.sales?.length ?? 0), 0);
+  check('an unmatched cashier filter returns no sales', nobodySales === 0, `${nobodySales} sales survived the filter`);
+
+  const unfiltered = (consolidated.json?.branches ?? []).reduce((sum, e) => sum + (e.sales?.length ?? 0), 0);
+  check('the register is not silently narrowed to the viewer', unfiltered > 0, 'consolidated view returned no sales at all');
+
+  console.log('\n== daily register: sales pagination metadata ==');
+  const paged = await request('GET', '/api/sales?limit=1');
+  check('GET /api/sales reports a total', typeof paged.json?.total === 'number' && paged.json.total > 0, `total ${paged.json?.total}`);
+  check('GET /api/sales reports total pages', typeof paged.json?.totalPages === 'number' && paged.json.totalPages >= 1, `totalPages ${paged.json?.totalPages}`);
+  check('a limited page returns no more than the limit', (paged.json?.sales ?? []).length <= 1, `${(paged.json?.sales ?? []).length} rows`);
+
+  const paged2 = await request('GET', '/api/sales?limit=1&page=2');
+  const firstIds = (paged.json?.sales ?? []).map((s) => s.id);
+  const secondIds = (paged2.json?.sales ?? []).map((s) => s.id);
+  check(
+    'page 2 returns different rows from page 1',
+    secondIds.length === 0 || firstIds[0] !== secondIds[0],
+    'page 2 repeated page 1'
+  );
+
+  console.log('\n== daily register: invoice-level drilldown ==');
+  const dailyItems = await request('GET', `/api/reports/daily-items?date=${today}`);
+  check('GET /api/reports/daily-items reachable', dailyItems.status === 200, `status ${dailyItems.status} ${dailyItems.raw.slice(0, 160)}`);
+  const invoices = dailyItems.json?.invoices ?? [];
+  check('daily items expose the individual receipts', Array.isArray(invoices) && invoices.length > 0, `${invoices.length} invoices`);
+  const qaInvoice = invoices.find((i) => i.id === QA_SALE);
+  check('the QA receipt is drillable', !!qaInvoice, `invoice numbers: ${invoices.map((i) => i.invoiceNo).join(', ').slice(0, 160)}`);
+  check('a drillable receipt names its branch', qaInvoice?.branchCode === 'QA', `branchCode ${qaInvoice?.branchCode}`);
+  check('a drillable receipt names its cashier', !!qaInvoice?.cashierName, 'no cashier on the receipt');
+  check(
+    'receipt line items carry the batch drawn from',
+    (qaInvoice?.items ?? [])[0]?.batchNumber === QA_BATCH_NUMBER,
+    `batchNumber ${JSON.stringify((qaInvoice?.items ?? [])[0]?.batchNumber ?? null)}`
+  );
+
+  console.log('\n== daily register: parked on another branch ==');
+  const branches = await request('GET', '/api/branches');
+  const main = (branches.json?.branches ?? []).find((b) => b.code !== 'QA');
+  if (main) {
+    await request('POST', '/api/auth/branch', { branchId: main.id });
+    const scoped = await request('GET', '/api/daily-sales/today');
+    check('a parked register is the branch scope', scoped.json?.scope === 'branch', `scope ${scoped.json?.scope}`);
+    check('a parked register has exactly one section', (scoped.json?.branches ?? []).length === 1, `${(scoped.json?.branches ?? []).length} sections`);
+    check(
+      "another branch's register does not leak",
+      !contains(scoped.json, QA_SALE),
+      'QA sale leaked into a branch-scoped register'
+    );
+    check(
+      'a parked register is labelled with its branch',
+      (scoped.json?.branches ?? [])[0]?.branch?.id === main.id,
+      `section branch ${JSON.stringify((scoped.json?.branches ?? [])[0]?.branch ?? null)}`
+    );
+  }
+
+  await request('POST', '/api/auth/branch', { branchId: 'all' });
+}
+
+/** Local YYYY-MM-DD, matching how the server keys a trading day. */
+function localDayKey() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 async function main() {
   console.log('\n== login ==');
   const login = await request('POST', '/api/auth', { email: EMAIL, password: PASSWORD });
@@ -118,13 +264,22 @@ async function main() {
   const sw = await request('POST', '/api/auth/branch', { branchId: main.id });
   check('branch switch accepted', sw.status === 200, `status ${sw.status} ${sw.raw.slice(0, 200)}`);
 
+// Every "hides the QA ..." assertion below is paired with an explicit
+  // reachability check. A leak check on an ERROR body passes for the wrong
+  // reason: a 500 carries no QA marker, so "the QA row is absent" is trivially
+  // true. That is how a stale development database left five endpoints broken
+  // while this suite still reported an otherwise green run — the isolation it
+  // appeared to prove was never actually exercised.
   const scopedBatches = await request('GET', '/api/batches?limit=200');
+  check('GET /api/batches is reachable', scopedBatches.status === 200, `status ${scopedBatches.status}`);
   check('GET /api/batches hides the QA batch', !contains(scopedBatches.json, QA_BATCH), 'QA batch leaked into a branch-scoped list');
 
   const scopedSales = await request('GET', '/api/sales?limit=200');
+  check('GET /api/sales is reachable', scopedSales.status === 200, `status ${scopedSales.status}`);
   check('GET /api/sales hides the QA sale', !contains(scopedSales.json, QA_SALE), 'QA sale leaked into a branch-scoped list');
 
   const scopedReturns = await request('GET', '/api/returns');
+  check('GET /api/returns is reachable', scopedReturns.status === 200, `status ${scopedReturns.status}`);
   check('GET /api/returns hides the QA return', !contains(scopedReturns.json, QA_RETURN), 'QA return leaked into a branch-scoped list');
 
   const scopedStats = await request('GET', '/api/dashboard/stats');
@@ -134,18 +289,22 @@ async function main() {
   check('GET /api/dashboard/charts reachable', scopedCharts.status === 200, `status ${scopedCharts.status}`);
 
   const scopedRecent = await request('GET', '/api/dashboard/recent');
+  check('GET /api/dashboard/recent is reachable', scopedRecent.status === 200, `status ${scopedRecent.status}`);
   check('GET /api/dashboard/recent hides the QA sale', !contains(scopedRecent.json, QA_SALE), 'QA sale leaked into recent activity');
 
   const scopedAlerts = await request('GET', '/api/inventory/alerts');
+  check('GET /api/inventory/alerts is reachable', scopedAlerts.status === 200, `status ${scopedAlerts.status}`);
   check('GET /api/inventory/alerts hides the QA batch', !contains(scopedAlerts.json, QA_BATCH), 'QA batch leaked into stock alerts');
 
   const scopedProducts = await request('GET', '/api/products?limit=200');
+  check('GET /api/products is reachable', scopedProducts.status === 200, `status ${scopedProducts.status}`);
   check('GET /api/products hides the QA batch in nested stock', !contains(scopedProducts.json, QA_BATCH), 'QA batch leaked through a product lookup');
 
   const scopedAudit = await request('GET', '/api/audit-logs?limit=200');
   check('GET /api/audit-logs is branch filtered', scopedAudit.status === 200, `status ${scopedAudit.status}`);
 
   const scopedReports = await request('GET', '/api/reports?period=this_year');
+  check('GET /api/reports is reachable', scopedReports.status === 200, `status ${scopedReports.status}`);
   check('GET /api/reports excludes the QA sale', !contains(scopedReports.json, QA_SALE), 'QA sale leaked into a branch report');
 
   // ---------- Direct-object access must be refused ----------
@@ -190,7 +349,10 @@ async function main() {
   const survivors = await request('GET', `/api/sales/${QA_SALE}`);
   check('QA sale survived a Main-branch bulk clear', survivors.status === 200, `status ${survivors.status}`);
 
+  await registerTests();
+
   await transferTests();
+
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {

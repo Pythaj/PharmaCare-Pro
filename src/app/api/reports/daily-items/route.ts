@@ -178,6 +178,37 @@ export async function GET(request: NextRequest) {
       (a, b) => b.quantity - a.quantity || b.revenue - a.revenue
     )
 
+    // The invoice-level book for the day. `invoiceNo` was already selected above
+    // and then dropped on the floor, which is why the only drilldown this report
+    // offered was "which product", never "which receipt": an owner asking to see
+    // the individual items sold on a given day at a given branch could reconcile
+    // a total but never read the sale behind it. Each row is one receipt, with
+    // the branch and cashier it belongs to, and its full line-item detail.
+    const invoices = sales.map((sale) => ({
+      id: sale.id,
+      invoiceNo: sale.invoiceNo,
+      branchId: sale.branchId,
+      branchName: sale.branch?.name ?? 'Unknown branch',
+      branchCode: sale.branch?.code ?? 'GEN',
+      cashierId: sale.user?.id ?? null,
+      cashierName: sale.user?.name ?? 'Unknown cashier',
+      totalAmount: toNumber(sale.totalAmount),
+      profit: toNumber(sale.profit),
+      createdAt: sale.createdAt,
+      itemCount: sale.items.reduce((sum: number, i: any) => sum + Number(i.quantity), 0),
+      items: sale.items.map((item: any) => ({
+        id: item.id,
+        productId: item.product.id,
+        productName: item.product.name,
+        unit: item.product.unit,
+        batchNumber: item.batch?.batchNumber ?? null,
+        quantity: Number(item.quantity),
+        unitPrice: toNumber(item.unitPrice),
+        costPrice: toNumber(item.costPrice),
+        total: toNumber(item.unitPrice) * Number(item.quantity),
+      })),
+    }))
+
     return NextResponse.json({
       scope: branchId ? 'branch' : 'all',
       date: key,
@@ -195,6 +226,8 @@ export async function GET(request: NextRequest) {
       // Every branch that traded that day, so the owner can see the day's takings
       // split without a second request.
       byBranch: [...byBranch.values()].sort((a, b) => b.revenue - a.revenue),
+      // Newest first, matching the register the owner is reconciling against.
+      invoices: invoices.reverse(),
       items,
     })
   } catch (error) {

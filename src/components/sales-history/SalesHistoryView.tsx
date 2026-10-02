@@ -31,6 +31,12 @@ import {
   CalendarCheck,
   Search,
   Download,
+  Building2,
+  ChevronLeft,
+  Users,
+  Filter,
+  Layers,
+  X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -80,7 +86,48 @@ import { toast } from 'sonner';
 import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
 import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
-import type { DailySalesRecord, Sale, SaleItem, User } from '@/types';
+import type { Branch, DailySalesRecord, Sale, SaleItem, User } from '@/types';
+
+/** Totals the register can show for a day that has sales but no register row yet. */
+interface LiveTotals {
+  totalRevenue: number;
+  totalProfit: number;
+  totalTransactions: number;
+  totalItemsSold: number;
+  cashTotal: number;
+  cardTotal: number;
+  mobileMoneyTotal: number;
+}
+
+/**
+ * One branch's day, exactly as the server hands it back.
+ *
+ * `record` is the till. `liveTotals` is a fallback for the consolidated view,
+ * where a branch may have taken money without anyone having opened its register:
+ * showing a branch as empty while it is visibly trading is worse than showing
+ * totals with a "register not opened" note.
+ */
+interface TodayBranchEntry {
+  branch: Branch;
+  record: DailySalesRecord | null;
+  sales: Sale[];
+  liveTotals: LiveTotals | null;
+}
+
+/** Read-only narrowing of the register. None of these change the signed-in
+ *  branch — they filter the view only, so an admin can compare two shops without
+ *  the whole app (POS, stock, reports) following them. */
+interface RegisterFilters {
+  branchId: string;
+  paymentMethod: string;
+  cashierId: string;
+  query: string;
+}
+
+const NO_FILTERS: RegisterFilters = { branchId: 'all', paymentMethod: 'all', cashierId: 'all', query: '' };
+
+/** Register cards per page in the Past Records tab. */
+const PAST_PAGE_SIZE = 12;
 
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-GH', {
@@ -223,18 +270,62 @@ export default function DailySalesRegister() {
   const currencyCode = configuredCurrency();
   const [activeTab, setActiveTab] = useState('today');
 
-  // Today's data
-  const [todayRecord, setTodayRecord] = useState<DailySalesRecord | null>(null);
-  const [todaySales, setTodaySales] = useState<Sale[]>([]);
+  // Today's data, one entry per branch. A single-branch request returns one
+  // entry; the consolidated "All branches" request returns every active branch,
+  // so the owner sees each shop's day rather than one shop's day (or, worse, an
+  // empty page, which is what the old all-branches refusal rendered).
+  const [todayBranches, setTodayBranches] = useState<TodayBranchEntry[]>([]);
+  const [todayScope, setTodayScope] = useState<'branch' | 'all'>('branch');
   const [loadingToday, setLoadingToday] = useState(true);
   const [todayGroupMode, setTodayGroupMode] = useState<GroupMode>('cashier');
 
-  // Memoized audit groups for today's feed
-  const todayGroups = useMemo(() => buildAuditGroups(todaySales, todayGroupMode), [todaySales, todayGroupMode]);
+  // View-only filters, shared by every branch section so the owner can compare
+  // shops on the same terms.
+  const [filters, setFilters] = useState<RegisterFilters>(NO_FILTERS);
+  const [allBranches, setAllBranches] = useState<Branch[]>([]);
+
+  /** The owner is on the consolidated view: every branch gets its own section. */
+  const isConsolidated = todayScope === 'all';
+  /** Single-branch mode renders the full-day hero and owns the close-day action. */
+  const primaryEntry = todayBranches[0] ?? null;
+  const todayRecord = primaryEntry?.record ?? null;
+  const todaySales = primaryEntry?.sales ?? [];
+
+  // Memoized audit groups for today's feed, after the view-only filters. The
+  // feed used to render every sale on the day with no way to narrow it, so an
+  // owner looking for one cashier's till had to scroll the whole day.
+  const filteredTodaySales = useMemo(() => filterSales(todaySales, filters), [todaySales, filters]);
+  const todayGroups = useMemo(() => buildAuditGroups(filteredTodaySales, todayGroupMode), [filteredTodaySales, todayGroupMode]);
+
+  // Branch sections after the view-only branch filter, and only the ones that
+  // actually have a register or takings to show. A branch with neither is noise
+  // in an owner's daily view.
+  const visibleTodayEntries = useMemo(() => {
+    const base = todayBranches.filter(
+      (e) => e.record || e.sales.length > 0 || e.liveTotals
+    );
+    if (filters.branchId === 'all') return base;
+    return base.filter((e) => e.branch.id === filters.branchId);
+  }, [todayBranches, filters.branchId]);
+
+  /** Cashiers present in today's data, for the cashier filter. Derived from the
+   *  sales themselves so the options can never name someone who rang nothing. */
+  const todayCashiers = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of todayBranches) {
+      for (const sale of entry.sales) {
+        if (sale.userId) map.set(sale.userId, sale.user?.name ?? 'Unknown cashier');
+      }
+    }
+    return [...map.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [todayBranches]);
 
   // Past records
   const [pastRecords, setPastRecords] = useState<DailySalesRecord[]>([]);
   const [loadingPast, setLoadingPast] = useState(true);
+  const [pastPage, setPastPage] = useState(1);
+  const [pastTotal, setPastTotal] = useState(0);
+  const [pastTotalPages, setPastTotalPages] = useState(1);
 
   // Expanded past record detail
   const [expandedRecordId, setExpandedRecordId] = useState<string | null>(null);
@@ -273,27 +364,61 @@ export default function DailySalesRegister() {
   // Fetch today's data
   const fetchToday = useCallback(async () => {
     try {
+      // No userId is sent by default. The route now honours ?userId=, and the
+      // client used to send its own id unconditionally — which, now that the
+      // route listens, would have silently reduced an admin's register to only
+      // the sales they personally rang. The cashier filter below is the explicit
+      // way to narrow; the server still forces a salesperson to their own.
       const params = new URLSearchParams();
-      if (currentUser?.id) params.set('userId', currentUser.id);
-      const res = await fetch(`/api/daily-sales/today?${params.toString()}`);
+      if (filters.cashierId !== 'all') params.set('userId', filters.cashierId);
+      const query = params.toString();
+      const res = await fetch(`/api/daily-sales/today${query ? `?${query}` : ''}`);
       if (res.ok) {
         const data = await res.json();
-        setTodayRecord(data.record);
-        setTodaySales(data.sales ?? []);
+        setTodayScope(data.scope === 'all' ? 'all' : 'branch');
+        setTodayBranches(
+          (data.branches ?? []).map((entry: any) => ({
+            branch: entry.branch,
+            record: entry.record ?? null,
+            sales: entry.sales ?? [],
+            liveTotals: entry.liveTotals ?? null,
+          }))
+        );
       }
     } catch { /* silent */ }
-  }, [currentUser?.id]);
+  }, [filters.cashierId]);
 
-  // Fetch past records
+  // Branch list for the view-only filter. Read-only, and the header switcher is
+  // the thing that actually changes the app's branch — this one only narrows
+  // what is on screen.
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/branches');
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setAllBranches(data.branches ?? []);
+      } catch { /* silent */ }
+    })();
+    return () => { cancelled = true; };
+  }, [isAdmin]);
+
+  // Past records — paginated. The old hard-coded `limit=60` truncated a busy
+  // fortnight and gave no indication anything was missing.
   const fetchPastRecords = useCallback(async () => {
     try {
-      const res = await fetch('/api/daily-sales?limit=60');
+      const params = new URLSearchParams({ limit: String(PAST_PAGE_SIZE), page: String(pastPage) });
+      const res = await fetch(`/api/daily-sales?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setPastRecords((data.records ?? []).filter((r: DailySalesRecord) => r.date !== todayRecord?.date));
+        setPastTotal(data.total ?? 0);
+        setPastTotalPages(Math.max(1, data.totalPages ?? 1));
       }
     } catch { /* silent */ }
-  }, [todayRecord?.date]);
+  }, [pastPage, todayRecord?.date]);
 
   // Initial load
   useEffect(() => {
@@ -305,17 +430,39 @@ export default function DailySalesRegister() {
       if (!cancelled) setLoadingPast(false);
     })();
     return () => { cancelled = true; };
-  }, [fetchToday, fetchPastRecords]);
+    // Runs once. Page changes and filter changes are handled by their own
+    // effects below, so this never refires on every keystroke of a filter.
+  }, []);
+
+  // Changing page re-reads the register list only; today's live data is already
+  // on screen and must not flash.
+  useEffect(() => {
+    if (loadingPast) return;
+    let cancelled = false;
+    (async () => {
+      if (!cancelled) setLoadingPast(true);
+      await fetchPastRecords();
+      if (!cancelled) setLoadingPast(false);
+    })();
+    return () => { cancelled = true; };
+  }, [pastPage]);
+
+  // Switching the page size/page must close an expanded card: the id it held
+  // belongs to a record that is no longer on screen.
+  useEffect(() => {
+    setExpandedRecordId(null);
+    setExpandedRecordSales([]);
+  }, [pastPage]);
 
   // Auto-refresh today's data every 15 seconds when tab is active
   useEffect(() => {
-    if (activeTab === 'today' && todayRecord?.status === 'open') {
+    if (activeTab === 'today' && (isConsolidated || todayRecord?.status === 'open')) {
       refreshIntervalRef.current = setInterval(fetchToday, 15000);
     }
     return () => {
       if (refreshIntervalRef.current) clearInterval(refreshIntervalRef.current);
     };
-  }, [activeTab, todayRecord?.status, fetchToday]);
+  }, [activeTab, todayRecord?.status, isConsolidated, fetchToday]);
 
   // Handle close day — final step from multi-step dialog
   const handleCloseDay = async () => {
@@ -341,7 +488,14 @@ export default function DailySalesRegister() {
         setClosedRecord(data);
         setShowCloseDialog(false);
         setShowReportDialog(true);
-        setTodayRecord(data);
+        // PATCH returns the record without the branch relation, so merge rather
+        // than replace — otherwise the register header loses the shop's name
+        // the instant the day is closed.
+        setTodayBranches((prev) =>
+          prev.map((entry, i) =>
+            i === 0 ? { ...entry, record: { ...(entry.record ?? {}), ...data } as DailySalesRecord } : entry
+          )
+        );
         setClosingNotes('');
         setCashCounted('');
         setCloseStep(1);
@@ -553,6 +707,53 @@ export default function DailySalesRegister() {
         <TabsContent value="today" className="space-y-6">
           {loadingToday ? (
             <TodaySkeleton />
+          ) : isConsolidated ? (
+            <div className="space-y-6">
+              <ConsolidatedSummary entries={visibleTodayEntries} isLoading={loadingToday} />
+              <RegisterFiltersBar
+                filters={filters}
+                onChange={setFilters}
+                branches={allBranches}
+                cashiers={todayCashiers}
+                shownCount={visibleTodayEntries.reduce((sum, e) => sum + filterSales(e.sales, filters).length, 0)}
+                totalCount={todayBranches.reduce((sum, e) => sum + e.sales.length, 0)}
+                isAdmin={isAdmin}
+              />
+              {visibleTodayEntries.length > 0 ? (
+                visibleTodayEntries.map((entry) => (
+                  <BranchDaySection
+                    key={entry.branch.id}
+                    entry={entry}
+                    isAdmin={isAdmin}
+                    groupMode={todayGroupMode}
+                    onGroupModeChange={setTodayGroupMode}
+                    filters={filters}
+                    expandedSaleId={expandedSaleId}
+                    expandedSaleItems={expandedSaleItems}
+                    onExpandSale={handleExpandSale}
+                    onPrint={handlePrintReceipt}
+                    onDelete={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
+                    onRefund={() => { navigate('returns'); }}
+                  />
+                ))
+              ) : (
+                <Card>
+                  <CardContent className="py-16 text-center">
+                    <Layers className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
+                    <p className="text-muted-foreground">
+                      {todayBranches.length === 0
+                        ? 'No active branches to show'
+                        : 'No branch has a register or takings today'}
+                    </p>
+                    {filters.branchId !== 'all' && (
+                      <Button variant="outline" size="sm" className="mt-4" onClick={() => setFilters(NO_FILTERS)}>
+                        Show all branches
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
+            </div>
           ) : todayRecord ? (
             <AnimatePresence mode="wait">
               <motion.div
@@ -580,11 +781,14 @@ export default function DailySalesRegister() {
                             </Badge>
                           )}
                         </div>
-                        <h2 className="text-xl font-bold">{formatDate(todayRecord.date)}</h2>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h2 className="text-xl font-bold">{formatDate(todayRecord.date)}</h2>
+                          {todayRecord.branch && <BranchBadge branch={todayRecord.branch} />}
+                        </div>
                         <div className="flex items-center gap-4 text-xs text-muted-foreground">
                           <span className="flex items-center gap-1">
                             <Clock className="h-3.5 w-3.5" />
-                            Opened: {formatTime(todayRecord.openedAt)} by {todayRecord.opener?.name ?? 'System'}
+                            Opened: {formatTime(todayRecord.openedAt)} by {todayRecord.openedAt ? (todayRecord.opener?.name ?? 'System') : 'System'}
                           </span>
                           {todayRecord.closedAt && (
                             <span className="flex items-center gap-1">
@@ -721,6 +925,16 @@ export default function DailySalesRegister() {
                   </Card>
                 )}
 
+                <RegisterFiltersBar
+                  filters={filters}
+                  onChange={setFilters}
+                  branches={allBranches}
+                  cashiers={todayCashiers}
+                  shownCount={filteredTodaySales.length}
+                  totalCount={todaySales.length}
+                  isAdmin={isAdmin}
+                />
+
                 {/* Today's Transaction Feed */}
                 <Card>
                   <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
@@ -728,7 +942,7 @@ export default function DailySalesRegister() {
                       <Receipt className="h-4 w-4 text-muted-foreground" />
                       Today&apos;s Transactions
                       <Badge variant="secondary" className="text-xs ml-1">
-                        {todaySales.length}
+                        {filteredTodaySales.length}
                       </Badge>
                     </CardTitle>
                     <div className="flex items-center gap-2">
@@ -745,7 +959,7 @@ export default function DailySalesRegister() {
                     </div>
                   </CardHeader>
                   <CardContent className="p-0">
-                    {todaySales.length > 0 ? (
+                    {filteredTodaySales.length > 0 ? (
                       <div className="max-h-[520px] overflow-y-auto">
                         {todayGroups.map((group) => (
                           <div key={group.key}>
@@ -774,8 +988,17 @@ export default function DailySalesRegister() {
                     ) : (
                       <div className="py-16 text-center">
                         <Receipt className="h-12 w-12 text-muted-foreground/30 mx-auto mb-3" />
-                        <p className="text-muted-foreground text-sm">No transactions recorded today</p>
-                        {isOpen && (
+                        <p className="text-muted-foreground text-sm">
+                          {todaySales.length > 0
+                            ? 'No sales match the current filters'
+                            : 'No transactions recorded today'}
+                        </p>
+                        {todaySales.length > 0 ? (
+                          <Button variant="outline" size="sm" className="mt-4" onClick={() => setFilters(NO_FILTERS)}>
+                            <X className="h-3.5 w-3.5 mr-1" />
+                            Clear filters
+                          </Button>
+                        ) : isOpen ? (
                           <Button
                             className="mt-4 bg-emerald-600 hover:bg-emerald-700 text-white"
                             onClick={goToPOS}
@@ -783,7 +1006,7 @@ export default function DailySalesRegister() {
                             Start Selling
                             <ArrowUpRight className="h-4 w-4 ml-1.5" />
                           </Button>
-                        )}
+                        ) : null}
                       </div>
                     )}
                   </CardContent>
@@ -817,9 +1040,8 @@ export default function DailySalesRegister() {
             </Card>
           )}
         </TabsContent>
-
         {/* ===== HISTORY TAB ===== */}
-        <TabsContent value="history" className="space-y-6">
+        <TabsContent value="history" className="space-y-4">
           {loadingPast ? (
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {Array.from({ length: 6 }).map((_, i) => (
@@ -833,26 +1055,60 @@ export default function DailySalesRegister() {
               ))}
             </div>
           ) : pastRecords.length > 0 ? (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              {pastRecords.map((record) => (
-                <PastDayCard
-                  key={record.id}
-                  record={record}
-                  isExpanded={expandedRecordId === record.id}
-                  expandedSales={expandedRecordSales}
-                  loadingDetail={loadingRecordDetail}
-                  isAdmin={isAdmin}
-                  onExpand={() => handleExpandRecord(record.id)}
-                  onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
-                  onBackfill={() => { setPosPresetDate(record.date); navigate('pos'); }}
-                  onVoid={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
-                                   formatDate={formatDate}
-                  onExpandSale={handleExpandSale}
-                  expandedSaleId={expandedSaleId}
-                  expandedSaleItems={expandedSaleItems}
-                />
-              ))}
-            </div>
+            <>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {pastRecords.map((record) => (
+                  <PastDayCard
+                    key={record.id}
+                    record={record}
+                    isExpanded={expandedRecordId === record.id}
+                    expandedSales={expandedRecordSales}
+                    loadingDetail={loadingRecordDetail}
+                    isAdmin={isAdmin}
+                    onExpand={() => handleExpandRecord(record.id)}
+                    onReopen={() => { setReopeningId(record.id); setShowReopenDialog(true); }}
+                    onBackfill={() => { setPosPresetDate(record.date); navigate('pos'); }}
+                    onVoid={(s) => { setSaleToDelete(s); setShowDeleteDialog(true); }}
+                     formatDate={formatDate}
+                    onExpandSale={handleExpandSale}
+                    expandedSaleId={expandedSaleId}
+                    expandedSaleItems={expandedSaleItems}
+                  />
+                ))}
+              </div>
+
+              {/* Real pagination. The old fixed 60-record fetch meant a branch
+                  trading every day simply vanished off the end of the list. */}
+              {pastTotalPages > 1 && (
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <p className="text-xs text-muted-foreground">
+                    Page {pastPage} of {pastTotalPages} · {pastTotal} register{pastTotal === 1 ? '' : 's'} on record
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      disabled={pastPage <= 1}
+                      onClick={() => setPastPage((p) => Math.max(1, p - 1))}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Newer
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      disabled={pastPage >= pastTotalPages}
+                      onClick={() => setPastPage((p) => Math.min(pastTotalPages, p + 1))}
+                    >
+                      Older
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
           ) : (
             <Card>
               <CardContent className="py-16 text-center">
@@ -1471,6 +1727,7 @@ function SaleRow({
   expanded,
   expandedItems,
   isAdmin,
+  showBranch = false,
   onExpand,
   onPrint,
   onDelete,
@@ -1481,11 +1738,15 @@ function SaleRow({
   expanded: boolean;
   expandedItems: SaleItem[];
   isAdmin: boolean;
+  /** Shown only in the consolidated view, where a bare invoice number does not
+   *  say which shop rang it up. */
+  showBranch?: boolean;
   onExpand: (saleId: string, items?: SaleItem[]) => void;
   onPrint: (sale: Sale) => void;
   onDelete: (sale: Sale) => void;
   onRefund: () => void;
 }) {
+  const items = expandedItems.length > 0 ? expandedItems : sale.items ?? [];
   return (
     <>
       <TableRow
@@ -1502,6 +1763,11 @@ function SaleRow({
           {formatTime(sale.createdAt)}
         </TableCell>
         <TableCell className="font-mono text-xs">{sale.invoiceNo}</TableCell>
+        {showBranch && (
+          <TableCell className="text-xs">
+            <BranchBadge branch={sale.branch} />
+          </TableCell>
+        )}
         <TableCell className="text-sm">{sale.customer?.name ?? 'Walk-in'}</TableCell>
         <TableCell className="text-center">
           <Badge variant="outline" className="text-xs">{sale.items?.length ?? 0}</Badge>
@@ -1548,27 +1814,56 @@ function SaleRow({
         </TableRow>
       {expanded && (
         <TableRow key={`${sale.id}-items`} className="bg-muted/30">
-          <TableCell colSpan={10} className="px-10 py-3">
+          <TableCell colSpan={showBranch ? 11 : 10} className="px-10 py-3">
             <div className="text-sm">
-              <p className="font-medium mb-2 text-xs text-muted-foreground uppercase tracking-wider">Sale Items</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-medium text-xs text-muted-foreground uppercase tracking-wider">
+                  Items on {sale.invoiceNo}
+                  {showBranch && sale.branch && (
+                    <span className="ml-2 normal-case tracking-normal text-[11px] text-muted-foreground/80">
+                      {sale.branch.name}
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {items.length} line{items.length === 1 ? '' : 's'}
+                </p>
+              </div>
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b">
                     <th className="text-left py-1.5 font-medium text-muted-foreground">Product</th>
+                    <th className="text-left py-1.5 font-medium text-muted-foreground">Batch</th>
                     <th className="text-center py-1.5 font-medium text-muted-foreground">Qty</th>
+                    <th className="text-center py-1.5 font-medium text-muted-foreground">Returned</th>
                     <th className="text-right py-1.5 font-medium text-muted-foreground">Unit Price</th>
                     <th className="text-right py-1.5 font-medium text-muted-foreground">Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(expandedItems.length > 0 ? expandedItems : sale.items ?? []).map((item) => (
-                    <tr key={item.id} className="border-b border-dotted">
-                      <td className="py-1.5">{item.product?.name ?? 'Product'}</td>
-                      <td className="text-center">{item.quantity}</td>
-                      <td className="text-right">{money(item.unitPrice)}</td>
-                      <td className="text-right font-medium">{money(item.total)}</td>
-                    </tr>
-                  ))}
+                  {items.map((item) => {
+                    const returned = Number(item.returnedQuantity ?? 0);
+                    return (
+                      <tr key={item.id} className="border-b border-dotted">
+                        <td className="py-1.5">{item.product?.name ?? 'Product'}</td>
+                        <td className="py-1.5 font-mono text-[11px] text-muted-foreground">
+                          {item.batch?.batchNumber ?? '-'}
+                        </td>
+                        <td className="text-center">{item.quantity}</td>
+                        <td className="text-center">
+                          {returned > 0 ? (
+                            <span className="text-amber-600 font-medium" title="Units already returned">
+                              {returned}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground/40">-</span>
+                          )}
+                        </td>
+                        <td className="text-right">{money(item.unitPrice)}</td>
+                        <td className="text-right font-medium">{money(item.total)}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1576,6 +1871,448 @@ function SaleRow({
         </TableRow>
       )}
     </>
+  );
+}
+
+/** The shop a sale or register belongs to. Never guess: an unnamed row in a
+ *  multi-branch view is exactly the ambiguity the owner opened the view to
+ *  resolve, so fall back to an explicit placeholder rather than nothing. */
+function BranchBadge({ branch }: { branch?: Branch | null }) {
+  if (!branch) {
+    return <span className="text-[11px] text-muted-foreground/60">Unknown branch</span>;
+  }
+  return (
+    <Badge variant="outline" className="text-[10px] font-normal h-5">
+      <Building2 className="h-2.5 w-2.5 mr-1" />
+      {branch.code || branch.name}
+    </Badge>
+  );
+}
+
+const EMPTY_TOTALS: LiveTotals = {
+  totalRevenue: 0,
+  totalProfit: 0,
+  totalTransactions: 0,
+  totalItemsSold: 0,
+  cashTotal: 0,
+  cardTotal: 0,
+  mobileMoneyTotal: 0,
+};
+
+/**
+ * The numbers to show for a branch's day.
+ *
+ * The register is authoritative once it exists. Only when there is no register
+ * row at all do the server-derived live totals stand in — a branch that has
+ * taken money must never be shown as having taken none, just because nobody
+ * opened its till.
+ */
+function totalsOf(entry: TodayBranchEntry): LiveTotals {
+  if (entry.record) {
+    return {
+      totalRevenue: entry.record.totalRevenue,
+      totalProfit: entry.record.totalProfit,
+      totalTransactions: entry.record.totalTransactions,
+      totalItemsSold: entry.record.totalItemsSold,
+      cashTotal: entry.record.cashTotal,
+      cardTotal: entry.record.cardTotal,
+      mobileMoneyTotal: entry.record.mobileMoneyTotal,
+    };
+  }
+  return entry.liveTotals ?? EMPTY_TOTALS;
+}
+
+/** Applies the view-only filters to one branch's sales. Payment and cashier are
+ *  exact matches; the free-text box searches the receipt number, the customer,
+ *  the cashier and every product name on the receipt, because an owner chasing a
+ *  recall knows one of those and rarely all. */
+function filterSales(sales: Sale[], filters: RegisterFilters): Sale[] {
+  const q = filters.query.trim().toLowerCase();
+  return sales.filter((sale) => {
+    if (filters.paymentMethod !== 'all' && sale.paymentMethod !== filters.paymentMethod) return false;
+    if (filters.cashierId !== 'all' && sale.userId !== filters.cashierId) return false;
+    if (!q) return true;
+    const haystack = [
+      sale.invoiceNo,
+      sale.customer?.name ?? '',
+      sale.user?.name ?? '',
+      ...(sale.items ?? []).map((item) => item.product?.name ?? ''),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(q);
+  });
+}
+
+/**
+ * The register's filter row.
+ *
+ * Everything here is VIEW-ONLY on purpose. The header branch switcher re-scopes
+ * the entire app — POS, stock, alerts — which is the wrong tool for "show me
+ * only the Airport branch's sales today"; it also reloads the page. These
+ * controls narrow what is on screen and never change the signed branch.
+ */
+function RegisterFiltersBar({
+  filters,
+  onChange,
+  branches,
+  cashiers,
+  shownCount,
+  totalCount,
+  isAdmin,
+}: {
+  filters: RegisterFilters;
+  onChange: (next: RegisterFilters) => void;
+  branches: Branch[];
+  cashiers: { id: string; name: string }[];
+  shownCount: number;
+  totalCount: number;
+  isAdmin: boolean;
+}) {
+  const set = (patch: Partial<RegisterFilters>) => onChange({ ...filters, ...patch });
+  const hasFilters =
+    filters.branchId !== NO_FILTERS.branchId ||
+    filters.paymentMethod !== NO_FILTERS.paymentMethod ||
+    filters.cashierId !== NO_FILTERS.cashierId ||
+    filters.query.trim() !== '';
+  const narrowable = isAdmin && branches.length > 1;
+
+  return (
+    <Card>
+      <CardContent className="p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground mr-1">
+            <Filter className="h-3.5 w-3.5" />
+            Filters
+          </div>
+
+          {narrowable && (
+            <Select value={filters.branchId} onValueChange={(v) => set({ branchId: v })}>
+              <SelectTrigger className="h-8 w-44 text-xs">
+                <Building2 className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
+                <SelectValue placeholder="All branches" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All branches</SelectItem>
+                {branches.filter((b) => b.active).map((b) => (
+                  <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <Select value={filters.paymentMethod} onValueChange={(v) => set({ paymentMethod: v })}>
+            <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectValue placeholder="All payments" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs">All payments</SelectItem>
+              {Object.entries(PAY_LABEL).map(([value, label]) => (
+                <SelectItem key={value} value={value} className="text-xs">{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {cashiers.length > 1 && (
+            <Select value={filters.cashierId} onValueChange={(v) => set({ cashierId: v })}>
+              <SelectTrigger className="h-8 w-44 text-xs">
+                <Users className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
+                <SelectValue placeholder="All cashiers" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all" className="text-xs">All cashiers</SelectItem>
+                {cashiers.map((c) => (
+                  <SelectItem key={c.id} value={c.id} className="text-xs">{c.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
+          <div className="relative">
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              value={filters.query}
+              onChange={(e) => set({ query: e.target.value })}
+              placeholder="Invoice, customer, or product…"
+              className="h-8 w-56 pl-7 text-xs"
+            />
+          </div>
+
+          {hasFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={() => onChange(NO_FILTERS)}
+            >
+              <X className="h-3.5 w-3.5 mr-1" />
+              Clear
+            </Button>
+          )}
+
+          <span className="text-[11px] text-muted-foreground ml-auto">
+            Showing {shownCount} of {totalCount} sale{totalCount === 1 ? '' : 's'}
+          </span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+/**
+ * One branch's day, in the consolidated view.
+ *
+ * Each section carries its own revenue, profit, item count and payment split, so
+ * an owner scanning the page compares shops directly instead of mentally adding
+ * up rows from different shops — which is the mistake a single unlabelled
+ * all-branches table invites.
+ */
+function BranchDaySection({
+  entry,
+  isAdmin,
+  groupMode,
+  onGroupModeChange,
+  filters,
+  expandedSaleId,
+  expandedSaleItems,
+  onExpandSale,
+  onPrint,
+  onDelete,
+  onRefund,
+}: {
+  entry: TodayBranchEntry;
+  isAdmin: boolean;
+  groupMode: GroupMode;
+  onGroupModeChange: (mode: GroupMode) => void;
+  filters: RegisterFilters;
+  expandedSaleId: string | null;
+  expandedSaleItems: SaleItem[];
+  onExpandSale: (saleId: string, items?: SaleItem[]) => void;
+  onPrint: (sale: Sale) => void;
+  onDelete: (sale: Sale) => void;
+  onRefund: () => void;
+}) {
+  const totals = totalsOf(entry);
+  const sales = filterSales(entry.sales, filters);
+  const groups = buildAuditGroups(sales, groupMode);
+  const registerOpen = entry.record?.status === 'open';
+  const margin = totals.totalRevenue > 0 ? (totals.totalProfit / totals.totalRevenue) * 100 : 0;
+
+  return (
+    <Card className="border-slate-200">
+      <CardHeader className="pb-3 border-b bg-slate-50/60">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100">
+              <Building2 className="h-4 w-4 text-emerald-700" />
+            </div>
+            <div>
+              <CardTitle className="text-base flex items-center gap-2">
+                {entry.branch.name}
+                <span className="text-[10px] font-mono font-normal text-muted-foreground">{entry.branch.code}</span>
+              </CardTitle>
+              <p className="text-[11px] text-muted-foreground">
+                {entry.record
+                  ? registerOpen
+                    ? 'Register open'
+                    : 'Register closed'
+                  : 'Register not opened today — showing live takings'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Revenue</p>
+              <p className="text-lg font-bold text-emerald-600 leading-tight">{money(totals.totalRevenue)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Profit</p>
+              <p className="text-lg font-bold text-teal-600 leading-tight">{money(totals.totalProfit)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] text-muted-foreground uppercase tracking-wider">Margin</p>
+              <p className="text-lg font-bold leading-tight">{margin.toFixed(1)}%</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <Badge variant="secondary" className="text-[10px]">
+            {totals.totalTransactions} tx
+          </Badge>
+          <Badge variant="outline" className="text-[10px]">
+            {totals.totalItemsSold} items
+          </Badge>
+          {totals.cashTotal > 0 && (
+            <span className="flex items-center gap-1 text-[11px] text-green-600 font-medium">
+              <Banknote className="h-3 w-3" />
+              {money(totals.cashTotal)}
+            </span>
+          )}
+          {totals.cardTotal > 0 && (
+            <span className="flex items-center gap-1 text-[11px] text-blue-600 font-medium">
+              <CreditCard className="h-3 w-3" />
+              {money(totals.cardTotal)}
+            </span>
+          )}
+          {totals.mobileMoneyTotal > 0 && (
+            <span className="flex items-center gap-1 text-[11px] text-purple-600 font-medium">
+              <Smartphone className="h-3 w-3" />
+              {money(totals.mobileMoneyTotal)}
+            </span>
+          )}
+        </div>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        {sales.length > 0 ? (
+          <div className="max-h-[420px] overflow-y-auto">
+            {groups.map((group) => (
+              <div key={group.key}>
+                <AuditGroupHeader group={group} />
+                <Table>
+                  <TableBody>
+                    {group.sales.map((sale, idx) => (
+                      <SaleRow
+                        key={sale.id}
+                        sale={sale}
+                        index={idx}
+                        expanded={expandedSaleId === sale.id}
+                        expandedItems={expandedSaleItems}
+                        isAdmin={isAdmin}
+                        onExpand={onExpandSale}
+                        onPrint={onPrint}
+                        onDelete={onDelete}
+                        onRefund={onRefund}
+                      />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="py-10 text-center text-sm text-muted-foreground">
+            {entry.sales.length > 0
+              ? 'No sales match the current filters'
+              : 'No sales recorded at this branch today'}
+          </p>
+        )}
+      </CardContent>
+
+      <div className="flex items-center justify-end px-4 py-2 border-t bg-slate-50/60">
+        <GroupByControl value={groupMode} onChange={onGroupModeChange} />
+      </div>
+    </Card>
+  );
+}
+
+/**
+ * The whole business for today, when the owner is on the consolidated view.
+ *
+ * Sits above the per-branch sections so the first thing on screen is the number
+ * they came for, with the branch split immediately under it. It is a SUM of the
+ * visible sections and nothing else — deliberately not a server-side total,
+ * because a figure that could disagree with the sections beneath it is worse
+ * than no figure at all.
+ */
+function ConsolidatedSummary({ entries, isLoading }: { entries: TodayBranchEntry[]; isLoading: boolean }) {
+  const totals = entries.reduce<LiveTotals>(
+    (acc, entry) => {
+      const t = totalsOf(entry);
+      return {
+        totalRevenue: acc.totalRevenue + t.totalRevenue,
+        totalProfit: acc.totalProfit + t.totalProfit,
+        totalTransactions: acc.totalTransactions + t.totalTransactions,
+        totalItemsSold: acc.totalItemsSold + t.totalItemsSold,
+        cashTotal: acc.cashTotal + t.cashTotal,
+        cardTotal: acc.cardTotal + t.cardTotal,
+        mobileMoneyTotal: acc.mobileMoneyTotal + t.mobileMoneyTotal,
+      };
+    },
+    EMPTY_TOTALS
+  );
+  const margin = totals.totalRevenue > 0 ? (totals.totalProfit / totals.totalRevenue) * 100 : 0;
+  const trading = entries.filter((e) => e.sales.length > 0).length;
+  const noRegister = entries.filter((e) => !e.record && e.sales.length > 0).length;
+
+  return (
+    <Card className="border-2 border-slate-200 bg-gradient-to-br from-slate-50 to-white">
+      <CardContent className="p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-900">
+              <Layers className="h-4 w-4 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-bold leading-tight">All Branches — Today</h2>
+              <p className="text-[11px] text-muted-foreground">
+                {trading} of {entries.length} branch{trading === 1 ? '' : 'es'} trading today
+              </p>
+            </div>
+          </div>
+          <Badge variant="outline" className="text-[10px]">
+            Consolidated view
+          </Badge>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          <StatCard label="Total Revenue" value={money(totals.totalRevenue)} icon={DollarSign} iconBg="bg-emerald-500" trend="up" />
+          <StatCard label="Total Profit" value={money(totals.totalProfit)} icon={TrendingUp} iconBg="bg-teal-500" trend="up" />
+          <StatCard label="Transactions" value={totals.totalTransactions.toString()} icon={Receipt} iconBg="bg-green-500" isCount />
+          <StatCard label="Items Sold" value={totals.totalItemsSold.toString()} icon={Package} iconBg="bg-cyan-500" isCount />
+          <StatCard
+            label="Avg. Sale"
+            value={money(totals.totalTransactions > 0 ? totals.totalRevenue / totals.totalTransactions : 0)}
+            icon={BarChart3}
+            iconBg="bg-emerald-600"
+          />
+          <StatCard label="Margin" value={`${margin.toFixed(1)}%`} icon={ArrowDownRight} iconBg="bg-amber-500" />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <MiniTotal label="Cash" value={totals.cashTotal} icon={Banknote} tone="text-green-700" bg="bg-green-100" iconTone="text-green-600" />
+          <MiniTotal label="Card" value={totals.cardTotal} icon={CreditCard} tone="text-blue-700" bg="bg-blue-100" iconTone="text-blue-600" />
+          <MiniTotal label="Mobile Money" value={totals.mobileMoneyTotal} icon={Smartphone} tone="text-purple-700" bg="bg-purple-100" iconTone="text-purple-600" />
+        </div>
+
+        {noRegister > 0 && !isLoading && (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+            {noRegister} branch{noRegister === 1 ? ' has' : 'es have'} taken money today without an opened
+            register. Their totals are calculated live from sales and will be written to the register when it is opened.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function MiniTotal({
+  label,
+  value,
+  icon: Icon,
+  tone,
+  bg,
+  iconTone,
+}: {
+  label: string;
+  value: number;
+  icon: React.ElementType;
+  tone: string;
+  bg: string;
+  iconTone: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border p-3">
+      <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${bg}`}>
+        <Icon className={`h-4 w-4 ${iconTone}`} />
+      </div>
+      <div>
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className={`text-base font-bold ${tone}`}>{money(value)}</p>
+      </div>
+    </div>
   );
 }
 
@@ -1641,6 +2378,7 @@ function PastDayCard({
       productUnit: string;
       batchNumber: string;
       quantity: number;
+      returnedQuantity: number;
       unitPrice: number;
       total: number;
       costPrice: number;
@@ -1658,6 +2396,7 @@ function PastDayCard({
           productUnit: item.product?.unit ?? '',
           batchNumber: item.batch?.batchNumber ?? '-',
           quantity: item.quantity,
+          returnedQuantity: Number(item.returnedQuantity ?? 0),
           unitPrice: item.unitPrice,
           total: item.total,
           costPrice: item.costPrice,
@@ -1716,10 +2455,10 @@ function PastDayCard({
 
   // Export items to CSV
   const exportCSV = useCallback(() => {
-    const headers = ['Time', 'Invoice#', 'Product', 'Batch', 'Qty', 'Unit Price', 'Total', 'Payment', 'Cashier', 'Customer'];
+    const headers = ['Time', 'Invoice#', 'Branch', 'Product', 'Batch', 'Qty', 'Returned', 'Unit Price', 'Total', 'Payment', 'Cashier', 'Customer'];
     const rows = filteredItems.map(i => [
-      i.time, i.invoiceNo, i.productName, i.batchNumber,
-      i.quantity.toString(), money(i.unitPrice), money(i.total),
+      i.time, i.invoiceNo, record.branch?.name ?? '-', i.productName, i.batchNumber,
+      i.quantity.toString(), i.returnedQuantity.toString(), money(i.unitPrice), money(i.total),
       i.paymentMethod, i.cashierName, i.customerName,
     ]);
     const csv = [headers.join(','), ...rows.map(r => r.map(c => `"${c.replace(/"/g, '""')}"`).join(','))].join('\n');
@@ -1730,7 +2469,7 @@ function PastDayCard({
     a.download = `sales-items-${record.date}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [filteredItems, record.date]);
+  }, [filteredItems, record.date, record.branch?.name]);
 
   return (
     <AnimatePresence>
@@ -1742,7 +2481,10 @@ function PastDayCard({
           <CardContent className="p-4">
             <div className="flex items-start justify-between mb-3">
               <div>
-                <p className="font-semibold text-sm">{fmtDate(record.date)}</p>
+                <div className="flex items-center gap-2">
+                  <p className="font-semibold text-sm">{fmtDate(record.date)}</p>
+                  <BranchBadge branch={record.branch} />
+                </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {record.totalTransactions} transaction{record.totalTransactions !== 1 ? 's' : ''} · {record.totalItemsSold} items
                 </p>
@@ -1939,14 +2681,36 @@ function PastDayCard({
                                           <TableRow className="bg-muted/30">
                                             <TableCell colSpan={isAdmin ? 7 : 6} className="px-8 py-2">
                                               <table className="w-full text-xs">
+                                                <thead>
+                                                  <tr className="border-b">
+                                                    <th className="text-left py-1 font-medium text-muted-foreground">Product</th>
+                                                    <th className="text-left py-1 font-medium text-muted-foreground">Batch</th>
+                                                    <th className="text-center py-1 font-medium text-muted-foreground">Qty</th>
+                                                    <th className="text-center py-1 font-medium text-muted-foreground">Returned</th>
+                                                    <th className="text-right py-1 font-medium text-muted-foreground">Total</th>
+                                                  </tr>
+                                                </thead>
                                                 <tbody>
-                                                  {(sale.items ?? []).map((item) => (
-                                                    <tr key={item.id} className="border-b border-dotted">
-                                                      <td className="py-1">{item.product?.name ?? 'Product'}</td>
-                                                      <td className="text-center py-1">{item.quantity}</td>
-                                                      <td className="text-right py-1">{money(item.total)}</td>
-                                                    </tr>
-                                                  ))}
+                                                  {(sale.items ?? []).map((item) => {
+                                                    const returned = Number(item.returnedQuantity ?? 0);
+                                                    return (
+                                                      <tr key={item.id} className="border-b border-dotted">
+                                                        <td className="py-1">{item.product?.name ?? 'Product'}</td>
+                                                        <td className="py-1 font-mono text-[10px] text-muted-foreground">
+                                                          {item.batch?.batchNumber ?? '-'}
+                                                        </td>
+                                                        <td className="text-center py-1">{item.quantity}</td>
+                                                        <td className="text-center py-1">
+                                                          {returned > 0 ? (
+                                                            <span className="text-amber-600 font-medium">{returned}</span>
+                                                          ) : (
+                                                            <span className="text-muted-foreground/40">-</span>
+                                                          )}
+                                                        </td>
+                                                        <td className="text-right py-1">{money(item.total)}</td>
+                                                      </tr>
+                                                    );
+                                                  })}
                                                 </tbody>
                                               </table>
                                             </TableCell>
@@ -1973,6 +2737,7 @@ function PastDayCard({
                                   <TableHead className="text-[10px]">Product</TableHead>
                                   <TableHead className="text-[10px]">Batch</TableHead>
                                   <TableHead className="text-[10px] text-center">Qty</TableHead>
+                                  <TableHead className="text-[10px] text-center">Returned</TableHead>
                                   <TableHead className="text-[10px] text-right">Unit Price</TableHead>
                                   <TableHead className="text-[10px] text-right">Total</TableHead>
                                   <TableHead className="text-[10px]">Payment</TableHead>
@@ -1987,6 +2752,13 @@ function PastDayCard({
                                     <TableCell className="text-xs font-medium">{item.productName}</TableCell>
                                     <TableCell className="text-[11px] text-muted-foreground font-mono">{item.batchNumber}</TableCell>
                                     <TableCell className="text-xs text-center">{item.quantity} {item.productUnit}</TableCell>
+                                    <TableCell className="text-xs text-center">
+                                      {item.returnedQuantity > 0 ? (
+                                        <span className="text-amber-600 font-medium">{item.returnedQuantity}</span>
+                                      ) : (
+                                        <span className="text-muted-foreground/40">-</span>
+                                      )}
+                                    </TableCell>
                                     <TableCell className="text-xs text-right">{money(item.unitPrice)}</TableCell>
                                     <TableCell className="text-xs text-right font-semibold">{money(item.total)}</TableCell>
                                     <TableCell><PaymentBadge method={item.paymentMethod} /></TableCell>

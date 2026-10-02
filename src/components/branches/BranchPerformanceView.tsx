@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { money } from '@/lib/currency';
 import {
   Card,
@@ -124,6 +124,31 @@ interface DailyResponse {
     sales: number;
   }[];
   items: DailyItemRow[];
+  /** The day's individual receipts, newest first. */
+  invoices: DailyInvoiceRow[];
+}
+
+interface DailyInvoiceRow {
+  id: string;
+  invoiceNo: string;
+  branchId: string;
+  branchName: string;
+  branchCode: string;
+  cashierName: string;
+  totalAmount: number;
+  profit: number;
+  createdAt: string;
+  itemCount: number;
+  items: {
+    id: string;
+    productName: string;
+    unit: string;
+    batchNumber: string | null;
+    quantity: number;
+    unitPrice: number;
+    costPrice: number;
+    total: number;
+  }[];
 }
 
 type Period = 'today' | 'this_week' | 'this_month' | 'custom';
@@ -638,11 +663,162 @@ export default function BranchPerformanceView() {
                     </TableBody>
                   </Table>
                 </div>
+
+                {/* The individual receipts behind those totals. The product table
+                    above answers "what moved"; this answers "which receipt" —
+                    the drilldown an owner needs when a customer disputes a sale
+                    or a batch is recalled. */}
+                <InvoiceDrilldown invoices={daily.invoices} />
               </>
             )
           ) : null}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+/**
+ * The day's individual receipts, each expandable to its line items.
+ *
+ * The product table above deliberately aggregates: a product sold five times is
+ * one row. That is right for reconciliation in aggregate and useless the moment
+ * someone asks "which sale was that, and what was on it" — so the raw receipts
+ * are available one click away rather than being the only view, which would
+ * make a busy day unreadable.
+ */
+function InvoiceDrilldown({ invoices }: { invoices: DailyInvoiceRow[] }) {
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [branchFilter, setBranchFilter] = useState<string>('all');
+
+  if (!invoices || invoices.length === 0) return null;
+
+  const branchIds = [...new Set(invoices.map((i) => i.branchId))];
+  const rows = branchFilter === 'all' ? invoices : invoices.filter((i) => i.branchId === branchFilter);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+        <h3 className="text-sm font-medium">
+          Individual sales
+          <span className="ml-2 text-xs text-muted-foreground font-normal">
+            {rows.length} receipt{rows.length === 1 ? '' : 's'}
+          </span>
+        </h3>
+        {branchIds.length > 1 ? (
+          <Select value={branchFilter} onValueChange={setBranchFilter}>
+            <SelectTrigger className="h-8 w-48 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs">
+                All branches
+              </SelectItem>
+              {branchIds.map((id) => {
+                const match = invoices.find((i) => i.branchId === id);
+                return (
+                  <SelectItem key={id} value={id} className="text-xs">
+                    {match?.branchName ?? id}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+        ) : null}
+      </div>
+
+      <div className="overflow-x-auto rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="w-8" />
+              <TableHead>Invoice</TableHead>
+              <TableHead>Time</TableHead>
+              {branchIds.length > 1 ? <TableHead>Branch</TableHead> : null}
+              <TableHead>Cashier</TableHead>
+              <TableHead className="text-center">Items</TableHead>
+              <TableHead className="text-right">Total</TableHead>
+              <TableHead className="text-right">Profit</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((invoice) => {
+              const open = expandedId === invoice.id;
+              return (
+                <Fragment key={invoice.id}>
+                  <TableRow
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => setExpandedId(open ? null : invoice.id)}
+                  >
+                    <TableCell>
+                      {open ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5" />
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{invoice.invoiceNo}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                      {new Date(invoice.createdAt).toLocaleTimeString('en-GH', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </TableCell>
+                    {branchIds.length > 1 ? (
+                      <TableCell>
+                        <Badge variant="outline" className="text-[10px] font-normal">
+                          <Building2 className="h-2.5 w-2.5 mr-1" />
+                          {invoice.branchCode || invoice.branchName}
+                        </Badge>
+                      </TableCell>
+                    ) : null}
+                    <TableCell className="text-xs">{invoice.cashierName}</TableCell>
+                    <TableCell className="text-center tabular-nums">{invoice.itemCount}</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">
+                      {money(invoice.totalAmount)}
+                    </TableCell>
+                    <TableCell className="text-right text-emerald-600 tabular-nums">
+                      {money(invoice.profit)}
+                    </TableCell>
+                  </TableRow>
+                  {open ? (
+                    <TableRow className="bg-muted/30">
+                      <TableCell colSpan={branchIds.length > 1 ? 8 : 7} className="px-8 py-3">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b">
+                              <th className="text-left py-1 font-medium text-muted-foreground">Product</th>
+                              <th className="text-left py-1 font-medium text-muted-foreground">Batch</th>
+                              <th className="text-center py-1 font-medium text-muted-foreground">Qty</th>
+                              <th className="text-right py-1 font-medium text-muted-foreground">Unit price</th>
+                              <th className="text-right py-1 font-medium text-muted-foreground">Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {invoice.items.map((line) => (
+                              <tr key={line.id} className="border-b border-dotted">
+                                <td className="py-1">{line.productName}</td>
+                                <td className="py-1 font-mono text-[10px] text-muted-foreground">
+                                  {line.batchNumber ?? '—'}
+                                </td>
+                                <td className="text-center py-1">
+                                  {line.quantity} {line.unit}
+                                </td>
+                                <td className="text-right py-1">{money(line.unitPrice)}</td>
+                                <td className="text-right py-1 font-medium">{money(line.total)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }
