@@ -69,12 +69,17 @@ ON CONFLICT ("id") DO NOTHING;
 -- ----------------------------------------------------------------------------
 -- 3. Add `branchId` as NULLABLE. Safe on a populated table: existing rows
 --    simply read NULL until section 4 fills them in.
+--
+--    IF EXISTS because this file also runs on a genuinely new database, where
+--    none of these tables exist yet — `prisma db push` is what creates them.
+--    Without it, a first deploy to an empty PostgreSQL aborts on the very first
+--    ALTER and the app can never be deployed for the first time.
 -- ----------------------------------------------------------------------------
-ALTER TABLE "batches"             ADD COLUMN IF NOT EXISTS "branchId" TEXT;
-ALTER TABLE "sales"               ADD COLUMN IF NOT EXISTS "branchId" TEXT;
-ALTER TABLE "purchases"           ADD COLUMN IF NOT EXISTS "branchId" TEXT;
-ALTER TABLE "daily_sales_records" ADD COLUMN IF NOT EXISTS "branchId" TEXT;
-ALTER TABLE "users"               ADD COLUMN IF NOT EXISTS "branchId" TEXT;
+ALTER TABLE IF EXISTS "batches"             ADD COLUMN IF NOT EXISTS "branchId" TEXT;
+ALTER TABLE IF EXISTS "sales"               ADD COLUMN IF NOT EXISTS "branchId" TEXT;
+ALTER TABLE IF EXISTS "purchases"           ADD COLUMN IF NOT EXISTS "branchId" TEXT;
+ALTER TABLE IF EXISTS "daily_sales_records" ADD COLUMN IF NOT EXISTS "branchId" TEXT;
+ALTER TABLE IF EXISTS "users"               ADD COLUMN IF NOT EXISTS "branchId" TEXT;
 
 
 -- ----------------------------------------------------------------------------
@@ -87,11 +92,29 @@ ALTER TABLE "users"               ADD COLUMN IF NOT EXISTS "branchId" TEXT;
 --        is added, because that id is constant.
 --      * daily_sales_records (date, branchId) - previously unique on `date`
 --        alone, so no two rows can collide on a new constant column.
+--
+--    Each UPDATE is guarded on its table existing, for the same first-deploy
+--    reason as section 3: on a new database these tables are created by
+--    `prisma db push` afterwards, and there is nothing to point at a branch yet.
 -- ----------------------------------------------------------------------------
-UPDATE "batches"             SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
-UPDATE "sales"               SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
-UPDATE "purchases"           SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
-UPDATE "daily_sales_records" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'batches') THEN
+    UPDATE "batches" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'sales') THEN
+    UPDATE "sales" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'purchases') THEN
+    UPDATE "purchases" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'daily_sales_records') THEN
+    UPDATE "daily_sales_records" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL;
+  END IF;
+END $$;
 
 
 -- ----------------------------------------------------------------------------
@@ -105,7 +128,12 @@ UPDATE "daily_sales_records" SET "branchId" = 'brh_legacy_main' WHERE "branchId"
 --    keep their all-branches view; an owner can then reassign each
 --    salesperson to their real location from the Branches screen.
 -- ----------------------------------------------------------------------------
-UPDATE "users" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL AND "role" <> 'admin';
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'users') THEN
+    UPDATE "users" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL AND "role" <> 'admin';
+  END IF;
+END $$;
 
 
 -- ----------------------------------------------------------------------------
@@ -126,6 +154,14 @@ UPDATE "users" SET "branchId" = 'brh_legacy_main' WHERE "branchId" IS NULL AND "
 -- ----------------------------------------------------------------------------
 DO $$
 BEGIN
+  -- On a new database neither table exists yet, so there is nothing that could
+  -- violate the keys `prisma db push` is about to add. Checking information_schema
+  -- rather than assuming keeps this a single pass for both a live and a first
+  -- deploy.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'batches') THEN
+    RETURN;
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM "batches"
     GROUP BY "productId", "batchNumber", "branchId"
