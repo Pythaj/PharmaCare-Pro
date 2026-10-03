@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAuth } from '@/lib/require-auth'
+import { requireAuth, requireBranchScope } from '@/lib/require-auth'
+import { branchWhere } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
 import {
   parseCustomerName,
@@ -10,7 +11,15 @@ import {
 } from '@/lib/customer-input'
 
 export async function GET(request: NextRequest) {
-  const auth = await requireAuth(request)
+  // Branch scope, not just identity. A Customer is a chain-wide record with no
+  // branch of its own, so "whose customers are these" is answered entirely by the
+  // SALES hanging off them. Using requireAuth here therefore leaked every shop's
+  // takings to every cashier: the sale count and the spend total below were both
+  // unfiltered reads of `Sale`, so a salesperson at Branch B saw Branch A's
+  // revenue per customer. The fix is to scope the Sale relation, not the parent
+  // row — `branchWhere` supplies `{}` only for an admin deliberately viewing the
+  // whole business.
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
@@ -18,6 +27,8 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''
+
+    const saleScope = branchWhere(auth.scope!)
 
     const where = search
       ? {
@@ -32,7 +43,10 @@ export async function GET(request: NextRequest) {
     const customers = await db.customer.findMany({
       where,
       include: {
-        _count: { select: { sales: true } },
+        // Filtered count: the unfiltered `_count: { sales: true }` counted every
+        // branch's receipts, so the column shown next to each name was the
+        // business total presented as though it were this branch's.
+        _count: { select: { sales: { where: saleScope } } },
       },
       orderBy: { createdAt: 'desc' },
     })
@@ -43,7 +57,7 @@ export async function GET(request: NextRequest) {
     const totals = customerIds.length > 0
       ? await db.sale.groupBy({
           by: ['customerId'],
-          where: { customerId: { in: customerIds } },
+          where: { customerId: { in: customerIds }, ...saleScope },
           _sum: { totalAmount: true },
         })
       : []

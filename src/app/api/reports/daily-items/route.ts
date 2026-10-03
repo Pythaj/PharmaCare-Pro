@@ -3,6 +3,9 @@ import { db } from '@/lib/db'
 import { requireAdmin } from '@/lib/require-auth'
 import { toNumber } from '@/lib/utils'
 import { localDateKey } from '@/lib/dates'
+import { aggregateRefundsByProduct, fetchRefundLines } from '@/lib/refunds'
+
+const round2 = (n: number) => Math.round(n * 100) / 100
 
 /**
  * GET /api/reports/daily-items
@@ -28,7 +31,8 @@ import { localDateKey } from '@/lib/dates'
  * "select a branch first" refusals.
  *
  * `date` is a local calendar day (YYYY-MM-DD). `branchId` narrows to one shop
- * when the owner wants to reconcile a single till.
+ * when the owner wants to reconcile a single till. `userId` narrows to one
+ * salesperson's till across whichever branches they rang up at.
  */
 export async function GET(request: NextRequest) {
   const auth = await requireAdmin(request)
@@ -40,6 +44,12 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const dateStr = searchParams.get('date')
     const branchId = searchParams.get('branchId')
+    // Which salesperson's till to reconcile. Applied at the SALE, not after the
+    // fact, so every derived figure below — item totals, profit, invoice list and
+    // refunds — is scoped to the same person. Filtering the already-aggregated
+    // rows instead would leave the summary, the branch split and the invoice list
+    // describing three different days.
+    const userId = searchParams.get('userId')
 
     const today = new Date()
     // Default to today, in LOCAL terms. Falling back to `toISOString()` here
@@ -67,11 +77,22 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    if (userId) {
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { id: true, name: true },
+      })
+      if (!user) {
+        return NextResponse.json({ error: 'Salesperson not found' }, { status: 404 })
+      }
+    }
+
     const sales = await db.sale.findMany({
       where: {
         createdAt: { gte: start, lte: end },
         status: 'completed',
         ...(branchId ? { branchId } : {}),
+        ...(userId ? { userId } : {}),
       },
       select: {
         id: true,
@@ -107,6 +128,8 @@ export async function GET(request: NextRequest) {
        *  signature of one batch being opened, not of demand changing. */
       batches: string[]
       sales: number
+      refundedQuantity: number
+      refunds: number
     }
 
     const byProduct = new Map<string, ItemRow>()
@@ -118,6 +141,8 @@ export async function GET(request: NextRequest) {
       profit: number
       items: number
       sales: number
+      refunds: number
+      refundedProfit: number
     }>()
 
     let revenue = 0
@@ -138,6 +163,8 @@ export async function GET(request: NextRequest) {
         profit: 0,
         items: 0,
         sales: 0,
+        refunds: 0,
+        refundedProfit: 0,
       }
       branchBucket.revenue += saleRevenue
       branchBucket.profit += saleProfit
@@ -157,6 +184,8 @@ export async function GET(request: NextRequest) {
           profit: 0,
           batches: [],
           sales: 0,
+          refundedQuantity: 0,
+          refunds: 0,
         }
         row.quantity += item.quantity
         row.revenue += item.unitPrice * item.quantity
@@ -174,9 +203,216 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const items = [...byProduct.values()].sort(
-      (a, b) => b.quantity - a.quantity || b.revenue - a.revenue
+    // Refunds processed on this local day, for the same shops and the same
+    // salesperson. A reconciliation that counts only what went out is not a
+    // reconciliation: the drawer, the shelf and the day all net, so this view has
+    // to as well. The `branchId` filter is applied to the SALE the refund belongs
+    // to, matching how the sales above were selected — a refund is not "at a
+    // branch", it is against a receipt that was rung up at one. The same holds
+    // for `userId`: the money is given back against *their* receipt, even if a
+    // different member of staff processed the return at the counter. Attributing
+    // it to whoever clicked approve instead would let a day's refunds shift
+    // between salespeople depending on who was on the desk, which is precisely
+    // the number this report exists to pin down.
+    const refundLines = await fetchRefundLines(
+      { gte: start, lte: end },
+      {
+        ...(branchId ? { branchId } : {}),
+        ...(userId ? { userId } : {}),
+      }
     )
+    const totalRefunds = refundLines.reduce((sum, refund) => sum + refund.totalRefund, 0)
+    const refundedProfit = refundLines.reduce((sum, refund) => sum + refund.refundedProfit, 0)
+
+    // Returned quantity per receipt line, so the invoice list below can show what
+    // came back against each line rather than only a day-level total.
+    const returnedBySaleItem = new Map<string, { quantity: number; amount: number }>()
+    const refundsBySale = new Map<string, number>()
+
+    for (const refund of refundLines) {
+      refundsBySale.set(
+        refund.saleId,
+        round2((refundsBySale.get(refund.saleId) ?? 0) + refund.totalRefund)
+      )
+      for (const item of refund.items) {
+        const existing = returnedBySaleItem.get(item.saleItemId) ?? { quantity: 0, amount: 0 }
+        existing.quantity += item.quantity
+        existing.amount += item.refundAmount
+        returnedBySaleItem.set(item.saleItemId, existing)
+      }
+    }
+
+    const refundsByProduct = aggregateRefundsByProduct(refundLines)
+    const refundedOnlyProductIds: string[] = []
+    for (const [productId, totals] of refundsByProduct) {
+      const row = byProduct.get(productId)
+      // Nothing sold today but something came back today is a real day, and the
+      // refund total above has to be explainable by the lines below it. Dropping
+      // these products would leave the day's refund money with nowhere to land.
+      if (!row) {
+        refundedOnlyProductIds.push(productId)
+        continue
+      }
+      row.refundedQuantity += totals.quantity
+      row.refunds += totals.refundAmount
+    }
+
+    if (refundedOnlyProductIds.length > 0) {
+      const returnedProducts = await db.product.findMany({
+        where: { id: { in: refundedOnlyProductIds } },
+        select: { id: true, name: true, unit: true },
+      })
+      const productNames = new Map(returnedProducts.map((p) => [p.id, p]))
+      for (const productId of refundedOnlyProductIds) {
+        const product = productNames.get(productId)
+        const totals = refundsByProduct.get(productId)!
+        byProduct.set(productId, {
+          productId,
+          name: product?.name ?? 'Unknown product',
+          unit: product?.unit ?? '',
+          quantity: 0,
+          revenue: 0,
+          profit: 0,
+          batches: [],
+          sales: 0,
+          refundedQuantity: totals.quantity,
+          refunds: totals.refundAmount,
+        })
+      }
+    }
+
+    // Per-branch refunds. A shop can have a refund today with no sale today —
+    // someone bringing back yesterday's purchase — so the split has to survive a
+    // branch that never appears in the sales loop.
+    const refundByBranch = new Map<string, { refunds: number; profit: number }>()
+    for (const refund of refundLines) {
+      const totals = refundByBranch.get(refund.branchId) ?? { refunds: 0, profit: 0 }
+      totals.refunds += refund.totalRefund
+      totals.profit += refund.refundedProfit
+      refundByBranch.set(refund.branchId, totals)
+    }
+
+    /* Per-salesperson split, mirroring `byBranch`.
+     *
+     * The report could only ever break a day down by SHOP, so an owner asking
+     * "who sold this" had no answer and had to read every invoice row. Two staff
+     * can share a till, cover each other's breaks, and ring up at two different
+     * branches in one shift; the branch split cannot distinguish them and the
+     * consolidated "All branches" view cannot either. This buckets the same day
+     * by the person who rang it up.
+     *
+     * Refunds land in the bucket of the SELLER of the refunded sale
+     * (`RefundLine.sellerId`), not the operator who approved the return, so a
+     * till is not credited or charged for someone else's till. */
+    const bySalesperson = new Map<string, {
+      userId: string | null
+      name: string
+      role: string | null
+      revenue: number
+      profit: number
+      items: number
+      sales: number
+      refunds: number
+      refundedProfit: number
+      branches: Set<string>
+    }>()
+
+    for (const sale of sales) {
+      const id = sale.user?.id ?? null
+      const bucket = bySalesperson.get(id ?? 'none') ?? {
+        userId: id,
+        name: sale.user?.name ?? 'Unknown salesperson',
+        role: sale.user?.role ?? null,
+        revenue: 0,
+        profit: 0,
+        items: 0,
+        sales: 0,
+        refunds: 0,
+        refundedProfit: 0,
+        branches: new Set<string>(),
+      }
+      bucket.revenue += toNumber(sale.totalAmount)
+      bucket.profit += toNumber(sale.profit)
+      bucket.sales += 1
+      bucket.branches.add(sale.branchId)
+      for (const item of sale.items) {
+        bucket.items += item.quantity
+      }
+      bySalesperson.set(id ?? 'none', bucket)
+    }
+
+    for (const refund of refundLines) {
+      /* A refund whose original seller sold nothing else that day still belongs
+         in the column — their takings genuinely were that much lower. Skipping it
+         would show a salesperson with a clean sheet who is actually short, which
+         is the exact accusation this report should never make. */
+      const key = refund.sellerId ?? 'none';
+      let bucket = bySalesperson.get(key);
+      if (!bucket) {
+        bucket = {
+          userId: refund.sellerId,
+          name: 'Unknown salesperson',
+          role: null,
+          revenue: 0,
+          profit: 0,
+          items: 0,
+          sales: 0,
+          refunds: 0,
+          refundedProfit: 0,
+          branches: new Set<string>(),
+        };
+        bySalesperson.set(key, bucket);
+      }
+      /* Added unconditionally, including on the bucket just created above. An
+         earlier version `continue`d after seeding an empty bucket, which dropped
+         the very refunds it existed to show — the seller would appear with zero
+         sales AND zero refunds on a day that returned their money. */
+      bucket.refunds += refund.totalRefund
+      bucket.refundedProfit += refund.refundedProfit
+      bucket.branches.add(refund.branchId)
+    }
+
+    const orphanBranchIds = [...refundByBranch.keys()].filter((id) => !byBranch.has(id))
+    if (orphanBranchIds.length > 0) {
+      const orphanBranches = await db.branch.findMany({
+        where: { id: { in: orphanBranchIds } },
+        select: { id: true, name: true, code: true },
+      })
+      const branchNames = new Map(orphanBranches.map((b) => [b.id, b]))
+      for (const id of orphanBranchIds) {
+        const branch = branchNames.get(id)
+        byBranch.set(id, {
+          branchId: id,
+          branchName: branch?.name ?? 'Unknown branch',
+          branchCode: branch?.code ?? 'GEN',
+          revenue: 0,
+          profit: 0,
+          items: 0,
+          sales: 0,
+          refunds: 0,
+          refundedProfit: 0,
+        })
+      }
+    }
+
+    for (const [id, totals] of refundByBranch) {
+      const bucket = byBranch.get(id)
+      if (!bucket) continue
+      bucket.refunds += totals.refunds
+      bucket.refundedProfit += totals.profit
+    }
+
+    const items = [...byProduct.values()]
+      .map((row) => ({
+        ...row,
+        refunds: round2(row.refunds),
+        // Ranked on what is still out there. "Sold 400, returned 380" appearing
+        // as the day's top line item is the single most misleading thing this
+        // report could show an owner reconciling a shelf.
+        netQuantity: row.quantity - row.refundedQuantity,
+        netRevenue: round2(row.revenue - row.refunds),
+      }))
+      .sort((a, b) => b.netQuantity - a.netQuantity || b.revenue - a.revenue)
 
     // The invoice-level book for the day. `invoiceNo` was already selected above
     // and then dropped on the floor, which is why the only drilldown this report
@@ -194,41 +430,92 @@ export async function GET(request: NextRequest) {
       cashierName: sale.user?.name ?? 'Unknown cashier',
       totalAmount: toNumber(sale.totalAmount),
       profit: toNumber(sale.profit),
+      // What was handed back against THIS receipt. Nil when nothing was, so the
+      // UI can leave the line unmarked instead of printing a column of zeros.
+      refundedAmount: refundsBySale.get(sale.id) ?? 0,
+      netAmount: round2(toNumber(sale.totalAmount) - (refundsBySale.get(sale.id) ?? 0)),
       createdAt: sale.createdAt,
       itemCount: sale.items.reduce((sum: number, i: any) => sum + Number(i.quantity), 0),
-      items: sale.items.map((item: any) => ({
-        id: item.id,
-        productId: item.product.id,
-        productName: item.product.name,
-        unit: item.product.unit,
-        batchNumber: item.batch?.batchNumber ?? null,
-        quantity: Number(item.quantity),
-        unitPrice: toNumber(item.unitPrice),
-        costPrice: toNumber(item.costPrice),
-        total: toNumber(item.unitPrice) * Number(item.quantity),
-      })),
+      items: sale.items.map((item: any) => {
+        const returned = returnedBySaleItem.get(item.id)
+        return {
+          id: item.id,
+          productId: item.product.id,
+          productName: item.product.name,
+          unit: item.product.unit,
+          batchNumber: item.batch?.batchNumber ?? null,
+          quantity: Number(item.quantity),
+          // Per line, this is what the individual item sold for and what came
+          // back for it — the level a cashier is reconciling at the counter.
+          returnedQuantity: returned?.quantity ?? 0,
+          refundAmount: round2(returned?.amount ?? 0),
+          netQuantity: Number(item.quantity) - (returned?.quantity ?? 0),
+          unitPrice: toNumber(item.unitPrice),
+          costPrice: toNumber(item.costPrice),
+          total: toNumber(item.unitPrice) * Number(item.quantity),
+        }
+      }),
     }))
 
     return NextResponse.json({
       scope: branchId ? 'branch' : 'all',
       date: key,
       branchId: branchId ?? null,
+      // Echoed so the UI can label what it is looking at without keeping its own
+      // copy of the request state, and so a filter that was silently dropped is
+      // visible rather than showing a whole-business total under a single-till
+      // heading.
+      userId: userId ?? null,
       summary: {
         sales: sales.length,
-        revenue,
-        profit,
+        // Net headline, with gross beside it. The drawer counted cash out as well
+        // as in, so a day figure that ignored refunds never matched the till.
+        revenue: round2(revenue - totalRefunds),
+        grossRevenue: round2(revenue),
+        refunds: round2(totalRefunds),
+        refundCount: refundLines.length,
+        profit: round2(profit - refundedProfit),
+        grossProfit: round2(profit),
         items: itemCount,
         // Distinct products, so "we sold 400 units" and "we sold 12 lines" are
         // never presented as the same figure.
         distinctProducts: items.length,
-        averageSaleValue: sales.length > 0 ? revenue / sales.length : 0,
+        averageSaleValue: sales.length > 0 ? round2((revenue - totalRefunds) / sales.length) : 0,
       },
       // Every branch that traded that day, so the owner can see the day's takings
-      // split without a second request.
-      byBranch: [...byBranch.values()].sort((a, b) => b.revenue - a.revenue),
+      // split without a second request. A branch that only processed a refund
+      // still appears, with zero sales — which is exactly the day worth
+      // explaining.
+      byBranch: [...byBranch.values()]
+        .map((bucket) => ({
+          ...bucket,
+          refunds: round2(bucket.refunds),
+          netRevenue: round2(bucket.revenue - bucket.refunds),
+          netProfit: round2(bucket.profit - bucket.refundedProfit),
+        }))
+        .sort((a, b) => b.netRevenue - a.netRevenue),
       // Newest first, matching the register the owner is reconciling against.
       invoices: invoices.reverse(),
       items,
+      // Same day, same money, grouped by whose till it was. `branches` is a set
+      // serialised to an array — one person working two shops in a shift is a
+      // thing the owner needs to see, not a rounding error to hide.
+      bySalesperson: [...bySalesperson.values()]
+        .map((bucket) => ({
+          userId: bucket.userId,
+          name: bucket.name,
+          role: bucket.role,
+          revenue: round2(bucket.revenue),
+          profit: round2(bucket.profit),
+          items: bucket.items,
+          sales: bucket.sales,
+          refunds: round2(bucket.refunds),
+          refundedProfit: round2(bucket.refundedProfit),
+          netRevenue: round2(bucket.revenue - bucket.refunds),
+          netProfit: round2(bucket.profit - bucket.refundedProfit),
+          branches: [...bucket.branches],
+        }))
+        .sort((a, b) => b.netRevenue - a.netRevenue),
     })
   } catch (error) {
     console.error('Daily items error:', error)

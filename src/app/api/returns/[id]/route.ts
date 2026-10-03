@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
+import { requireBranchForWrite } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
-import { applyReturnStock, isReturnStatus, recomputeSaleStatus } from '@/lib/returns'
+import { isReturnStatus, recomputeSaleStatus } from '@/lib/returns'
+import { restoreBatchStock } from '@/lib/stock'
+import { ConflictError, parseErrorResponse, branchMissResponse, idExists } from '@/lib/api-error'
+import { toNumber } from '@/lib/utils'
 
 /**
  * PATCH /api/returns/[id] — move a return through its lifecycle.
@@ -37,8 +41,17 @@ export async function PATCH(
       )
     }
 
-    const existing = await db.return.findUnique({
-      where: { id },
+    // Approving a return puts units back on a shelf, so it has to be the shelf the
+    // sale came off — which means the branch must be selected. See the note on
+    // `POST /api/returns`: the previous `if (scope.branchId && ...)` test was
+    // skipped entirely on the consolidated "All branches" view.
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Switch to the branch that made this sale before approving the return — the units go back on that branch\'s shelf'
+    )
+
+    const existing = await db.return.findFirst({
+      where: { id, sale: { branchId } },
       include: {
         sale: { select: { id: true, invoiceNo: true, totalAmount: true, status: true, branchId: true } },
         items: { select: { quantity: true, saleItem: { select: { batchId: true } } } },
@@ -46,16 +59,12 @@ export async function PATCH(
     })
 
     if (!existing) {
-      return NextResponse.json({ error: 'Return not found' }, { status: 404 })
-    }
-
-    // Approving a return puts units back on a shelf, so it has to be the shelf
-    // the sale came off.
-    if (auth.scope!.branchId && existing.sale.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That return belongs to a different branch.' },
-        { status: 403 }
-      )
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+          return branchMissResponse(
+            await idExists(db.return, { id }),
+            'Return not found',
+            'That return belongs to a different branch.'
+          )
     }
 
     if (existing.status === 'approved') {
@@ -72,9 +81,45 @@ export async function PATCH(
     }
 
     const updated = await db.$transaction(async (tx) => {
-      const record = await tx.return.update({
-        where: { id },
+      // Approving puts real units back on a real shelf, so the state change has
+      // to be a single conditional write rather than a check-then-update.
+      //
+      // The `status === 'pending'` test above ran outside the transaction, so two
+      // reviewers clicking Approve at the same moment both passed it, both ran
+      // `restoreBatchStock`, and the shelf received the returned units twice —
+      // inventory the pharmacy never had, created by the one action that is
+      // supposed to be undoable-by-refusal rather than replayed. Claiming the row
+      // with a conditional update means exactly one approval can run its side
+      // effects; the loser is told the return is no longer pending.
+      const claimed = await tx.return.updateMany({
+        where: { id, status: 'pending' },
         data: { status },
+      })
+      if (claimed.count === 0) {
+        throw new ConflictError('This return is no longer pending — someone else decided it first')
+      }
+
+      // Approving is the moment stock goes back and the sale is re-statused.
+      // Rejecting leaves both untouched — nothing was ever moved.
+      if (status === 'approved') {
+        await restoreBatchStock(
+          tx,
+          existing.items.map((i) => ({ batchId: i.saleItem?.batchId ?? null, quantity: i.quantity })),
+          existing.sale.branchId,
+          `PATCH /api/returns/${id}`,
+          1
+        )
+      }
+
+      await recomputeSaleStatus(
+        tx,
+        existing.saleId,
+        toNumber(existing.sale.totalAmount),
+        existing.sale.status
+      )
+
+      return tx.return.findUnique({
+        where: { id },
         include: {
           sale: {
             select: {
@@ -86,26 +131,6 @@ export async function PATCH(
           user: { select: { id: true, name: true } },
         },
       })
-
-      // Approving is the moment stock goes back and the sale is re-statused.
-      // Rejecting leaves both untouched — nothing was ever moved.
-      if (status === 'approved') {
-        await applyReturnStock(
-          tx,
-          existing.items.map((i) => ({ batchId: i.saleItem?.batchId ?? null, quantity: i.quantity })),
-          1,
-          existing.sale.branchId
-        )
-      }
-
-      await recomputeSaleStatus(
-        tx,
-        existing.saleId,
-        Number(existing.sale.totalAmount),
-        existing.sale.status
-      )
-
-      return record
     })
 
     await logAudit({
@@ -113,13 +138,15 @@ export async function PATCH(
       action: 'UPDATE',
       entity: 'Return',
       entityId: id,
-      details: `${status === 'approved' ? 'Approved' : 'Rejected'} return of GHS ${existing.totalRefund.toFixed(2)} for sale ${existing.sale.invoiceNo}`,
+      details: `${status === 'approved' ? 'Approved' : 'Rejected'} return of GHS ${toNumber(existing.totalRefund).toFixed(2)} for sale ${existing.sale.invoiceNo}`,
       ipAddress: getClientIp(request),
     })
 
     return NextResponse.json(updated)
   } catch (error) {
     console.error('Return update error:', error)
+    const mapped = parseErrorResponse(error, 'Failed to update return')
+    if (mapped) return mapped
     return NextResponse.json({ error: 'Failed to update return' }, { status: 500 })
   }
 }
@@ -145,8 +172,13 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const returnRecord = await db.return.findUnique({
-      where: { id },
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Switch to the branch that made this sale before cancelling the return'
+    )
+
+    const returnRecord = await db.return.findFirst({
+      where: { id, sale: { branchId } },
       include: {
         sale: {
           select: { id: true, invoiceNo: true, totalAmount: true, status: true, branchId: true },
@@ -155,14 +187,12 @@ export async function DELETE(
     })
 
     if (!returnRecord) {
-      return NextResponse.json({ error: 'Return not found' }, { status: 404 })
-    }
-
-    if (auth.scope!.branchId && returnRecord.sale.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That return belongs to a different branch.' },
-        { status: 403 }
-      )
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+          return branchMissResponse(
+            await idExists(db.return, { id }),
+            'Return not found',
+            'That return belongs to a different branch.'
+          )
     }
 
     // Only pending returns can be cancelled
@@ -173,13 +203,21 @@ export async function DELETE(
       )
     }
 
-    // Atomic: removing the return and recomputing the sale status commit together
+    // Atomic: removing the return and recomputing the sale status commit together.
+    // The delete is conditional on the row still being pending, for the same
+    // reason the approval is: a read-then-delete lets a cancellation that lost a
+    // race to an approval go on to re-status the sale as though the approved
+    // refund had never happened, leaving the till holding stock it no longer has.
     await db.$transaction(async (tx) => {
-      await tx.return.delete({ where: { id } })
+      const cancelled = await tx.return.deleteMany({ where: { id, status: 'pending' } })
+      if (cancelled.count === 0) {
+        throw new ConflictError('This return is no longer pending — someone else decided it first')
+      }
+
       await recomputeSaleStatus(
         tx,
         returnRecord.saleId,
-        Number(returnRecord.sale.totalAmount),
+        toNumber(returnRecord.sale.totalAmount),
         returnRecord.sale.status
       )
     })
@@ -189,13 +227,15 @@ export async function DELETE(
       action: 'DELETE',
       entity: 'Return',
       entityId: id,
-      details: `Cancelled pending return of GHS ${returnRecord.totalRefund.toFixed(2)} for sale ${returnRecord.sale.invoiceNo}`,
+      details: `Cancelled pending return of GHS ${toNumber(returnRecord.totalRefund).toFixed(2)} for sale ${returnRecord.sale.invoiceNo}`,
       ipAddress: getClientIp(request),
     })
 
     return NextResponse.json({ message: 'Return cancelled successfully' })
   } catch (error) {
     console.error('Return delete error:', error)
+    const mapped = parseErrorResponse(error, 'Failed to cancel return')
+    if (mapped) return mapped
     return NextResponse.json({ error: 'Failed to cancel return' }, { status: 500 })
   }
 }

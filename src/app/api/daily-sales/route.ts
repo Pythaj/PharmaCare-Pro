@@ -1,7 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
+import { findOrCreateDailyRecord } from '@/lib/daily-sales'
 import { toNumber } from '@/lib/utils'
+import { ValidationError, parseErrorResponse } from '@/lib/api-error'
+import { requireBranchForWrite } from '@/lib/branches'
+
+/** Default records per page, and the hard ceiling on a client-supplied limit. */
+const DEFAULT_PAGE_SIZE = 30
+const MAX_PAGE_SIZE = 200
+
+/**
+ * 1-based page and a clamped page size.
+ *
+ * `parseInt` returns `NaN` for junk and the raw value for anything else, and both
+ * used to reach Prisma: `NaN` threw a 500 on a bad query string, and an
+ * unbounded `limit` let one request read the whole table of daily registers.
+ */
+function parsePaging(params: URLSearchParams): { page: number; limit: number } {
+  const rawPage = Number.parseInt(params.get('page') ?? '', 10);
+  const rawLimit = Number.parseInt(params.get('limit') ?? '', 10);
+
+  const page = Number.isFinite(rawPage) ? Math.max(rawPage, 1) : 1;
+  const limit = Number.isFinite(rawLimit)
+    ? Math.min(Math.max(rawLimit, 1), MAX_PAGE_SIZE)
+    : DEFAULT_PAGE_SIZE;
+
+  return { page, limit };
+}
+
+/**
+ * A register is addressed by one real local day.
+ *
+ * `date` used to be written straight into the row, so `{"date":"not-a-date"}`
+ * created a register that no day query would ever return — an invisible record
+ * that still occupied the one-per-branch-per-day slot for nothing.
+ */
+function parseRegisterDate(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.trim())) {
+    throw new ValidationError('Date is required and must use the YYYY-MM-DD format');
+  }
+
+  const date = value.trim();
+  // Reject impossible calendar dates (2026-02-30), which the regex allows.
+  const [year, month, day] = date.split('-').map(Number);
+  const parsed = new Date(year, month - 1, day);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) {
+    throw new ValidationError('Invalid date');
+  }
+
+  return date;
+}
 
 // GET /api/daily-sales — list all daily records (paginated, with summary)
 export async function GET(request: NextRequest) {
@@ -12,12 +61,26 @@ export async function GET(request: NextRequest) {
 
   try {
     const { searchParams } = new URL(request.url)
-    const page = parseInt(searchParams.get('page') || '1')
-    const limit = parseInt(searchParams.get('limit') || '30')
+    const { page, limit } = parsePaging(searchParams)
     const status = searchParams.get('status') || '' // 'open' or 'closed'
 
     const where: Record<string, unknown> = {}
     if (status) where.status = status
+    // Exact-day lookup. A register is unique per (date, branch), so asking for a
+    // day returns at most one row per branch.
+    //
+    // This exists because callers that need ONE specific day used to fetch a page
+    // and scan it: `SalesHistoryView` asked for `limit=1` and then searched that
+    // single record for yesterday, so the "vs previous day" comparison silently
+    // never rendered — the one record it received was today's. Querying the day
+    // directly is also correct when days are missing: if no register was opened
+    // for the previous calendar day there is genuinely nothing to compare
+    // against, and this reports that instead of comparing against whatever day
+    // happened to sort first.
+    //
+    // Still session-scoped on branch, so `date` narrows and never widens.
+    const dateParam = searchParams.get('date')
+    if (dateParam) where.date = parseRegisterDate(dateParam)
     // Branch scoping comes from the session, never the query string, so a
     // cashier cannot widen it by editing a URL.
     if (auth.scope!.branchId) where.branchId = auth.scope!.branchId
@@ -38,13 +101,13 @@ export async function GET(request: NextRequest) {
     ])
 
     return NextResponse.json({
-      records: records.map((r) => ({
+records: records.map((r) => ({
         ...r,
-        totalRevenue: Number(r.totalRevenue),
-        totalProfit: Number(r.totalProfit),
-        cashTotal: Number(r.cashTotal),
-        cardTotal: Number(r.cardTotal),
-        mobileMoneyTotal: Number(r.mobileMoneyTotal),
+        totalRevenue: toNumber(r.totalRevenue),
+        totalProfit: toNumber(r.totalProfit),
+        cashTotal: toNumber(r.cashTotal),
+        cardTotal: toNumber(r.cardTotal),
+        mobileMoneyTotal: toNumber(r.mobileMoneyTotal),
       })),
       total, page, limit,
     })
@@ -64,97 +127,38 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json()
-    const { date } = body
-
-    if (!date) {
-      return NextResponse.json({ error: 'Date is required' }, { status: 400 })
-    }
+    const date = parseRegisterDate(body?.date)
 
     // A till belongs to exactly one branch, so opening one requires a specific
     // branch. "All branches" is a read-only view — you cannot open a register
     // that has no single owner.
-    const branchId = auth.scope!.branchId
-    if (!branchId) {
-      return NextResponse.json(
-        { error: 'Select a branch before opening the daily register' },
-        { status: 400 }
-      )
-    }
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select a branch before opening the daily register'
+    )
 
     const validUserId = auth.user!.userId
 
-    // One register per branch per day. `date` alone is no longer unique.
-    const existing = await db.dailySalesRecord.findFirst({
+    // One register per branch per day, opened or refreshed atomically enough to
+    // survive two operators pressing the same button at once.
+    const { created } = await findOrCreateDailyRecord(date, branchId, validUserId)
+
+    const record = await db.dailySalesRecord.findFirst({
       where: { date, branchId },
-    })
-    if (existing) {
-      // Return existing record
-      const record = await db.dailySalesRecord.findFirst({
-        where: { date, branchId },
-        include: {
-          branch: { select: { id: true, name: true, code: true } },
-          opener: { select: { id: true, name: true } },
-          closer: { select: { id: true, name: true } },
-        },
-      })
-      return NextResponse.json(record)
-    }
-
-    // Calculate existing sales for this date
-    const dayStart = new Date(date + 'T00:00:00')
-    // Exclusive upper bound at next midnight (full-day coverage)
-    const dayEnd = new Date(date + 'T00:00:00')
-    dayEnd.setDate(dayEnd.getDate() + 1)
-
-    const sales = await db.sale.findMany({
-      where: {
-        createdAt: { gte: dayStart, lt: dayEnd },
-        branchId,
-      },
       include: {
-        items: { include: { product: { select: { name: true, unit: true } } } },
-      },
-    })
-
-    // Money columns are Decimal — flatten to numbers so the register totals
-    // are plain arithmetic instead of a mix of Decimal objects.
-    const totals = sales.map((s) => ({
-      totalAmount: toNumber(s.totalAmount),
-      profit: toNumber(s.profit),
-      paymentMethod: s.paymentMethod,
-    }))
-
-    const totalRevenue = totals.reduce((sum, s) => sum + s.totalAmount, 0)
-    const totalProfit = totals.reduce((sum, s) => sum + s.profit, 0)
-    const totalTransactions = totals.length
-    const totalItemsSold = sales.reduce((sum, s) => sum + (s.items?.reduce((is, i) => is + i.quantity, 0) || 0), 0)
-    const cashTotal = totals.filter(s => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0)
-    const cardTotal = totals.filter(s => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0)
-    const mobileMoneyTotal = totals.filter(s => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0)
-
-    const record = await db.dailySalesRecord.create({
-      data: {
-        date,
-        branchId,
-        status: 'open',
-        openedBy: validUserId,
-        totalRevenue,
-        totalProfit,
-        totalTransactions,
-        totalItemsSold,
-        cashTotal,
-        cardTotal,
-        mobileMoneyTotal,
-      },
-      include: {
+        branch: { select: { id: true, name: true, code: true } },
         opener: { select: { id: true, name: true } },
         closer: { select: { id: true, name: true } },
       },
     })
 
-    return NextResponse.json(record, { status: 201 })
+    // 200 rather than 201 when the register was already there: the caller's
+    // request did not create anything.
+    return NextResponse.json(record, { status: created ? 201 : 200 })
   } catch (error) {
     console.error('Create daily sales record error:', error)
+    const mapped = parseErrorResponse(error, 'Failed to create daily sales record')
+    if (mapped) return mapped
     return NextResponse.json({ error: 'Failed to create daily sales record' }, { status: 500 })
   }
 }

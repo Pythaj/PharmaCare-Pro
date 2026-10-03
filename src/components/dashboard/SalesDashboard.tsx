@@ -41,36 +41,82 @@ export default function SalesDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentSales, setRecentSales] = useState<RecentSale[]>([]);
   const [loading, setLoading] = useState(true);
+  // A failed load used to be indistinguishable from an empty one: the `if
+  // (res.ok)` had no `else`, so a 500 — or a 403 from a session that had just
+  // expired — left `stats` null and the tiles rendered their zero defaults. For
+  // someone checking their own takings, "GHS 0.00 taken today" is worse than an
+  // error message: it reads as a fact about their work rather than a broken
+  // request. Tracked separately from `loading` so a partial failure (recent sales
+  // loaded, stats did not) can say which half is missing.
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [recentError, setRecentError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     async function fetchData() {
+      setStatsError(null);
+      setRecentError(null);
+      setLoading(true);
+
+      // Pulled out so a failure can name itself. The API's `error` field is the
+      // useful one ("No active branches exist to seed the catalogue against" and
+      // the like); the status alone tells the user nothing they can act on.
+      async function readError(res: Response, fallback: string): Promise<string> {
+        try {
+          const body = await res.json();
+          return typeof body?.error === 'string' && body.error ? body.error : fallback;
+        } catch {
+          return fallback;
+        }
+      }
+
       try {
         const res = await fetch('/api/dashboard/stats');
         if (res.ok) {
           const data = await res.json();
-          setStats(data);
+          if (!cancelled) setStats(data);
+        } else if (!cancelled) {
+          setStats(null);
+          setStatsError(await readError(res, `Could not load your figures (HTTP ${res.status})`));
         }
-      } catch { /* silent */ }
+      } catch (e) {
+        if (!cancelled) {
+          setStats(null);
+          setStatsError(e instanceof Error && e.message ? e.message : 'Could not reach the server');
+        }
+      }
 
       try {
         const res = await fetch('/api/dashboard/recent');
         if (res.ok) {
           const data = await res.json();
-          setRecentSales((data.recentSales ?? []).map((s: any) => ({
-            id: s.id,
-            invoiceNo: s.invoiceNo,
-            customerName: s.customer?.name,
-            totalAmount: s.totalAmount,
-            paymentMethod: s.paymentMethod,
-            createdAt: s.createdAt,
-          })));
+          if (!cancelled) {
+            setRecentSales((data.recentSales ?? []).map((s: any) => ({
+              id: s.id,
+              invoiceNo: s.invoiceNo,
+              customerName: s.customer?.name,
+              totalAmount: s.totalAmount,
+              paymentMethod: s.paymentMethod,
+              createdAt: s.createdAt,
+            })));
+          }
+        } else if (!cancelled) {
+          setRecentSales([]);
+          setRecentError(await readError(res, `Could not load recent sales (HTTP ${res.status})`));
         }
-      } catch { /* silent */ }
+      } catch (e) {
+        if (!cancelled) {
+          setRecentSales([]);
+          setRecentError(e instanceof Error && e.message ? e.message : 'Could not reach the server');
+        }
+      }
 
-      setLoading(false);
+      if (!cancelled) setLoading(false);
     }
     fetchData();
-  }, []);
+    return () => { cancelled = true; };
+  }, [retryNonce]);
 
   const quickActions = [
     { label: 'New Sale', icon: ShoppingCart, page: 'pos' as const, color: 'bg-emerald-500 hover:bg-emerald-600' },
@@ -78,8 +124,22 @@ export default function SalesDashboard() {
 
   ];
 
+  // A cashier's own till, so this is the screen where a refund is felt most
+  // directly: it headlines what they actually took home after returns, and names
+  // any refund processed against their sales rather than quietly shrinking the
+  // number and leaving them to wonder why it disagrees with their own count.
+  const todayRefunds = stats?.todayRefunds ?? 0;
   const statCards = [
-    { label: "Today's Sales", value: stats?.todaySales ?? 0, icon: DollarSign, format: 'currency' },
+    {
+      label: "Today's Sales",
+      value: stats?.todayNetSales ?? 0,
+      icon: DollarSign,
+      format: 'currency',
+      note:
+        todayRefunds > 0
+          ? `Gross ${money(stats?.todaySales ?? 0)} · ${money(todayRefunds)} refunded`
+          : undefined,
+    },
     { label: 'Transactions', value: stats?.todayTransactions ?? 0, icon: Receipt, format: 'count' },
     { label: 'Products Sold Today', value: stats?.productsSoldToday ?? 0, icon: Pill, format: 'count' },
     { label: 'Stock Received Today', value: stats?.stockReceivedToday ?? 0, icon: PackageCheck, format: 'count' },
@@ -91,6 +151,44 @@ export default function SalesDashboard() {
         <h2 className="text-2xl font-bold">Welcome, {currentUser?.name ?? 'Sales Person'}</h2>
         <p className="text-muted-foreground">Here&apos;s your sales overview for today</p>
       </div>
+
+      {/* A failed load says so, and says which part failed. Silently showing
+          zeros here is indistinguishable from a genuinely empty day, which is the
+          one thing this screen must never do. */}
+      {(statsError || recentError) && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          <div className="space-y-1">
+            <p className="font-semibold">
+              {statsError && recentError
+                ? 'Your figures and recent sales could not be loaded.'
+                : statsError
+                  ? 'Your figures could not be loaded.'
+                  : 'Recent sales could not be loaded.'}
+            </p>
+            {/* The tiles still show their zero defaults, so this has to say that
+                the numbers below are not real rather than only naming the fault. */}
+            <p className="text-amber-800 dark:text-amber-300">
+              {statsError
+                ? 'The amounts below are placeholders, not your real takings.'
+                : 'The list below is empty because it could not be loaded.'}
+            </p>
+            <ul className="list-disc pl-5 text-xs space-y-0.5">
+              {statsError && <li>{statsError}</li>}
+              {recentError && <li>{recentError}</li>}
+            </ul>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRetryNonce((n) => n + 1)}
+            className="shrink-0 rounded-md border border-amber-400 bg-white px-3 py-1.5 font-medium hover:bg-amber-100 dark:bg-transparent dark:hover:bg-amber-900/50"
+          >
+            Try again
+          </button>
+        </div>
+      )}
 
       {/* Quick Stat Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -121,6 +219,9 @@ export default function SalesDashboard() {
                   <p className="mt-3 text-2xl font-bold">
                     {card.format === 'currency' ? money(card.value) : card.value.toLocaleString()}
                   </p>
+                  {'note' in card && card.note ? (
+                    <p className="mt-1 text-xs text-muted-foreground">{card.note}</p>
+                  ) : null}
                 </CardContent>
               </Card>
             );

@@ -15,8 +15,8 @@ import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/stores/app-store';
 import { toast } from 'sonner';
 import type { Branch } from '@/types';
-
-const ALL_BRANCHES = 'all';
+import { ALL_BRANCHES } from '@/lib/branches';
+import { switchActiveBranch } from '@/lib/switch-branch';
 
 /**
  * Shows which branch the user is operating in, and lets an admin switch.
@@ -70,31 +70,18 @@ export function BranchSwitcher() {
     async (branchId: string) => {
       setSwitching(branchId);
       try {
-        const res = await fetch('/api/auth/branch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ branchId }),
-        });
-        const data = await res.json().catch(() => ({}));
+        // Shared with every other branch control (the register's selector, and
+        // anything added later), so a switch always means the same thing: the
+        // signed cookie is re-issued and the page reloads so no panel keeps the
+        // old branch's numbers.
+        const result = await switchActiveBranch(branchId);
 
-        if (!res.ok) {
-          toast.error(data.error || 'Could not switch branch');
+        if (result.ok) {
+          toast.success(result.branchName ? `Switched to ${result.branchName}` : 'Now viewing all branches');
           return;
         }
 
-        toast.success(
-          data.activeBranch
-            ? `Switched to ${data.activeBranch.name}`
-            : 'Now viewing all branches'
-        );
-
-        // Reload rather than patch in place: every panel on screen is showing
-        // the previous branch's stock, takings and alerts, and a partial update
-        // would leave one page holding two branches' numbers. The server
-        // re-reads the new signed cookie on the next request.
-        if (typeof window !== 'undefined') window.location.reload();
-      } catch {
-        toast.error('Could not switch branch');
+        toast.error(result.error ?? 'Could not switch branch');
       } finally {
         setSwitching(null);
         setOpen(false);

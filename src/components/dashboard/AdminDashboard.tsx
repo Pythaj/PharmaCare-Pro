@@ -189,12 +189,51 @@ const showBranch = !useAppStore((s) => s.activeBranch);
     return () => { cancelled = true; clearInterval(timer); };
   }, []);
 
+  // The money tiles headline NET and carry the gross figure they were reduced
+  // from, because a shop that took 500 and gave 200 back must not read as a shop
+  // that took 500. `refunds` is omitted when nothing came back, so a clean day
+  // does not wear a permanent "- 0.00" caveat.
+  const refundCaveat = (gross: number, refunds: number) => {
+    if (!refunds) return undefined;
+    return `Gross ${money(gross)} · ${money(refunds)} refunded`;
+  };
+
   const overviewCards = [
-    { label: "Today's Sales", value: stats?.todaySales ?? 0, icon: DollarSign, bg: 'bg-emerald-500' },
-    { label: 'Weekly Sales', value: stats?.weeklySales ?? 0, icon: TrendingUp, bg: 'bg-teal-500' },
-    { label: 'Monthly Sales', value: stats?.monthlySales ?? 0, icon: Calendar, bg: 'bg-green-500' },
-    { label: 'Total Revenue', value: stats?.totalRevenue ?? 0, icon: Wallet, bg: 'bg-emerald-500' },
-    { label: 'Total Profit', value: stats?.totalProfit ?? 0, icon: PiggyBank, bg: 'bg-teal-500' },
+    {
+      label: "Today's Sales",
+      value: stats?.todayNetSales ?? 0,
+      note: refundCaveat(stats?.todaySales ?? 0, stats?.todayRefunds ?? 0),
+      icon: DollarSign,
+      bg: 'bg-emerald-500',
+    },
+    {
+      label: 'Weekly Sales',
+      value: stats?.weeklyNetSales ?? 0,
+      note: refundCaveat(stats?.weeklySales ?? 0, stats?.weeklyRefunds ?? 0),
+      icon: TrendingUp,
+      bg: 'bg-teal-500',
+    },
+    {
+      label: 'Monthly Sales',
+      value: stats?.monthlyNetSales ?? 0,
+      note: refundCaveat(stats?.monthlySales ?? 0, stats?.monthlyRefunds ?? 0),
+      icon: Calendar,
+      bg: 'bg-green-500',
+    },
+    {
+      label: 'Total Revenue',
+      value: stats?.netRevenue ?? 0,
+      note: refundCaveat(stats?.totalRevenue ?? 0, stats?.totalRefunds ?? 0),
+      icon: Wallet,
+      bg: 'bg-emerald-500',
+    },
+    {
+      label: 'Net Profit',
+      value: stats?.netProfit ?? 0,
+      note: refundCaveat(stats?.grossProfit ?? 0, stats?.refundedProfit ?? 0),
+      icon: PiggyBank,
+      bg: 'bg-teal-500',
+    },
     { label: 'Inventory Value', value: stats?.totalInventoryValue ?? 0, icon: Package, bg: 'bg-green-500' },
     { label: 'Products In Stock', value: stats?.productsInStock ?? 0, icon: Pill, bg: 'bg-emerald-500', isCount: true, navTo: 'products' as const },
     { label: 'Low Stock Alerts', value: stats?.lowStockCount ?? 0, icon: AlertTriangle, bg: 'bg-amber-500', isCount: true, navTo: 'inventory' as const },
@@ -276,6 +315,12 @@ const showBranch = !useAppStore((s) => s.activeBranch);
                   </div>
                 </div>
                 <p className="mt-3 text-2xl font-bold">{displayValue}</p>
+                {/* Present only when money actually came back — the tile explains
+                    its own number instead of asking the reader to remember the
+                    difference between two definitions of "sales". */}
+                {'note' in card && card.note ? (
+                  <p className="mt-1 text-xs text-muted-foreground">{card.note}</p>
+                ) : null}
               </CardContent>
             </Card>
           );

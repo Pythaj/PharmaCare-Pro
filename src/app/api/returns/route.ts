@@ -1,19 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
+import { requireBranchForWrite } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { branchRelationWhere } from '@/lib/branches'
 import {
   allocateRefunds,
-  applyReturnStock,
   isReturnStatus,
   recomputeSaleStatus,
   sumRefunds,
   RETURN_STATUSES,
 } from '@/lib/returns'
-
-/** Distinguishes client-facing validation failures from unexpected server errors */
-class ValidationError extends Error {}
+import { ValidationError, ConflictError, parseErrorResponse, branchMissResponse, idExists } from '@/lib/api-error'
+import { restoreBatchStock } from '@/lib/stock'
+import { toNumber } from '@/lib/utils'
 
 // Returns are an admin-managed area (returns move stock and money), so the gate
 // is requireAdmin for reads and writes alike. Reads are still branch-scoped: an
@@ -106,8 +106,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Find the sale and its items
-    const sale = await db.sale.findUnique({
-      where: { id: saleId },
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Switch to the branch that made this sale before processing the return — the refunded units go back on that branch\'s shelf'
+    )
+
+    const sale = await db.sale.findFirst({
+      where: { id: saleId, branchId },
       include: {
         items: {
           include: { product: { select: { name: true } } },
@@ -116,9 +121,11 @@ export async function POST(request: NextRequest) {
     })
 
     if (!sale) {
-      return NextResponse.json(
-        { error: 'Sale not found' },
-        { status: 404 }
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+      return branchMissResponse(
+        await idExists(db.sale, { id: saleId }),
+        'Sale not found',
+        'That sale belongs to a different branch. Switch to its branch to process the return.'
       )
     }
 
@@ -126,12 +133,13 @@ export async function POST(request: NextRequest) {
     // must land in the branch that made the original sale. Refusing here (rather
     // than silently crediting it) keeps each shop's stock count honest: the units
     // return to the shelf they left.
-    if (auth.scope!.branchId && sale.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That sale belongs to a different branch. Switch to its branch to process the return.' },
-        { status: 403 }
-      )
-    }
+    //
+    // The branch is now resolved by `requireBranchForWrite` and folded into the
+    // query above, instead of being compared after the fetch. The old
+    // `if (scope.branchId && sale.branchId !== scope.branchId)` test was skipped
+    // outright on the consolidated "All branches" view, so an admin there could
+    // refund any shop's receipt — moving one branch's money and stock with no
+    // branch ever having been selected.
     if (sale.status === 'returned') {
       return NextResponse.json(
         { error: 'This sale has already been fully returned' },
@@ -176,7 +184,7 @@ export async function POST(request: NextRequest) {
                 ` (${alreadyReturned} of ${saleItem.quantity} already returned)`
             )
           }
-          planned.push({ saleItemId: saleItem.id, quantity: qty, unitPrice: saleItem.unitPrice, batchId: saleItem.batchId })
+          planned.push({ saleItemId: saleItem.id, quantity: qty, unitPrice: toNumber(saleItem.unitPrice), batchId: saleItem.batchId })
         }
       } else {
         // Full return — refund every item's remaining un-returned quantity
@@ -184,7 +192,7 @@ export async function POST(request: NextRequest) {
           .map((si) => ({
             saleItemId: si.id,
             quantity: si.quantity - (returnedQty.get(si.id) ?? 0),
-            unitPrice: si.unitPrice,
+            unitPrice: toNumber(si.unitPrice),
             batchId: si.batchId,
           }))
           .filter((p) => p.quantity > 0)
@@ -199,8 +207,8 @@ export async function POST(request: NextRequest) {
       // sale booked before discount and tax were removed is refunded to the
       // cent instead of at shelf price.
       const salePricing = {
-        subtotal: Number(sale.subtotal),
-        totalAmount: Number(sale.totalAmount),
+        subtotal: toNumber(sale.subtotal),
+        totalAmount: toNumber(sale.totalAmount),
       }
       const allocated = allocateRefunds(planned, salePricing)
       const totalRefund = sumRefunds(allocated)
@@ -233,9 +241,55 @@ export async function POST(request: NextRequest) {
         },
       })
 
+      // Re-verify the cumulative invariant against what is now PERSISTED, not
+      // against what was read before this request started.
+      //
+      // The `priorReturns` read above only proves the line had room at the moment
+      // it was read. Two cashiers refunding the same receipt at the same time both
+      // read the same remaining quantity, both see room, and both commit — the
+      // shelf is credited with units the pharmacy never took back, and the till
+      // hands over twice what it owes. Re-counting after our own rows are written
+      // sees the other transaction's work if it committed first, and rolls this
+      // one back instead.
+      //
+      // PLACEMENT IS THE POINT. This read used to sit ABOVE the `create` above,
+      // under a comment claiming it ran after the write. It did not: it re-read
+      // the same pre-existing rows a second time, so it could only ever catch the
+      // narrow interleaving where the other transaction committed between the two
+      // reads. Run here, the re-read includes the rows this transaction just wrote
+      // (a transaction always observes its own writes), so the check is a real
+      // assertion about the committed state — and it still rolls back cleanly,
+      // because throwing inside `$transaction` discards the create above.
+      //
+      // This closes the interleaved case rather than proving isolation: two
+      // transactions that both re-read before either commits still pass. A hard
+      // guarantee needs SERIALIZABLE isolation, which Prisma offers on PostgreSQL
+      // but not on the SQLite connector used for local development, so it is not
+      // something this route can turn on unconditionally.
+      const soldQty = new Map(sale.items.map((si) => [si.id, si.quantity]))
+      const postReturns = await tx.returnItem.findMany({
+        where: { return: { saleId, status: { in: ['approved', 'pending'] } } },
+        select: { saleItemId: true, quantity: true },
+      })
+      const postTotal = new Map<string, number>()
+      for (const ri of postReturns) {
+        postTotal.set(ri.saleItemId, (postTotal.get(ri.saleItemId) ?? 0) + ri.quantity)
+      }
+      for (const p of planned) {
+        const sold = soldQty.get(p.saleItemId) ?? 0
+        const claimed = postTotal.get(p.saleItemId) ?? 0
+        if (claimed > sold) {
+          const line = sale.items.find((si) => si.id === p.saleItemId)
+          throw new ConflictError(
+            `Another return for "${line?.product?.name ?? 'item'}" was processed at the same time — ` +
+              `only ${sold} were sold and ${claimed} are now claimed as returned. Nothing was refunded; reload and try again.`
+          )
+        }
+      }
+
       // Approved returns restore stock to the original batch immediately
       if (status === 'approved') {
-        await applyReturnStock(tx, allocated, 1, sale.branchId)
+        await restoreBatchStock(tx, allocated, sale.branchId, `POST /api/returns (sale ${sale.invoiceNo})`, 1)
       }
 
       await recomputeSaleStatus(tx, saleId, salePricing.totalAmount, sale.status)
@@ -254,10 +308,9 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result.returnRecord, { status: 201 })
   } catch (error) {
-    if (error instanceof ValidationError) {
-      return NextResponse.json({ error: error.message }, { status: 400 })
-    }
     console.error('Return create error:', error)
+    const mapped = parseErrorResponse(error, 'Failed to process return')
+    if (mapped) return mapped
     return NextResponse.json(
       { error: 'Failed to process return' },
       { status: 500 }

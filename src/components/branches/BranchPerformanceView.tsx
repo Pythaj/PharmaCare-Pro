@@ -55,6 +55,8 @@ interface CashierRow {
   sales: number;
   revenue: number;
   items: number;
+  refunds: number;
+  netRevenue: number;
 }
 
 interface ProductRow {
@@ -63,6 +65,10 @@ interface ProductRow {
   unit: string;
   quantity: number;
   revenue: number;
+  refundedQuantity: number;
+  refunds: number;
+  netQuantity: number;
+  netRevenue: number;
 }
 
 interface BranchRow {
@@ -71,7 +77,10 @@ interface BranchRow {
   branchCode: string;
   active: boolean;
   revenue: number;
+  refunds: number;
+  netRevenue: number;
   profit: number;
+  netProfit: number;
   sales: number;
   items: number;
   tradingDays: number;
@@ -87,9 +96,23 @@ interface BranchResponse {
   from: string;
   to: string;
   branchCount: number;
-  totals: { revenue: number; profit: number; sales: number; items: number };
+  totals: {
+    revenue: number;
+    grossRevenue: number;
+    refunds: number;
+    profit: number;
+    grossProfit: number;
+    sales: number;
+    items: number;
+  };
   branches: BranchRow[];
-  topBranchByRevenue: { branchId: string; branchName: string; revenue: number } | null;
+  topBranchByRevenue: {
+    branchId: string;
+    branchName: string;
+    revenue: number;
+    grossRevenue: number;
+    refunds: number;
+  } | null;
 }
 
 interface DailyItemRow {
@@ -101,15 +124,28 @@ interface DailyItemRow {
   profit: number;
   batches: string[];
   sales: number;
+  refundedQuantity: number;
+  refunds: number;
+  netQuantity: number;
+  netRevenue: number;
 }
 
 interface DailyResponse {
   date: string;
   branchId: string | null;
+  /** Which salesperson's till this response is scoped to, echoed back by the
+   *  API so the UI can label the view from the response rather than from its own
+   *  request state — a filter silently dropped server-side would otherwise show a
+   *  whole-business total under a single-till heading. */
+  userId: string | null;
   summary: {
     sales: number;
     revenue: number;
+    grossRevenue: number;
+    refunds: number;
+    refundCount: number;
     profit: number;
+    grossProfit: number;
     items: number;
     distinctProducts: number;
     averageSaleValue: number;
@@ -122,6 +158,26 @@ interface DailyResponse {
     profit: number;
     items: number;
     sales: number;
+    refunds: number;
+    refundedProfit: number;
+    netRevenue: number;
+    netProfit: number;
+  }[];
+  /** The same day and the same money, grouped by whose till it was. */
+  bySalesperson: {
+    userId: string | null;
+    name: string;
+    role: string | null;
+    revenue: number;
+    profit: number;
+    items: number;
+    sales: number;
+    refunds: number;
+    refundedProfit: number;
+    netRevenue: number;
+    netProfit: number;
+    /** Shops this person rang up at, for staff who cover more than one. */
+    branches: string[];
   }[];
   items: DailyItemRow[];
   /** The day's individual receipts, newest first. */
@@ -137,6 +193,8 @@ interface DailyInvoiceRow {
   cashierName: string;
   totalAmount: number;
   profit: number;
+  refundedAmount: number;
+  netAmount: number;
   createdAt: string;
   itemCount: number;
   items: {
@@ -145,6 +203,9 @@ interface DailyInvoiceRow {
     unit: string;
     batchNumber: string | null;
     quantity: number;
+    returnedQuantity: number;
+    refundAmount: number;
+    netQuantity: number;
     unitPrice: number;
     costPrice: number;
     total: number;
@@ -224,6 +285,11 @@ export default function BranchPerformanceView() {
   // neither readable.
   const [itemDate, setItemDate] = useState(() => localDateKey(new Date()));
   const [itemBranch, setItemBranch] = useState<string>('all');
+  // Whose till to reconcile. `'all'` is every salesperson; a userId narrows the
+  // whole report — summary, items, invoice list and refunds — to one person's
+  // sales. Independent of the branch filter on purpose: staff cover shifts and
+  // branches, so "Kofi at Central" and "Kofi anywhere" are both real questions.
+  const [itemSalesperson, setItemSalesperson] = useState<string>('all');
   const [daily, setDaily] = useState<DailyResponse | null>(null);
   const [dailyLoading, setDailyLoading] = useState(true);
 
@@ -274,6 +340,7 @@ export default function BranchPerformanceView() {
     try {
       const params = new URLSearchParams({ date: itemDate });
       if (itemBranch !== 'all') params.set('branchId', itemBranch);
+      if (itemSalesperson !== 'all') params.set('userId', itemSalesperson);
       const res = await fetch(`/api/reports/daily-items?${params.toString()}`);
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -286,7 +353,7 @@ export default function BranchPerformanceView() {
     } finally {
       setDailyLoading(false);
     }
-  }, [itemDate, itemBranch]);
+  }, [itemDate, itemBranch, itemSalesperson]);
 
   useEffect(() => {
     loadBranches();
@@ -309,6 +376,43 @@ export default function BranchPerformanceView() {
     ],
     [branches]
   );
+
+  /* People who have traded on the selected day, accumulated across requests.
+   *
+   * Derived from the response rather than from a separate /api/users fetch, for
+   * two reasons: the only useful salespeople here are the ones who actually rang
+   * something up on that day, and this view is already admin-only so a user list
+   * would be a wider data grab than the report needs.
+   *
+   * Accumulated rather than replaced, because the response is already filtered by
+   * the current selection. Deriving options straight from it means choosing
+   * "Ama" collapses the dropdown to just Ama, and the owner then has no way back
+   * to the whole-business view except reloading the page. */
+  const [salespersonOptions, setSalespersonOptions] = useState<
+    { id: string; name: string; role: string | null }[]
+  >([]);
+
+  useEffect(() => {
+    if (!daily?.bySalesperson) return;
+    setSalespersonOptions((prev) => {
+      const merged = new Map(prev.map((p) => [p.id, p]));
+      let changed = false;
+      for (const person of daily.bySalesperson) {
+        // A sale whose user row has since been deleted still needs an entry, or
+        // that money becomes unfilterable. Keyed on a sentinel that cannot
+        // collide with a cuid.
+        const id = person.userId ?? 'unknown';
+        if (!merged.has(id)) {
+          merged.set(id, { id, name: person.name, role: person.role });
+          changed = true;
+        } else if (merged.get(id)!.name === 'Unknown salesperson' && person.name !== 'Unknown salesperson') {
+          merged.set(id, { id, name: person.name, role: person.role });
+          changed = true;
+        }
+      }
+      return changed ? [...merged.values()].sort((a, b) => a.name.localeCompare(b.name)) : prev;
+    });
+  }, [daily]);
 
   const toggle = (id: string) => setExpanded((prev) => (prev === id ? null : id));
 
@@ -389,11 +493,19 @@ export default function BranchPerformanceView() {
         </div>
       ) : data ? (
         <>
+          {/* `totals.revenue`/`totals.profit` are NET — the API reduced them by
+              approved refunds. The tile says so explicitly, because the same
+              words on the register mean gross and an owner comparing the two
+              screens would otherwise conclude one of them is wrong. */}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
-              label="Chain revenue"
+              label="Chain revenue (net)"
               value={money(data.totals.revenue)}
-              hint={`Across ${activeBranches.length} trading branch${activeBranches.length === 1 ? '' : 'es'}`}
+              hint={
+                data.totals.refunds > 0
+                  ? `Gross ${money(data.totals.grossRevenue)} less ${money(data.totals.refunds)} refunded`
+                  : `Across ${activeBranches.length} trading branch${activeBranches.length === 1 ? '' : 'es'}`
+              }
               icon={TrendingUp}
             />
             <StatCard
@@ -409,15 +521,15 @@ export default function BranchPerformanceView() {
             <StatCard
               label="Items sold"
               value={data.totals.items.toLocaleString()}
-              hint="Units that left a shelf"
+              hint="Units that left a shelf, before returns"
               icon={Package}
             />
             <StatCard
-              label="Gross profit"
+              label="Net profit"
               value={money(data.totals.profit)}
               hint={
                 data.totals.revenue > 0
-                  ? `${marginPercent(data.totals.revenue, data.totals.profit).toFixed(1)}% margin`
+                  ? `${marginPercent(data.totals.revenue, data.totals.profit).toFixed(1)}% margin after refunds`
                   : '—'
               }
               icon={Users}
@@ -435,6 +547,15 @@ export default function BranchPerformanceView() {
                   <span className="font-semibold tabular-nums">
                     {money(data.topBranchByRevenue.revenue)}
                   </span>
+                  {/* Ranked on net, so the branch that took the most cash and
+                      gave nearly all of it back cannot hold the top spot. */}
+                  {data.topBranchByRevenue.refunds > 0 ? (
+                    <span className="text-xs text-muted-foreground">
+                      {' '}
+                      (net of {money(data.topBranchByRevenue.refunds)} refunded, from{' '}
+                      {money(data.topBranchByRevenue.grossRevenue)} gross)
+                    </span>
+                  ) : null}
                 </span>
               </CardContent>
             </Card>
@@ -460,11 +581,14 @@ export default function BranchPerformanceView() {
                       <TableRow>
                         <TableHead className="w-8" />
                         <TableHead>Branch</TableHead>
-                        <TableHead className="text-right">Revenue</TableHead>
+                        {/* Net, with gross and refunds on the expanded row: a
+                            leaderboard that ranked gross would reward the shop
+                            with the worst returns. */}
+                        <TableHead className="text-right">Revenue (net)</TableHead>
                         <TableHead className="text-right">Share</TableHead>
                         <TableHead className="text-right">Sales</TableHead>
                         <TableHead className="text-right">Items</TableHead>
-                        <TableHead className="text-right">Profit</TableHead>
+                        <TableHead className="text-right">Net profit</TableHead>
                         <TableHead className="text-right">Avg / day</TableHead>
                         <TableHead>Last sale</TableHead>
                       </TableRow>
@@ -534,24 +658,58 @@ export default function BranchPerformanceView() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Salesperson is deliberately independent of Branch. Staff cover
+                shifts and work more than one shop, so "Ama at Central" and "Ama
+                anywhere" are both questions an owner actually asks, and tying the
+                second to the first would make one of them unanswerable. */}
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground" htmlFor="bp-item-salesperson">
+                Salesperson
+              </label>
+              <Select value={itemSalesperson} onValueChange={setItemSalesperson}>
+                <SelectTrigger id="bp-item-salesperson" className="w-full sm:w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All salespeople</SelectItem>
+                  {salespersonOptions.map((person) => (
+                    <SelectItem key={person.id} value={person.id}>
+                      {person.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {dailyLoading ? (
             <Skeleton className="h-40 w-full" />
           ) : daily ? (
-            daily.summary.sales === 0 ? (
+            // A day with no sales but a processed refund is NOT an empty day — it is the one
+            // day an owner most wants to see, because money left a till with no
+            // till takings to reconcile it against.
+            daily.summary.sales === 0 && daily.summary.refunds === 0 ? (
               <p className="py-8 text-center text-sm text-muted-foreground">
                 No completed sales on {daily.date}
-                {daily.branchId ? ' at this branch' : ' across the business'}. Pick another
-                day to see what moved.
+                {daily.branchId ? ' at this branch' : ' across the business'}
+                {/* Naming the salesperson stops the copy reading as a statement
+                    about the whole business when it is really about one till. */}
+                {daily.userId
+                  ? ` for ${salespersonOptions.find((p) => p.id === daily.userId)?.name ?? 'that salesperson'}`
+                  : ''}
+                . Pick another day to see what moved.
               </p>
             ) : (
               <>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <StatCard
-                    label="Revenue that day"
+                    label="Revenue that day (net)"
                     value={money(daily.summary.revenue)}
-                    hint={`${daily.summary.sales} sale${daily.summary.sales === 1 ? '' : 's'} · ${money(daily.summary.averageSaleValue)} average`}
+                    hint={
+                      daily.summary.refunds > 0
+                        ? `Gross ${money(daily.summary.grossRevenue)} less ${money(daily.summary.refunds)} refunded (${daily.summary.refundCount})`
+                        : `${daily.summary.sales} sale${daily.summary.sales === 1 ? '' : 's'} · ${money(daily.summary.averageSaleValue)} average`
+                    }
                     icon={TrendingUp}
                   />
                   <StatCard
@@ -561,18 +719,65 @@ export default function BranchPerformanceView() {
                     icon={Package}
                   />
                   <StatCard
-                    label="Gross profit"
+                    label="Net profit"
                     value={money(daily.summary.profit)}
-                    hint={`${marginPercent(daily.summary.revenue, daily.summary.profit).toFixed(1)}% margin`}
+                    hint={`${marginPercent(daily.summary.revenue, daily.summary.profit).toFixed(1)}% margin after refunds`}
                     icon={TrendingUp}
                   />
                   <StatCard
-                    label="Branches trading"
-                    value={String(daily.byBranch.length)}
-                    hint="Shops that recorded a sale that day"
+                    label={daily.userId ? 'Salespeople trading' : 'Branches trading'}
+                    value={String(daily.userId ? daily.bySalesperson.length : daily.byBranch.length)}
+                    hint={
+                      daily.userId
+                        ? 'Already narrowed to one salesperson'
+                        : 'Shops that recorded a sale or a refund that day'
+                    }
                     icon={Building2}
                   />
                 </div>
+
+                {/* Hidden while a single salesperson is selected: the table would
+                    hold exactly one row and restate the cards above it. The
+                    "All salespeople" state is the one that needs it. */}
+                {!daily.userId && daily.bySalesperson.length > 1 ? (
+                  <div className="space-y-2">
+                    <h3 className="text-sm font-medium">Split by salesperson</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {daily.bySalesperson.map((person) => {
+                        const names = person.branches
+                          .map((id) => branchOptions.find((b) => b.id === id)?.name)
+                          .filter(Boolean);
+                        return (
+                          <button
+                            key={person.userId ?? 'unknown'}
+                            type="button"
+                            onClick={() => setItemSalesperson(person.userId ?? 'unknown')}
+                            className="rounded-md border px-3 py-2 text-left text-sm transition-colors hover:border-primary hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{person.name}</span>
+                              {/* More than one shop is worth surfacing rather than
+                                  collapsing: someone covering two branches in a
+                                  shift is exactly what an owner cannot see from a
+                                  per-branch report. */}
+                              {names.length > 1 && (
+                                <Badge variant="outline" className="text-[10px]">
+                                  {names.length} branches
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="mt-1 text-xs text-muted-foreground tabular-nums">
+                              {money(person.netRevenue)} net · {person.items} item
+                              {person.items === 1 ? '' : 's'} · {person.sales} sale
+                              {person.sales === 1 ? '' : 's'}
+                              {person.refunds > 0 ? ` · ${money(person.refunds)} back` : ''}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
 
                 {daily.byBranch.length > 1 ? (
                   <div className="space-y-2">
@@ -590,8 +795,9 @@ export default function BranchPerformanceView() {
                             <span className="font-medium">{b.branchName}</span>
                           </div>
                           <div className="mt-1 text-xs text-muted-foreground tabular-nums">
-                            {money(b.revenue)} · {b.items} item{b.items === 1 ? '' : 's'} ·{' '}
+                            {money(b.netRevenue)} net · {b.items} item{b.items === 1 ? '' : 's'} ·{' '}
                             {b.sales} sale{b.sales === 1 ? '' : 's'}
+                            {b.refunds > 0 ? ` · ${money(b.refunds)} back` : ''}
                           </div>
                         </div>
                       ))}
@@ -621,14 +827,29 @@ export default function BranchPerformanceView() {
                           <TableCell>
                             <div className="font-medium">{item.name}</div>
                             <div className="text-xs text-muted-foreground">
-                              sold across {item.sales} sale{item.sales === 1 ? '' : 's'}
+                              {item.sales > 0
+                                ? `sold across ${item.sales} sale${item.sales === 1 ? '' : 's'}`
+                                : 'sold before this day — returned today'}
                             </div>
                           </TableCell>
                           <TableCell className="text-center tabular-nums font-medium">
-                            {item.quantity} {item.unit}
+                            {/* Net of what came back. The returned figure sits
+                                underneath so a heavily-returned line cannot look
+                                like a strong seller on quantity alone. */}
+                            {item.netQuantity} {item.unit}
+                            {item.refundedQuantity > 0 ? (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {item.refundedQuantity} returned
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {money(item.revenue)}
+                            {money(item.netRevenue)}
+                            {item.refunds > 0 ? (
+                              <div className="text-[10px] text-muted-foreground">
+                                from {money(item.revenue)}
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {money(item.profit)}
@@ -775,7 +996,15 @@ function InvoiceDrilldown({ invoices }: { invoices: DailyInvoiceRow[] }) {
                     <TableCell className="text-xs">{invoice.cashierName}</TableCell>
                     <TableCell className="text-center tabular-nums">{invoice.itemCount}</TableCell>
                     <TableCell className="text-right font-medium tabular-nums">
-                      {money(invoice.totalAmount)}
+                      {/* Headline is net: this is the receipt's real takings.
+                          Gross only appears when money actually came back. */}
+                      {money(invoice.netAmount)}
+                      {invoice.refundedAmount > 0 ? (
+                        <div className="text-[10px] font-normal text-muted-foreground">
+                          {money(invoice.refundedAmount)} back of{' '}
+                          {money(invoice.totalAmount)}
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell className="text-right text-emerald-600 tabular-nums">
                       {money(invoice.profit)}
@@ -792,6 +1021,13 @@ function InvoiceDrilldown({ invoices }: { invoices: DailyInvoiceRow[] }) {
                               <th className="text-center py-1 font-medium text-muted-foreground">Qty</th>
                               <th className="text-right py-1 font-medium text-muted-foreground">Unit price</th>
                               <th className="text-right py-1 font-medium text-muted-foreground">Total</th>
+                              {/* Only meaningful when something came back, so the
+                                  column exists solely for a refunded receipt. */}
+                              {invoice.refundedAmount > 0 ? (
+                                <th className="text-right py-1 font-medium text-muted-foreground">
+                                  Returned
+                                </th>
+                              ) : null}
                             </tr>
                           </thead>
                           <tbody>
@@ -806,6 +1042,17 @@ function InvoiceDrilldown({ invoices }: { invoices: DailyInvoiceRow[] }) {
                                 </td>
                                 <td className="text-right py-1">{money(line.unitPrice)}</td>
                                 <td className="text-right py-1 font-medium">{money(line.total)}</td>
+                                {invoice.refundedAmount > 0 ? (
+                                  <td className="text-right py-1 text-amber-600">
+                                    {line.returnedQuantity > 0 ? (
+                                      <>
+                                        {line.returnedQuantity} · {money(line.refundAmount)}
+                                      </>
+                                    ) : (
+                                      <span className="text-muted-foreground">—</span>
+                                    )}
+                                  </td>
+                                ) : null}
                               </tr>
                             ))}
                           </tbody>
@@ -874,14 +1121,22 @@ function BranchDetailRow({
           </div>
         </TableCell>
         <TableCell className="text-right tabular-nums font-medium">
-          {money(branch.revenue)}
+          {money(branch.netRevenue)}
+          {/* A branch with returns says so on the collapsed row. Hiding it here
+              would leave a net figure visibly below a gross one the owner
+              remembers, with no explanation until they expand. */}
+          {branch.refunds > 0 ? (
+            <div className="text-[10px] font-normal text-muted-foreground">
+              {money(branch.refunds)} refunded
+            </div>
+          ) : null}
         </TableCell>
         <TableCell className="text-right tabular-nums text-muted-foreground">
           {(branch.revenueShare * 100).toFixed(1)}%
         </TableCell>
         <TableCell className="text-right tabular-nums">{branch.sales}</TableCell>
         <TableCell className="text-right tabular-nums">{branch.items}</TableCell>
-        <TableCell className="text-right tabular-nums">{money(branch.profit)}</TableCell>
+        <TableCell className="text-right tabular-nums">{money(branch.netProfit)}</TableCell>
         <TableCell className="text-right tabular-nums">
           {branch.tradingDays > 0 ? money(branch.averageDailyRevenue) : '—'}
         </TableCell>
@@ -937,7 +1192,14 @@ function BranchDetailRow({
                             {cashier.items}
                           </TableCell>
                           <TableCell className="text-right tabular-nums font-medium">
-                            {money(cashier.revenue)}
+                            {/* Net: the ranking is by net revenue upstream, so
+                                printing gross here would contradict the order. */}
+                            {money(cashier.netRevenue)}
+                            {cashier.refunds > 0 ? (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {money(cashier.refunds)} refunded
+                              </div>
+                            ) : null}
                           </TableCell>
                         </TableRow>
                       ))}
@@ -966,10 +1228,15 @@ function BranchDetailRow({
                         <TableRow key={product.productId}>
                           <TableCell>{product.name}</TableCell>
                           <TableCell className="text-center tabular-nums">
-                            {product.quantity} {product.unit}
+                            {product.netQuantity} {product.unit}
+                            {product.refundedQuantity > 0 ? (
+                              <div className="text-[10px] text-muted-foreground">
+                                {product.refundedQuantity} back
+                              </div>
+                            ) : null}
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
-                            {money(product.revenue)}
+                            {money(product.netRevenue)}
                           </TableCell>
                         </TableRow>
                       ))}

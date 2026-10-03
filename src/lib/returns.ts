@@ -16,6 +16,8 @@
  * refundable to the cent.
  */
 
+import { roundMoney, sumMoney } from '@/lib/money';
+
 /** Currency is handled to 2 decimals, so comparisons need half-a-cent slack. */
 export const CURRENCY_EPSILON = 0.01;
 
@@ -74,11 +76,10 @@ export interface RefundLine extends RefundLineInput {
  */
 export function allocateRefunds(lines: RefundLineInput[], sale: SalePricing): RefundLine[] {
   const factor = netRefundFactor(sale);
-  const round2 = (n: number) => Math.round(n * 100) / 100;
 
   const allocated = lines.map((line) => {
     const grossAmount = line.unitPrice * line.quantity;
-    return { ...line, grossAmount, refundAmount: round2(grossAmount * factor) };
+    return { ...line, grossAmount, refundAmount: roundMoney(grossAmount * factor) };
   });
 
   if (allocated.length === 0) return allocated;
@@ -86,9 +87,9 @@ export function allocateRefunds(lines: RefundLineInput[], sale: SalePricing): Re
   // Absorb the sub-cent rounding remainder on the largest line so the refunds
   // add up to the exact net value of the returned units.
   const grossTotal = allocated.reduce((sum, l) => sum + l.grossAmount, 0);
-  const target = round2(grossTotal * factor);
+  const target = roundMoney(grossTotal * factor);
   const current = allocated.reduce((sum, l) => sum + l.refundAmount, 0);
-  const drift = round2(target - current);
+  const drift = roundMoney(target - current);
   if (Math.abs(drift) >= 0.005) {
     let largest = 0;
     for (let i = 1; i < allocated.length; i++) {
@@ -96,7 +97,7 @@ export function allocateRefunds(lines: RefundLineInput[], sale: SalePricing): Re
     }
     allocated[largest] = {
       ...allocated[largest],
-      refundAmount: round2(allocated[largest].refundAmount + drift),
+      refundAmount: roundMoney(allocated[largest].refundAmount + drift),
     };
   }
 
@@ -104,8 +105,7 @@ export function allocateRefunds(lines: RefundLineInput[], sale: SalePricing): Re
 }
 
 export function sumRefunds(lines: Pick<RefundLine, 'refundAmount'>[]): number {
-  const round2 = (n: number) => Math.round(n * 100) / 100;
-  return round2(lines.reduce((sum, l) => sum + l.refundAmount, 0));
+  return sumMoney(lines.map((line) => line.refundAmount));
 }
 
 /** Sale status vocabulary — mirrors the Sale.status column comment. */
@@ -144,74 +144,13 @@ export function isSaleStatus(value: unknown): value is SaleStatus {
 // importable from a client component: the client uses the pure maths above to
 // preview a refund, the API uses the same maths to price it, and the two can
 // never disagree.
+//
+// The stock movement a return performs is NOT here: it lives in `lib/stock.ts`
+// alongside the sale handler's, because both are the same primitive — move units
+// on or off a batch, re-asserting the owning branch first.
 // ---------------------------------------------------------------------------
 
-interface BatchUpdater {
-  batch: {
-    findFirst(args: {
-      where: { id: string; branchId: string };
-      select: { id: true };
-    }): Promise<unknown>;
-    update(args: {
-      where: { id: string };
-      data: { quantity: { increment: number } };
-    }): Promise<unknown>;
-  };
-}
-
-export interface StockLine {
-  batchId: string | null;
-  quantity: number;
-}
-
-/**
- * Moves stock for a return. `direction` is +1 to put returned units back into
- * their original batch (an approved return) and -1 to take them out again (a
- * return being voided). Lines without a batch (items sold without one) are
- * skipped — there is nothing to adjust.
- *
- * `ownerBranchId` is the branch that sold the goods, and it is REQUIRED rather
- * than optional so that adding a new caller cannot silently skip the check.
- * A return is the one place stock is credited *without* the caller naming a
- * batch of its own: `batchId` comes from the original sale item, so nothing
- * about the request is checked against the shelf being credited. The branch is
- * therefore re-asserted here, in the one function that performs the credit,
- * instead of being trusted at each call site.
- *
- * `POST /api/sales` no longer allows a sale to reference another branch's
- * batch, so for correctly-written data this check always passes. It exists for
- * data written before that fix: without it, refunding a legacy sale would
- * credit a foreign branch's shelf — inventing inventory in a shop that never
- * held the goods. A mismatched line is logged and skipped rather than thrown,
- * because the customer is owed the refund either way.
- */
-export async function applyReturnStock(
-  tx: BatchUpdater,
-  lines: StockLine[],
-  direction: 1 | -1,
-  ownerBranchId: string
-): Promise<void> {
-  for (const line of lines) {
-    if (!line.batchId || line.quantity <= 0) continue;
-    const owned = await tx.batch.findFirst({
-      where: { id: line.batchId, branchId: ownerBranchId },
-      select: { id: true },
-    });
-    if (!owned) {
-      console.error(
-        `[applyReturnStock] batch ${line.batchId} is not owned by branch ${ownerBranchId} — ` +
-          `skipped returning ${line.quantity} unit(s). Pre-existing cross-branch data; reconcile manually.`
-      );
-      continue;
-    }
-    await tx.batch.update({
-      where: { id: line.batchId },
-      data: { quantity: { increment: direction * line.quantity } },
-    });
-  }
-}
-
-interface StatusRecalculator extends BatchUpdater {
+interface StatusRecalculator {
   return: {
     aggregate(args: {
       where: { saleId: string; status: string };

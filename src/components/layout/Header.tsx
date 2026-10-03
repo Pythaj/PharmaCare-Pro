@@ -372,11 +372,16 @@ export function Header() {
   useEffect(() => {
     async function fetchAlerts() {
       try {
-        const res = await fetch('/api/dashboard/stats');
+        // The dedicated count endpoint, not `/api/dashboard/stats`. The bell needs
+        // two integers; the stats route is the whole dashboard (revenue and
+        // profit aggregates, refund money, and every in-stock batch loaded to
+        // value the shelf). Polling that every minute from every page computed
+        // all of it to read two fields — and on the admin dashboard it duplicated
+        // `AdminDashboard`'s own 30s poll of the very same route.
+        const res = await fetch('/api/dashboard/alerts-count');
         if (res.ok) {
           const data = await res.json();
-          const count = (data.lowStockCount ?? 0) + (data.expiringCount ?? 0);
-          setAlertCount(count);
+          setAlertCount(data.alertCount ?? 0);
         }
       } catch { /* silent */ }
     }

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
+import { requireBranchForWrite } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { parseErrorResponse, branchMissResponse, idExists } from '@/lib/api-error'
 
 /**
  * A Batch row IS a shelf: its quantity is that branch's on-hand stock of one
@@ -10,6 +12,23 @@ import { logAudit, getClientIp } from '@/lib/audit'
  * admin role. "Admin" answers WHO may act; it does not answer WHOSE BOOKS. An
  * admin working Branch A must not be able to rewrite Branch B's stock levels or
  * cost prices from that branch's screen.
+ *
+ * ## Why these two handlers now REQUIRE a branch
+ *
+ * The ownership test used to be `if (scope.branchId && batch.branchId !== scope.branchId)`.
+ * On the consolidated "All branches" view `scope.branchId` is null, so the whole
+ * condition short-circuited to false and the check was SKIPPED — an admin
+ * deliberately viewing the whole business could rewrite or delete any branch's
+ * stock by id. That reads as harmless until you notice the product list merges
+ * every branch's batches into one table with no branch column: the admin could
+ * not tell whose shelf a row belonged to, and "delete" removed real stock from a
+ * shop they had not selected.
+ *
+ * Editing a batch is a stock WRITE, and stock belongs to exactly one branch —
+ * the same rule `POST /api/batches` has always enforced via `requireBranchForWrite`.
+ * It is applied here so the consolidated view is genuinely read-only for stock,
+ * matching `settings/branch-reset`, which already refuses it. Select the branch
+ * whose shelf you are correcting and the same request succeeds.
  */
 export async function PATCH(
   request: NextRequest,
@@ -24,15 +43,26 @@ export async function PATCH(
     const { id } = await params
     const body = await request.json()
 
-    const batch = await db.batch.findUnique({ where: { id } })
-    if (!batch) {
-      return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
-    }
+    // Stock writes need one branch. Throws (rendered as a 400 by the catch below)
+    // on the consolidated view rather than falling through to an unscoped write.
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select the branch whose stock you are correcting first — a batch belongs to one branch\'s shelf'
+    )
 
-    if (auth.scope!.branchId && batch.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That batch belongs to a different branch' },
-        { status: 403 }
+    // Scoped in the QUERY, not by a post-fetch comparison. Fetching by id and
+    // then testing `batch.branchId` in JS is the same ownership check one line
+    // away from being forgotten; putting it in the `where` makes it impossible
+    // to write the row and only then discover it was the wrong branch's.
+    const batch = await db.batch.findFirst({
+      where: { id, branchId },
+    })
+    if (!batch) {
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+      return branchMissResponse(
+        await idExists(db.batch, { id }),
+        'Batch not found',
+        'That batch belongs to a different branch'
       )
     }
 
@@ -72,6 +102,10 @@ export async function PATCH(
 
     return NextResponse.json(updated)
   } catch (error) {
+    // `requireBranchForWrite` throws a ValidationError, which must reach the
+    // admin as the 400 it is — "select a branch" is guidance, not a server fault.
+    const mapped = parseErrorResponse(error, 'Failed to update batch')
+    if (mapped) return mapped
     console.error('Batch update error:', error)
     return NextResponse.json({ error: 'Failed to update batch' }, { status: 500 })
   }
@@ -89,15 +123,22 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const batch = await db.batch.findUnique({ where: { id } })
-    if (!batch) {
-      return NextResponse.json({ error: 'Batch not found' }, { status: 404 })
-    }
+    // Same rule as PATCH: deleting a batch destroys one branch's stock record,
+    // so it needs that branch selected. See the note above.
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select the branch whose stock you are correcting first — a batch belongs to one branch\'s shelf'
+    )
 
-    if (auth.scope!.branchId && batch.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That batch belongs to a different branch' },
-        { status: 403 }
+    const batch = await db.batch.findFirst({
+      where: { id, branchId },
+    })
+    if (!batch) {
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+      return branchMissResponse(
+        await idExists(db.batch, { id }),
+        'Batch not found',
+        'That batch belongs to a different branch'
       )
     }
 
@@ -123,6 +164,8 @@ export async function DELETE(
 
     return NextResponse.json({ success: true })
   } catch (error) {
+    const mapped = parseErrorResponse(error, 'Failed to delete batch')
+    if (mapped) return mapped
     console.error('Batch delete error:', error)
     return NextResponse.json({ error: 'Failed to delete batch' }, { status: 500 })
   }

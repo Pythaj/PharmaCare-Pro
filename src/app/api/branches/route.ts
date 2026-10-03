@@ -110,8 +110,16 @@ export async function POST(request: NextRequest) {
       // Inactive branches hold no sellable stock, so seeding them would create
       // rows the seeder would immediately treat as gaps again. Only seed an
       // active branch.
+      //
+      // Scoped to the branch just created. Seeding "all branches" here wrote a
+      // starter row for every other shop too, inside the transaction that is
+      // opening this till: thousands of rows of another branch's catalogue in
+      // someone else's write transaction, and a P2002 waiting to happen the
+      // moment a second branch was created at the same time. It also meant the
+      // cost of opening the smallest branch scaled with the size of the whole
+      // chain.
       if (created.active) {
-        await seedCatalogueForAllBranches(tx);
+        await seedCatalogueForAllBranches(tx, undefined, [created.id]);
       }
 
       return created;

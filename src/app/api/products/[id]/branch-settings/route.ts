@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { requireBranchScope } from '@/lib/require-auth';
 import { parseReorderLevel, parseMoney } from '@/lib/product-input';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { requireBranchForWrite } from '@/lib/branches';
+import { parseErrorResponse } from '@/lib/api-error';
 
 /**
  * PUT /api/products/[id]/branch-settings
@@ -48,16 +50,10 @@ export async function PUT(
       return NextResponse.json({ error: auth.error }, { status: auth.status });
     }
 
-    const branchId = auth.scope!.branchId;
-    if (!branchId) {
-      return NextResponse.json(
-        {
-          error:
-            'Select a branch first. Branch settings apply to one shop — to change the value for every branch, edit the product itself.',
-        },
-        { status: 400 }
-      );
-    }
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select a branch first. Branch settings apply to one shop — to change the value for every branch, edit the product itself.'
+    );
 
     const product = await db.product.findUnique({
       where: { id },
@@ -161,6 +157,8 @@ export async function PUT(
 
     return NextResponse.json({ success: true, branchId, settings: saved });
   } catch (error) {
+    const mapped = parseErrorResponse(error, 'Failed to save branch settings');
+    if (mapped) return mapped;
     console.error('Branch product settings error:', error);
     return NextResponse.json(
       { error: 'Failed to save branch settings' },

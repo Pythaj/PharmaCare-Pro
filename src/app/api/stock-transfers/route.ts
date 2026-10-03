@@ -15,6 +15,8 @@ import {
   transferScopeWhere,
 } from '@/lib/stock-transfer';
 import { committedQuantityByBatch } from '@/lib/stock-transfer-server';
+import { assertDifferentBranches } from '@/lib/stock';
+import { toNumber } from '@/lib/utils';
 
 /** Largest number of lines one transfer may carry. */
 const MAX_LINES = 200;
@@ -35,7 +37,13 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
     const statusParam = searchParams.get('status');
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50', 10) || 50, 200);
+    // Clamped rather than passed through: `?limit=-5` reached Prisma as a
+    // negative `take`, which is a hard error rather than an empty list, and the
+    // old `|| 50` fallback silently turned `?limit=abc` into a 50-row page.
+    const requestedLimit = Number.parseInt(searchParams.get('limit') ?? '', 10);
+    const limit = Number.isFinite(requestedLimit)
+      ? Math.min(Math.max(requestedLimit, 1), 200)
+      : 50;
 
     if (statusParam && !isTransferStatus(statusParam)) {
       return NextResponse.json(
@@ -126,12 +134,9 @@ export async function POST(request: NextRequest) {
     if (typeof toBranchId !== 'string' || !toBranchId.trim()) {
       return NextResponse.json({ error: 'A destination branch is required' }, { status: 400 });
     }
-    if (toBranchId.trim() === fromBranchId) {
-      return NextResponse.json(
-        { error: 'Source and destination branches must be different' },
-        { status: 400 }
-      );
-    }
+    // A transfer to itself debits a batch and credits the very batch it debited:
+    // the ledger would say the goods moved while the shelf never changed.
+    assertDifferentBranches(fromBranchId, toBranchId.trim(), 'A transfer');
 
     // Both branches must be real and active. A deactivated branch is a closed
     // shop: it has no shelf to receive stock and no staff to authorise it.
@@ -212,16 +217,26 @@ export async function POST(request: NextRequest) {
         notes: typeof notes === 'string' && notes.trim() ? notes.trim() : null,
         createdById: userId,
         // One line per distinct batch, carrying the summed quantity.
+        //
+        // This iterates `wanted` — the collapsed per-batch totals — NOT the raw
+        // request lines. Iterating the raw lines wrote one row per duplicate, each
+        // carrying the FULL summed quantity, so a request that mentioned a batch
+        // twice asked for 6, passed a stock check for 6, and recorded two lines of
+        // 6: the dispatcher would then move 12 units off a shelf holding 6. The
+        // collapse has to be what gets persisted, not just what gets checked.
+        //
+        // `StockTransferLine` has no unique key on (transferId, sourceBatchId) to
+        // catch this afterwards, so the document itself has to be built once.
         lines: {
-          create: lines.map((line) => {
-            const batch = batchById.get(line.batchId)!;
+          create: [...wanted.entries()].map(([batchId, quantity]) => {
+            const batch = batchById.get(batchId)!;
             return {
               productId: batch.productId,
               sourceBatchId: batch.id,
-              quantity: wanted.get(batch.id)!,
+              quantity,
               // Snapshot the source's cost now. A later price edit at the
               // source must not rewrite what this movement was worth.
-              unitCost: Number(batch.costPrice),
+              unitCost: toNumber(batch.costPrice),
             };
           }),
         },

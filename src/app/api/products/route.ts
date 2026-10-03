@@ -3,7 +3,10 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { classifyProductExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
+import { getExpiryAlertDays } from '@/lib/server-settings'
 import { seedCatalogueForAllBranches, SEED_BATCH_NUMBER } from '@/lib/catalogue-seeding'
+import { requireBranchForWrite } from '@/lib/branches'
+import { parseErrorResponse } from '@/lib/api-error'
 import {
   parseProductName,
   parseOptionalGenericName,
@@ -104,6 +107,9 @@ export async function GET(request: NextRequest) {
       await loadBranchProductOverrides(auth.scope!.branchId)
     )
 
+    // The configured expiry window, read once and threaded into the classifiers.
+    const expiryWarningDays = await getExpiryAlertDays()
+
     // PER-BRANCH AVAILABILITY (admin only)
     //
     // The owner managing several branches needs one question answered at a
@@ -179,7 +185,11 @@ export async function GET(request: NextRequest) {
       const hasExpiredBatches = expiredProductIds.has(p.id);
       const sellableExpiryStatus = classifyProductExpiry(
         p.batches.map((b) => b.expiryDate),
-        now
+        now,
+        // The owner's configured window, not the 90-day fallback: a product listed
+        // here as "expiring soon" while the Inventory screen says "good" (or the
+        // reverse) is the same shelf answering two different ways.
+        expiryWarningDays
       );
       const hasExpiringBatches = sellableExpiryStatus === 'expiring_soon';
       const expiryStatus = hasExpiredBatches ? 'expired' : sellableExpiryStatus;
@@ -329,16 +339,15 @@ export async function POST(request: NextRequest) {
     // which is physically held at ONE branch — so receiving it needs a branch
     // and is refused on "All branches" rather than being filed somewhere
     // arbitrary. This is the same rule `POST /api/batches` enforces.
-    const stockBranchId = auth.scope?.branchId ?? null
-    if (opening && !stockBranchId) {
-      return NextResponse.json(
-        {
-          error:
-            'Select the branch holding this stock before saving, or leave the quantity at 0 to add the drug to the catalogue without stock',
-        },
-        { status: 400 }
-      )
-    }
+    //
+    // The guard therefore applies to the STOCK, not to the product: adding a
+    // drug to the catalogue with no quantity is legitimate from any branch.
+    const stockBranchId = opening
+      ? requireBranchForWrite(
+          auth.scope!,
+          'Select the branch holding this stock before saving, or leave the quantity at 0 to add the drug to the catalogue without stock'
+        )
+      : null
 
     if (parsedCategoryId.value) {
       const category = await db.category.findUnique({
@@ -468,6 +477,8 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     )
   } catch (error) {
+    const mapped = parseErrorResponse(error, 'Failed to create product')
+    if (mapped) return mapped
     console.error('Product create error:', error)
     return NextResponse.json(
       { error: 'Failed to create product' },

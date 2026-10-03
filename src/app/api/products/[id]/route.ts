@@ -35,9 +35,15 @@ export async function GET(
         // signed-in user read every branch's on-hand quantity, selling price AND
         // cost price from a product lookup. Cost price is the sensitive one — it
         // is the other shop's margin.
+        //
+        // `branch` is selected so the caller can always say whose shelf a batch
+        // is. On the consolidated "All branches" view this list spans every shop,
+        // and a stock editor that cannot name the branch is a stock editor that
+        // invites the wrong one to be edited.
         batches: {
           where: branchWhere(auth.scope!),
           orderBy: { createdAt: 'desc' },
+          include: { branch: { select: { id: true, name: true, code: true } } },
         },
       },
     })

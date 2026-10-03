@@ -61,6 +61,24 @@ export function parseOptionalDescription(value: unknown): FieldResult<string | n
   return parseOptionalString(value, MAX_DESCRIPTION, 'Description');
 }
 
+/**
+ * Strings that are a value in the data but not a value in the app.
+ *
+ * A spreadsheet column exported to JSON keeps the *text* of an empty cell when the
+ * conversion stringifies it, so a row with no category arrives as the four
+ * characters `null` rather than as a JSON null. Taken at face value that created
+ * a category literally named "null" and filed real drugs under it, which then
+ * showed up in the category filter beside genuine categories.
+ */
+const PLACEHOLDER_STRINGS = new Set(['null', 'undefined']);
+
+/** Trims a cell and treats a stringified `null`/`undefined` as absent. */
+export function normalizeOptionalText(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return PLACEHOLDER_STRINGS.has(trimmed.toLowerCase()) ? '' : trimmed;
+}
+
 /** Blank/absent means "uncategorised"; the route checks the id really exists. */
 export function parseOptionalCategoryId(value: unknown): FieldResult<string | null> {
   if (value === undefined || value === null || value === '') {
@@ -69,8 +87,10 @@ export function parseOptionalCategoryId(value: unknown): FieldResult<string | nu
   if (typeof value !== 'string') {
     return { ok: false, error: 'Category must be text' };
   }
-  const trimmed = value.trim();
-  return { ok: true, value: trimmed.length > 0 ? trimmed : null };
+  // A client that stringified a null category id sends "null"; that is a request
+  // to clear the category, not an id that will fail to resolve as "not found".
+  const normalized = normalizeOptionalText(value);
+  return { ok: true, value: normalized.length > 0 ? normalized : null };
 }
 
 export function parseProductUnit(value: unknown, fallback = 'units'): FieldResult<string> {

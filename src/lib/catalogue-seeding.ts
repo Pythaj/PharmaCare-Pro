@@ -86,25 +86,38 @@ function toMoney(value: Prisma.Decimal | number | null | undefined): number {
  *  - Missing (product, branch) pairs get a quantity-0 batch so the drug appears
  *    in that branch's catalogue and POS without pretending stock exists.
  *
- * @param db            Prisma client or an interactive-transaction client.
+* @param db            Prisma client or an interactive-transaction client.
  * @param productIds    Restrict to these products. Omit to cover ALL products —
- *                      this is what a new branch calls.
+ *                      this is what a new product calls.
+ * @param branchIds     Restrict to these branches. Omit to cover every ACTIVE
+ *                      branch — this is what a new product calls.
+ *
+ *                      Pass a single branch when a BRANCH is what just changed.
+ *                      Seeding branch A must not write rows into branch B: it is
+ *                      pure extra write volume inside someone else's transaction,
+ *                      and on the single-file SQLite build that is the write lock
+ *                      every other till in the app is waiting on.
  * @returns counts for logging/telemetry.
  */
 export async function seedCatalogueForAllBranches(
   db: PrismaClient | Prisma.TransactionClient,
-  productIds?: string[]
+  productIds?: string[],
+  branchIds?: string[]
 ): Promise<{ products: number; branches: number; batchesCreated: number }> {
   const branches = await db.branch.findMany({
-    where: { active: true },
+    where: branchIds && branchIds.length > 0 ? { id: { in: branchIds } } : { active: true },
     select: { id: true },
   });
-  const branchIds = branches.map((b) => b.id);
+  const branchIdsInScope = branches.map((b) => b.id);
 
   // With no active branch there is nowhere for catalogue stock to live yet, and
   // silently doing nothing is how a fresh install ends up empty. The caller
   // surfaces this as a configuration error.
-  if (branchIds.length === 0) {
+  //
+  // When an explicit scope was given and matched nothing, that is a caller bug
+  // (a branch id that does not exist), not a missing-catalogue situation, so it
+  // still throws rather than silently seeding nothing.
+  if (branchIdsInScope.length === 0) {
     throw new Error('No active branches exist to seed the catalogue against');
   }
 
@@ -114,7 +127,7 @@ export async function seedCatalogueForAllBranches(
   });
 
   if (products.length === 0) {
-    return { products: 0, branches: branchIds.length, batchesCreated: 0 };
+    return { products: 0, branches: branchIdsInScope.length, batchesCreated: 0 };
   }
 
   // Which (product, branch) pairs already have a starter batch? Everything not
@@ -125,7 +138,7 @@ export async function seedCatalogueForAllBranches(
     where: {
       batchNumber: SEED_BATCH_NUMBER,
       productId: { in: products.map((p) => p.id) },
-      branchId: { in: branchIds },
+      branchId: { in: branchIdsInScope },
     },
     select: { productId: true, branchId: true },
   });
@@ -137,7 +150,7 @@ export async function seedCatalogueForAllBranches(
   for (const product of products) {
     const costPrice = toMoney(product.defaultCostPrice);
     const sellingPrice = toMoney(product.defaultSellingPrice);
-    for (const branchId of branchIds) {
+    for (const branchId of branchIdsInScope) {
       if (!covered.has(`${product.id}::${branchId}`)) {
         missing.push({ productId: product.id, branchId, costPrice, sellingPrice });
       }
@@ -145,7 +158,7 @@ export async function seedCatalogueForAllBranches(
   }
 
   if (missing.length === 0) {
-    return { products: products.length, branches: branchIds.length, batchesCreated: 0 };
+    return { products: products.length, branches: branchIdsInScope.length, batchesCreated: 0 };
   }
 
   const rows = missing.map((m) => ({
@@ -166,7 +179,7 @@ export async function seedCatalogueForAllBranches(
     await db.batch.createMany({ data: rows });
     return {
       products: products.length,
-      branches: branchIds.length,
+      branches: branchIdsInScope.length,
       batchesCreated: rows.length,
     };
   } catch (error) {
@@ -196,7 +209,7 @@ export async function seedCatalogueForAllBranches(
 
     return {
       products: products.length,
-      branches: branchIds.length,
+      branches: branchIdsInScope.length,
       batchesCreated: rows.length,
     };
   }

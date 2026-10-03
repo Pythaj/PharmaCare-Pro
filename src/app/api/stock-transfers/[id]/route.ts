@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { requireBranchScope } from '@/lib/require-auth';
+import { requireBranchForWrite } from '@/lib/branches';
 import { logAudit, getClientIp } from '@/lib/audit';
 import { completeTransfer } from '@/lib/stock-transfer-server';
+import { ConflictError, parseErrorResponse } from '@/lib/api-error';
 import {
   TransferValidationError,
   canTransition,
@@ -140,40 +142,69 @@ export async function PATCH(
     // Only the SENDING branch can cancel, and only before the goods are
     // approved. A receiving branch that wants to refuse does so by rejecting,
     // which leaves a different and auditable trail.
-    if (action === 'cancel' && auth.scope!.branchId && existing.fromBranchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'Only the sending branch can cancel a transfer' },
-        { status: 403 }
+    //
+    // The old guard was `action === 'cancel' && scope.branchId && fromBranchId !== scope.branchId`,
+    // which short-circuits to false whenever `scope.branchId` is null — the
+    // consolidated "All branches" view — so an admin there could cancel any
+    // transfer in the business, including one between two branches they had never
+    // selected. Cancelling reverses a movement of stock between two named shops,
+    // so the sending branch has to be the one selected.
+    //
+    // The other actions are deliberately left alone: a transfer legitimately
+    // spans two branches, so dispatch belongs to the sender and approval to the
+    // receiver, and `canTransition` plus the guarded `completeTransfer` already
+    // decide which side may act from the transfer's own status.
+    if (action === 'cancel') {
+      const actorBranchId = requireBranchForWrite(
+        auth.scope!,
+        'Switch to the sending branch to cancel this transfer — only the branch that sent the stock can cancel it'
       );
+      if (existing.fromBranchId !== actorBranchId) {
+        return NextResponse.json(
+          { error: 'Only the sending branch can cancel a transfer' },
+          { status: 403 }
+        );
+      }
     }
+
+    const notesToApply =
+      typeof notes === 'string' && notes.trim() ? notes.trim() : existing.notes;
 
     const result = await db.$transaction(async (tx) => {
       if (target === 'completed') {
-        // Re-read inside the transaction so the guarded decrement sees the
-        // quantity at the moment of the write.
+        // `completeTransfer` re-reads and claims the row inside the transaction,
+        // so the guarded decrement sees the quantity at the moment of the write
+        // and only one dispatch can settle the docket.
         const moved = await completeTransfer(tx, id, userId);
-        await tx.stockTransfer.update({
-          where: { id },
-          data: {
-            notes:
-              typeof notes === 'string' && notes.trim()
-                ? notes.trim()
-                : existing.notes,
-          },
-        });
+        if (notesToApply !== existing.notes) {
+          await tx.stockTransfer.update({
+            where: { id },
+            data: { notes: notesToApply },
+          });
+        }
         return moved;
       }
 
-      await tx.stockTransfer.update({
-        where: { id },
+      // Approve/reject/cancel move no stock, but they still decide the record's
+      // permanent state and who authorised it. Written as a compare-and-swap on
+      // the status that was validated above: a read-then-update outside the
+      // transaction let a cancel that lost a race to an approval still land,
+      // writing `cancelled` over an approved-and-dispatched movement and losing
+      // the authorisation stamp.
+      const claimed = await tx.stockTransfer.updateMany({
+        where: { id, status: existing.status },
         data: {
           status: target,
           // Stamped on approval so the record names who authorised the movement.
           ...(target === 'approved' ? { approvedById: userId, approvedAt: new Date() } : {}),
-          notes:
-            typeof notes === 'string' && notes.trim() ? notes.trim() : existing.notes,
+          notes: notesToApply,
         },
       });
+      if (claimed.count === 0) {
+        throw new ConflictError(
+          `This transfer is no longer ${existing.status} — someone else decided it first`
+        );
+      }
 
       return {
         reference: existing.reference,
@@ -206,9 +237,12 @@ export async function PATCH(
     return NextResponse.json({ transfer: updated });
   } catch (error) {
     if (error instanceof TransferValidationError) {
-      // Stock moved out from under the transfer, or a line's batch is gone.
+      // Stock moved out from under the transfer, a line's batch is gone, or the
+      // docket was already settled by another dispatcher.
       return NextResponse.json({ error: error.message }, { status: 409 });
     }
+    const mapped = parseErrorResponse(error, 'Failed to update transfer');
+    if (mapped) return mapped;
     console.error('Stock transfer update error:', error);
     return NextResponse.json({ error: 'Failed to update transfer' }, { status: 500 });
   }

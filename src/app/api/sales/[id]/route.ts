@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
+import { requireBranchForWrite } from '@/lib/branches'
+import { parseErrorResponse, branchMissResponse, idExists } from '@/lib/api-error'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { recomputeDailyRecord } from '@/lib/daily-sales'
+import { restoreBatchStock } from '@/lib/stock'
+import { localDateKey } from '@/lib/dates'
+import { toNumber } from '@/lib/utils'
 
 export async function GET(
   request: NextRequest,
@@ -63,9 +68,9 @@ export async function GET(
 
     const normalized = {
       ...sale,
-      subtotal: Number(sale.subtotal),
-      totalAmount: Number(sale.totalAmount),
-      profit: Number(sale.profit),
+      subtotal: toNumber(sale.subtotal),
+      totalAmount: toNumber(sale.totalAmount),
+      profit: toNumber(sale.profit),
       items: sale.items.map((item) => {
         const returnedQuantity = item.returnItems.reduce((sum, ri) => sum + ri.quantity, 0);
         return {
@@ -73,10 +78,10 @@ export async function GET(
           returnItems: undefined,
           returnedQuantity,
           returnableQuantity: Math.max(0, item.quantity - returnedQuantity),
-          quantity: Number(item.quantity),
-          unitPrice: Number(item.unitPrice),
-          costPrice: Number(item.costPrice),
-          total: Number(item.total),
+          quantity: toNumber(item.quantity),
+          unitPrice: toNumber(item.unitPrice),
+          costPrice: toNumber(item.costPrice),
+          total: toNumber(item.total),
         };
       }),
     }
@@ -104,8 +109,20 @@ export async function DELETE(
   try {
     const { id } = await params
 
-    const sale = await db.sale.findUnique({
-      where: { id },
+    // Voiding a sale is a stock write: it restores units to specific batches.
+    // That stock belongs to exactly one branch, so the branch must be selected.
+    // The old test — `if (scope.branchId && sale.branchId !== scope.branchId)` —
+    // was skipped entirely on the consolidated "All branches" view, where
+    // `scope.branchId` is null, so an admin browsing the whole business could
+    // void any branch's receipt and have its units credited to the batches it
+    // names. Selecting the branch is what makes the target unambiguous.
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select the branch holding this sale before voiding it — stock is returned to that branch only'
+    )
+
+    const sale = await db.sale.findFirst({
+      where: { id, branchId },
       include: {
         _count: { select: { returns: true } },
         items: true,
@@ -113,17 +130,11 @@ export async function DELETE(
     })
 
     if (!sale) {
-      return NextResponse.json({ error: 'Sale not found' }, { status: 404 })
-    }
-
-    // Deleting a sale returns its units to the batches they came off. An admin
-    // parked on Branch A must not be able to void a Branch B sale, because the
-    // restoring `increment` below would credit Branch A's shelf with stock that
-    // Branch B had already sold — inventing inventory out of nothing.
-    if (auth.scope!.branchId && sale.branchId !== auth.scope!.branchId) {
-      return NextResponse.json(
-        { error: 'That sale belongs to a different branch' },
-        { status: 403 }
+      // 403 vs 404 is part of the contract, so the miss has to be classified.
+      return branchMissResponse(
+        await idExists(db.sale, { id }),
+        'Sale not found',
+        'That sale belongs to a different branch'
       )
     }
 
@@ -137,37 +148,25 @@ export async function DELETE(
     // Atomic: restore batch quantities BEFORE removing the sale so stock
     // never silently disappears with the record (data-integrity fix).
     //
-    // The restore is branch-checked rather than trusted. `POST /api/sales` now
-    // refuses to sell a batch the till does not own, so a correctly-written sale
-    // can only ever reference its own branch's batches. But a database that ran
-    // before that fix may already contain a sale pointing at a foreign batch, and
-    // crediting that shelf on void would invent inventory in a branch that never
-    // sold the goods. So the branch is re-asserted here instead of assumed: the
-    // sale is still deleted (the operator asked for that), but the mis-attributed
-    // units are left where they are and logged loudly enough to reconcile.
+    // The restore goes through the shared helper, which re-asserts that each
+    // batch belongs to the sale's branch rather than trusting it. `POST
+    // /api/sales` refuses to sell a batch the till does not own, so a
+    // correctly-written sale can only reference its own branch's batches — but a
+    // database that ran before that fix may already contain a sale pointing at a
+    // foreign batch, and crediting that shelf on void would invent inventory in a
+    // branch that never sold the goods. Those lines are skipped and logged by the
+    // helper instead: the sale is still deleted (the operator asked for that), but
+    // the mis-attributed units stay put.
     await db.$transaction(async (tx) => {
-      for (const item of sale.items) {
-        if (!item.batchId) continue
-        const batch = await tx.batch.findFirst({
-          where: { id: item.batchId, branchId: sale.branchId },
-          select: { id: true },
-        })
-        if (!batch) {
-          console.error(
-            `[DELETE /api/sales/${id}] sale ${sale.invoiceNo}: item ${item.id} references batch ` +
-              `${item.batchId}, which is not owned by branch ${sale.branchId} — skipped restoring ` +
-              `${item.quantity} unit(s). This is pre-existing cross-branch data; reconcile manually.`
-          )
-          continue
-        }
-        await tx.batch.update({
-          where: { id: item.batchId },
-          data: { quantity: { increment: item.quantity } },
-        })
-      }
+      await restoreBatchStock(
+        tx,
+        sale.items.map((item) => ({ batchId: item.batchId, quantity: Number(item.quantity) })),
+        sale.branchId,
+        `DELETE /api/sales/${id} sale ${sale.invoiceNo}`
+      );
       // SaleItem has onDelete: Cascade, so deleting the sale removes its items
-      await tx.sale.delete({ where: { id } })
-    })
+      await tx.sale.delete({ where: { id } });
+    });
 
     // Keep the day's register totals in sync with reality after the delete.
     // (Runs after the transaction; recomputes from actual sales so it is
@@ -176,12 +175,7 @@ export async function DELETE(
     // The branch MUST be passed: with one register per branch per day, omitting
     // it makes this recompute whichever branch's record the database happens to
     // return first, writing one shop's day into another shop's till.
-    const deletedDate = new Date(sale.createdAt)
-    await recomputeDailyRecord(
-      `${deletedDate.getFullYear()}-${String(deletedDate.getMonth() + 1).padStart(2, '0')}-${String(deletedDate.getDate()).padStart(2, '0')}`,
-      undefined,
-      sale.branchId
-    )
+    await recomputeDailyRecord(localDateKey(sale.createdAt), undefined, sale.branchId)
 
     await logAudit({
       userId: auth.user!.userId,
@@ -189,12 +183,14 @@ export async function DELETE(
       action: 'DELETE',
       entity: 'Sale',
       entityId: id,
-      details: `Deleted sale ${sale.invoiceNo} (GHS ${Number(sale.totalAmount).toFixed(2)}) and restored batch stock`,
+      details: `Deleted sale ${sale.invoiceNo} (GHS ${toNumber(sale.totalAmount).toFixed(2)}) and restored batch stock`,
       ipAddress: getClientIp(request),
     })
 
     return NextResponse.json({ message: 'Sale deleted successfully' })
   } catch (error) {
+    const mapped = parseErrorResponse(error, 'Failed to delete sale')
+    if (mapped) return mapped
     console.error('Sale delete error:', error)
     return NextResponse.json({ error: 'Failed to delete sale' }, { status: 500 })
   }

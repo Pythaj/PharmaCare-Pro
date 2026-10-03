@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireAdmin } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
+import { normalizeOptionalText } from '@/lib/product-input'
 
 interface ImportRow {
   name: string
@@ -39,7 +40,9 @@ export async function POST(request: NextRequest) {
       const errors: { row: number; name: string; message: string }[] = []
 
       items.forEach((row, index) => {
-        const name = typeof row.name === 'string' ? row.name.trim() : ''
+        // A stringified blank ("null"/"undefined") is an absent value, not a
+        // category called "null".
+        const name = normalizeOptionalText(row.name)
         if (!name) {
           errors.push({ row: index + 1, name: '', message: 'Category name is required' })
           return
@@ -48,8 +51,8 @@ export async function POST(request: NextRequest) {
 
       for (let i = 0; i < items.length; i++) {
         const row = items[i]
-        const name = typeof row.name === 'string' ? row.name.trim() : ''
-        const description = typeof row.description === 'string' ? row.description.trim() : undefined
+        const name = normalizeOptionalText(row.name)
+        const description = normalizeOptionalText(row.description) || undefined
 
         if (!name) continue // already recorded — skip processing
 

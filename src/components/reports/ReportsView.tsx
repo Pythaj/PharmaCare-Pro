@@ -12,6 +12,7 @@ import {
   Download,
   Package,
   ArrowUpRight,
+  ArrowDownRight,
   CalendarDays,
   Trophy,
   Users,
@@ -63,19 +64,38 @@ type Period = 'today' | 'this_week' | 'this_month' | 'this_year' | 'custom';
 const COLORS = ['#10b981', '#14b8a6', '#f59e0b', '#6b7280', '#8b5cf6', '#ec4899'];
 
 interface ReportStats {
+  /** NET of approved refunds — the figure these tiles headline. */
   totalRevenue: number;
   totalProfit: number;
+  /** What the tills collected before returns, carried so the net is auditable. */
+  grossRevenue: number;
+  grossProfit: number;
+  totalRefunds: number;
+  refundCount: number;
+  refundedProfit: number;
   totalSales: number;
   totalItemsSold: number;
   avgSaleValue: number;
-  bestProduct: { name: string; quantity: number; revenue: number } | null;
+  bestProduct: {
+    name: string;
+    quantity: number;
+    revenue: number;
+    refunds: number;
+    refundedQuantity: number;
+    netQuantity: number;
+    netRevenue: number;
+  } | null;
 }
 
+/** `revenue`/`profit` are GROSS here; `netRevenue`/`netProfit` are after refunds. */
 interface DailyRow {
   date: string;
   sales: number;
   revenue: number;
   profit: number;
+  refunds: number;
+  netRevenue: number;
+  netProfit: number;
   items: number;
 }
 
@@ -85,6 +105,9 @@ interface CashierRow {
   sales: number;
   revenue: number;
   profit: number;
+  refunds: number;
+  netRevenue: number;
+  netProfit: number;
 }
 
 interface MonthlyRow {
@@ -93,6 +116,9 @@ interface MonthlyRow {
   year: number;
   revenue: number;
   profit: number;
+  refunds: number;
+  netRevenue: number;
+  netProfit: number;
   sales: number;
   items: number;
 }
@@ -135,7 +161,17 @@ export default function ReportsView() {
   const [stats, setStats] = useState<ReportStats | null>(null);
   const [revenueData, setRevenueData] = useState<ChartDataPoint[]>([]);
   const [paymentData, setPaymentData] = useState<ChartDataPoint[]>([]);
-  const [topProducts, setTopProducts] = useState<{ name: string; quantity: number; revenue: number }[]>([]);
+  const [topProducts, setTopProducts] = useState<
+    {
+      name: string;
+      quantity: number;
+      revenue: number;
+      refunds: number;
+      refundedQuantity: number;
+      netQuantity: number;
+      netRevenue: number;
+    }[]
+  >([]);
   const [dailyBreakdown, setDailyBreakdown] = useState<DailyRow[]>([]);
   const [cashierPerformance, setCashierPerformance] = useState<CashierRow[]>([]);
   const [monthlySummary, setMonthlySummary] = useState<MonthlyRow[]>([]);
@@ -294,18 +330,27 @@ export default function ReportsView() {
   // while every figure in it was denominated in something else.
   const currencyCode = configuredCurrency();
 
+  // Every "best" judgement below is made on NET. A day that took 5,000 and handed
+  // 4,000 back was not the trading day worth celebrating, and a month compared on
+  // gross would crown whichever branch had the worst returns.
   const highestRevenueDay = dailyBreakdown.length > 0
-    ? dailyBreakdown.reduce((max, d) => (d.revenue > max.revenue ? d : max), dailyBreakdown[0])
+    ? dailyBreakdown.reduce(
+        (max, d) => (d.netRevenue > max.netRevenue ? d : max),
+        dailyBreakdown[0],
+      )
     : null;
 
   const topCashier = cashierPerformance.length > 0 ? cashierPerformance[0] : null;
 
   const bestMonth = monthlySummary.length > 0
-    ? monthlySummary.reduce((max, m) => (m.revenue > max.revenue ? m : max), monthlySummary[0])
+    ? monthlySummary.reduce(
+        (max, m) => (m.netRevenue > max.netRevenue ? m : max),
+        monthlySummary[0],
+      )
     : null;
 
   const maxMonthRevenue = monthlySummary.length > 0
-    ? Math.max(...monthlySummary.map((m) => m.revenue))
+    ? Math.max(...monthlySummary.map((m) => m.netRevenue))
     : 1;
 
   const dailyTotals = dailyBreakdown.reduce(
@@ -313,9 +358,12 @@ export default function ReportsView() {
       sales: acc.sales + d.sales,
       revenue: acc.revenue + d.revenue,
       profit: acc.profit + d.profit,
+      refunds: acc.refunds + d.refunds,
+      netRevenue: acc.netRevenue + d.netRevenue,
+      netProfit: acc.netProfit + d.netProfit,
       items: acc.items + d.items,
     }),
-    { sales: 0, revenue: 0, profit: 0, items: 0 },
+    { sales: 0, revenue: 0, profit: 0, refunds: 0, netRevenue: 0, netProfit: 0, items: 0 },
   );
 
   const profitMargin =
@@ -339,6 +387,7 @@ export default function ReportsView() {
   const buildCSVContent = (): string => {
     const s = stats ?? {
       totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+      grossRevenue: 0, grossProfit: 0, totalRefunds: 0, refundCount: 0, refundedProfit: 0,
     };
     const lines: string[] = [];
     lines.push(`${appName} - Sales Analytics Report`);
@@ -347,31 +396,39 @@ export default function ReportsView() {
     lines.push(`Generated,${new Date().toLocaleString()}`);
     lines.push('');
     lines.push('--- Summary ---');
-    lines.push(`Total Revenue,${s.totalRevenue.toFixed(2)}`);
-    lines.push(`Total Profit,${s.totalProfit.toFixed(2)}`);
+    // Net first, gross and refunds immediately after: a spreadsheet that
+    // exported only net would not reconcile against the register, and one that
+    // exported only gross would not reconcile against the report on screen.
+    lines.push(`Net Revenue,${s.totalRevenue.toFixed(2)}`);
+    lines.push(`Gross Revenue,${s.grossRevenue.toFixed(2)}`);
+    lines.push(`Refunds,${s.totalRefunds.toFixed(2)}`);
+    lines.push(`Refund Count,${s.refundCount}`);
+    lines.push(`Net Profit,${s.totalProfit.toFixed(2)}`);
+    lines.push(`Gross Profit,${s.grossProfit.toFixed(2)}`);
+    lines.push(`Refunded Profit,${s.refundedProfit.toFixed(2)}`);
     lines.push(`Profit Margin %,${profitMargin}`);
     lines.push(`Total Transactions,${s.totalSales}`);
     lines.push(`Total Items Sold,${s.totalItemsSold}`);
     lines.push(`Avg Transaction Value,${s.avgSaleValue.toFixed(2)}`);
-    lines.push(`Best Selling Product,"${s.bestProduct?.name ?? 'N/A'} (${s.bestProduct?.quantity ?? 0} units)"`);
+    lines.push(`Best Selling Product,"${s.bestProduct?.name ?? 'N/A'} (${s.bestProduct?.netQuantity ?? 0} units net)"`);
     lines.push('');
 
     if (dailyBreakdown.length > 0) {
       lines.push('--- Daily Sales Breakdown ---');
-      lines.push('Date,Transactions,Revenue (' + currencyCode + '),Profit (' + currencyCode + '),Items Sold,Avg Transaction Value');
+      lines.push('Date,Transactions,Gross Revenue,Refunds,Net Revenue,Net Profit,Items Sold,Avg Transaction Value');
       for (const d of dailyBreakdown) {
-        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
-        lines.push(`${d.date},${d.sales},${d.revenue.toFixed(2)},${d.profit.toFixed(2)},${d.items},${avg}`);
+        const avg = d.sales > 0 ? (d.netRevenue / d.sales).toFixed(2) : '0.00';
+        lines.push(`${d.date},${d.sales},${d.revenue.toFixed(2)},${d.refunds.toFixed(2)},${d.netRevenue.toFixed(2)},${d.netProfit.toFixed(2)},${d.items},${avg}`);
       }
       lines.push('');
     }
 
     if (cashierPerformance.length > 0) {
       lines.push('--- Staff Performance ---');
-      lines.push('Staff Name,Transactions,Revenue (' + currencyCode + '),Profit (' + currencyCode + '),Avg Sale Value');
+      lines.push('Staff Name,Transactions,Gross Revenue,Refunds,Net Revenue,Net Profit,Avg Sale Value');
       for (const c of cashierPerformance) {
-        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
-        lines.push(`"${c.name}",${c.sales},${c.revenue.toFixed(2)},${c.profit.toFixed(2)},${avg}`);
+        const avg = c.sales > 0 ? (c.netRevenue / c.sales).toFixed(2) : '0.00';
+        lines.push(`"${c.name}",${c.sales},${c.revenue.toFixed(2)},${c.refunds.toFixed(2)},${c.netRevenue.toFixed(2)},${c.netProfit.toFixed(2)},${avg}`);
       }
       lines.push('');
     }
@@ -396,9 +453,9 @@ export default function ReportsView() {
 
     if (topProducts.length > 0) {
       lines.push('--- Top Selling Products ---');
-      lines.push('Rank,Product Name,Quantity Sold,Revenue');
+      lines.push('Rank,Product Name,Quantity Sold,Returned,Net Quantity,Gross Revenue,Refunds,Net Revenue');
       topProducts.forEach((p, i) => {
-        lines.push(`${i + 1},"${p.name.replace(/"/g, '""')}",${p.quantity},${p.revenue.toFixed(2)}`);
+        lines.push(`${i + 1},"${p.name.replace(/"/g, '""')}",${p.quantity},${p.refundedQuantity},${p.netQuantity},${p.revenue.toFixed(2)},${p.refunds.toFixed(2)},${p.netRevenue.toFixed(2)}`);
       });
     }
 
@@ -414,6 +471,7 @@ export default function ReportsView() {
   const handleExportExcel = () => {
     const s = stats ?? {
       totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+      grossRevenue: 0, grossProfit: 0, totalRefunds: 0, refundCount: 0, refundedProfit: 0,
     };
     const lines: string[] = [];
 
@@ -423,28 +481,28 @@ export default function ReportsView() {
     lines.push(`Generated:\t${new Date().toLocaleString()}`);
     lines.push('');
     lines.push('Summary');
-    lines.push('Total Revenue\tTotal Profit\tProfit Margin %\tTransactions\tItems Sold\tAvg Transaction Value\tBest Selling Product');
+    lines.push('Net Revenue\tGross Revenue\tRefunds\tNet Profit\tGross Profit\tProfit Margin %\tTransactions\tItems Sold\tAvg Transaction Value\tBest Selling Product');
     lines.push(
-      `${s.totalRevenue.toFixed(2)}\t${s.totalProfit.toFixed(2)}\t${profitMargin}%\t${s.totalSales}\t${s.totalItemsSold}\t${s.avgSaleValue.toFixed(2)}\t${s.bestProduct?.name ?? 'N/A'}`
+      `${s.totalRevenue.toFixed(2)}\t${s.grossRevenue.toFixed(2)}\t${s.totalRefunds.toFixed(2)}\t${s.totalProfit.toFixed(2)}\t${s.grossProfit.toFixed(2)}\t${profitMargin}%\t${s.totalSales}\t${s.totalItemsSold}\t${s.avgSaleValue.toFixed(2)}\t${s.bestProduct?.name ?? 'N/A'}`
     );
     lines.push('');
 
     if (dailyBreakdown.length > 0) {
       lines.push('Daily Sales Breakdown');
-      lines.push('Date\\tTransactions\\tRevenue (' + currencyCode + ')\\tProfit (' + currencyCode + ')\\tItems Sold\\tAvg Transaction Value');
+      lines.push('Date\\tTransactions\\tGross Revenue\\tRefunds\\tNet Revenue\\tNet Profit\\tItems Sold\\tAvg Transaction Value');
       for (const d of dailyBreakdown) {
-        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
-        lines.push(`${d.date}\t${d.sales}\t${d.revenue.toFixed(2)}\t${d.profit.toFixed(2)}\t${d.items}\t${avg}`);
+        const avg = d.sales > 0 ? (d.netRevenue / d.sales).toFixed(2) : '0.00';
+        lines.push(`${d.date}\t${d.sales}\t${d.revenue.toFixed(2)}\t${d.refunds.toFixed(2)}\t${d.netRevenue.toFixed(2)}\t${d.netProfit.toFixed(2)}\t${d.items}\t${avg}`);
       }
       lines.push('');
     }
 
     if (cashierPerformance.length > 0) {
       lines.push('Staff Performance');
-      lines.push('Staff Name\\tTransactions\\tRevenue (' + currencyCode + ')\\tProfit (' + currencyCode + ')\\tAvg Sale Value');
+      lines.push('Staff Name\\tTransactions\\tGross Revenue\\tRefunds\\tNet Revenue\\tNet Profit\\tAvg Sale Value');
       for (const c of cashierPerformance) {
-        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
-        lines.push(`${c.name}\t${c.sales}\t${c.revenue.toFixed(2)}\t${c.profit.toFixed(2)}\t${avg}`);
+        const avg = c.sales > 0 ? (c.netRevenue / c.sales).toFixed(2) : '0.00';
+        lines.push(`${c.name}\t${c.sales}\t${c.revenue.toFixed(2)}\t${c.refunds.toFixed(2)}\t${c.netRevenue.toFixed(2)}\t${c.netProfit.toFixed(2)}\t${avg}`);
       }
       lines.push('');
     }
@@ -469,9 +527,9 @@ export default function ReportsView() {
 
     if (topProducts.length > 0) {
       lines.push('Top Selling Products');
-      lines.push('Rank\tProduct Name\tQuantity Sold\tRevenue');
+      lines.push('Rank\tProduct Name\tQuantity Sold\tReturned\tNet Quantity\tGross Revenue\tRefunds\tNet Revenue');
       topProducts.forEach((p, i) => {
-        lines.push(`${i + 1}\t${p.name}\t${p.quantity}\t${p.revenue.toFixed(2)}`);
+        lines.push(`${i + 1}\t${p.name}\t${p.quantity}\t${p.refundedQuantity}\t${p.netQuantity}\t${p.revenue.toFixed(2)}\t${p.refunds.toFixed(2)}\t${p.netRevenue.toFixed(2)}`);
       });
     }
 
@@ -482,6 +540,7 @@ export default function ReportsView() {
   const handleExportPDF = () => {
     const s = stats ?? {
       totalRevenue: 0, totalProfit: 0, totalSales: 0, totalItemsSold: 0, avgSaleValue: 0, bestProduct: null,
+      grossRevenue: 0, grossProfit: 0, totalRefunds: 0, refundCount: 0, refundedProfit: 0,
     };
 
     const revenueRows = revenueData
@@ -493,20 +552,20 @@ export default function ReportsView() {
       .join('');
 
     const productRows = topProducts
-      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${money(p.revenue)}</td></tr>`)
+      .map((p, i) => `<tr><td>${i + 1}</td><td>${p.name}</td><td class="num">${p.quantity}</td><td class="num">${p.refundedQuantity}</td><td class="num">${p.netQuantity}</td><td class="num">${money(p.revenue)}</td><td class="num">${money(p.refunds)}</td><td class="num">${money(p.netRevenue)}</td></tr>`)
       .join('');
 
     const dailyRows = dailyBreakdown
       .map((d) => {
-        const avg = d.sales > 0 ? (d.revenue / d.sales).toFixed(2) : '0.00';
-        return `<tr><td>${d.date}</td><td class="num">${d.sales}</td><td class="num">${money(d.revenue)}</td><td class="num">${money(d.profit)}</td><td class="num">${d.items}</td><td class="num">${money(Number(avg))}</td></tr>`;
+        const avg = d.sales > 0 ? (d.netRevenue / d.sales).toFixed(2) : '0.00';
+        return `<tr><td>${d.date}</td><td class="num">${d.sales}</td><td class="num">${money(d.revenue)}</td><td class="num">${money(d.refunds)}</td><td class="num">${money(d.netRevenue)}</td><td class="num">${money(d.netProfit)}</td><td class="num">${d.items}</td><td class="num">${money(Number(avg))}</td></tr>`;
       })
       .join('');
 
     const cashierRows = cashierPerformance
       .map((c) => {
-        const avg = c.sales > 0 ? (c.revenue / c.sales).toFixed(2) : '0.00';
-        return `<tr><td>${c.name}</td><td class="num">${c.sales}</td><td class="num">${money(c.revenue)}</td><td class="num">${money(c.profit)}</td><td class="num">${money(Number(avg))}</td></tr>`;
+        const avg = c.sales > 0 ? (c.netRevenue / c.sales).toFixed(2) : '0.00';
+        return `<tr><td>${c.name}</td><td class="num">${c.sales}</td><td class="num">${money(c.revenue)}</td><td class="num">${money(c.refunds)}</td><td class="num">${money(c.netRevenue)}</td><td class="num">${money(c.netProfit)}</td><td class="num">${money(Number(avg))}</td></tr>`;
       })
       .join('');
 
@@ -524,6 +583,7 @@ export default function ReportsView() {
   .stat-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; text-align: center; }
   .stat-card .label { font-size: 11px; color: #6b7280; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
   .stat-card .value { font-size: 18px; font-weight: 700; color: #111827; }
+  .stat-card .sub { font-size: 10px; color: #6b7280; margin-top: 3px; }
   .stat-card.profit .value { color: #047857; }
   .stat-card.margin .value { color: #14b8a6; }
   h2 { font-size: 15px; color: #111827; margin: 28px 0 12px; padding-bottom: 6px; border-bottom: 2px solid #10b981; }
@@ -542,12 +602,14 @@ export default function ReportsView() {
 
   <div class="stats-grid">
     <div class="stat-card">
-      <div class="label">Total Revenue</div>
+      <div class="label">Net Revenue</div>
       <div class="value">${money(s.totalRevenue)}</div>
+      <div class="sub">${money(s.grossRevenue)} gross &minus; ${money(s.totalRefunds)} refunded</div>
     </div>
     <div class="stat-card profit">
-      <div class="label">Total Profit</div>
+      <div class="label">Net Profit</div>
       <div class="value">${money(s.totalProfit)}</div>
+      <div class="sub">${money(s.grossProfit)} gross &minus; ${money(s.refundedProfit)} reversed</div>
     </div>
     <div class="stat-card margin">
       <div class="label">Profit Margin</div>
@@ -570,14 +632,14 @@ export default function ReportsView() {
   ${dailyBreakdown.length > 0 ? `
   <h2>Daily Sales Breakdown</h2>
   <table>
-    <thead><tr><th>Date</th><th class="num">Txns</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num">Items</th><th class="num">Avg Txn</th></tr></thead>
+    <thead><tr><th>Date</th><th class="num">Txns</th><th class="num">Gross Revenue</th><th class="num">Refunds</th><th class="num">Net Revenue</th><th class="num">Net Profit</th><th class="num">Items</th><th class="num">Avg Txn</th></tr></thead>
     <tbody>${dailyRows}</tbody>
   </table>` : ''}
 
   ${cashierPerformance.length > 0 ? `
   <h2>Staff Performance</h2>
   <table>
-    <thead><tr><th>Staff Name</th><th class="num">Txns</th><th class="num">Revenue</th><th class="num">Profit</th><th class="num">Avg Sale</th></tr></thead>
+    <thead><tr><th>Staff Name</th><th class="num">Txns</th><th class="num">Gross Revenue</th><th class="num">Refunds</th><th class="num">Net Revenue</th><th class="num">Net Profit</th><th class="num">Avg Sale</th></tr></thead>
     <tbody>${cashierRows}</tbody>
   </table>` : ''}
 
@@ -598,7 +660,7 @@ export default function ReportsView() {
   ${topProducts.length > 0 ? `
   <h2>Top Selling Products</h2>
   <table>
-    <thead><tr><th>#</th><th>Product Name</th><th class="num">Qty Sold</th><th class="num">Revenue</th></tr></thead>
+    <thead><tr><th>#</th><th>Product Name</th><th class="num">Qty Sold</th><th class="num">Returned</th><th class="num">Net Qty</th><th class="num">Gross Revenue</th><th class="num">Refunds</th><th class="num">Net Revenue</th></tr></thead>
     <tbody>${productRows}</tbody>
   </table>` : ''}
 
@@ -622,8 +684,11 @@ export default function ReportsView() {
   const revenueConfig = { revenue: { label: 'Revenue', color: '#10b981' } };
   const pieConfig = { value: { label: 'Amount' } };
   const monthBarConfig = {
-    revenue: { label: 'Revenue', color: '#10b981' },
-    profit: { label: 'Profit', color: '#14b8a6' },
+    // Labelled by their net names because that is what the bars plot; a legend
+    // reading "Revenue" over net bars is how a reader concludes the chart and
+    // the tiles disagree.
+    netRevenue: { label: 'Net Revenue', color: '#10b981' },
+    netProfit: { label: 'Net Profit', color: '#14b8a6' },
   };
 
   // ─── Render ─────────────────────────────────────────────────────
@@ -728,31 +793,48 @@ export default function ReportsView() {
           ))
         ) : (
           <>
-            {/* Total Revenue */}
+            {/* Net Revenue. Gross alone would overstate the business by exactly the refunds
+                it hides, and net alone would leave the reader unable to explain
+                the gap against the register's own takings figure. */}
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="p-1.5 rounded-md bg-emerald-100">
                     <DollarSign className="h-3.5 w-3.5 text-emerald-600" />
                   </div>
-                  <p className="text-xs text-muted-foreground font-medium">Total Revenue</p>
+                  <p className="text-xs text-muted-foreground font-medium">Net Revenue</p>
                 </div>
                 <p className="text-lg font-bold">{money(stats?.totalRevenue ?? 0)}</p>
                 <div className="flex items-center gap-1 mt-1">
-                  <ArrowUpRight className="h-3 w-3 text-emerald-500" />
-                  <span className="text-[11px] text-emerald-600 font-medium">Sales</span>
+                  {stats && stats.totalRefunds > 0 ? (
+                    <>
+                      <ArrowDownRight className="h-3 w-3 text-amber-500" />
+                      <span className="text-[11px] text-amber-600 font-medium">
+                        {money(stats.totalRefunds)} refunded ({stats.refundCount})
+                      </span>
+                      <span className="text-[11px] text-muted-foreground">
+                        of {money(stats.grossRevenue)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <ArrowUpRight className="h-3 w-3 text-emerald-500" />
+                      <span className="text-[11px] text-emerald-600 font-medium">Sales</span>
+                    </>
+                  )}
                 </div>
               </CardContent>
             </Card>
 
-            {/* Total Profit */}
+            {/* Net Profit — margin is measured against net revenue, so the two
+                numbers on screen describe the same money. */}
             <Card>
               <CardContent className="p-4">
                 <div className="flex items-center gap-2 mb-1">
                   <div className="p-1.5 rounded-md bg-teal-100">
                     <TrendingUp className="h-3.5 w-3.5 text-teal-600" />
                   </div>
-                  <p className="text-xs text-muted-foreground font-medium">Total Profit</p>
+                  <p className="text-xs text-muted-foreground font-medium">Net Profit</p>
                 </div>
                 <p className="text-lg font-bold text-teal-600">{money(stats?.totalProfit ?? 0)}</p>
                 <div className="flex items-center gap-1 mt-1">
@@ -826,7 +908,12 @@ export default function ReportsView() {
                 <div className="flex items-center gap-1 mt-1">
                   <ArrowUpRight className="h-3 w-3 text-emerald-500" />
                   <span className="text-[11px] text-emerald-600 font-medium">
-                    {stats?.bestProduct?.quantity ?? 0} units
+                    {stats?.bestProduct?.netQuantity ?? 0} units net
+                    {(stats?.bestProduct?.refundedQuantity ?? 0) > 0 ? (
+                      <span className="text-muted-foreground font-normal">
+                        {' '}({stats?.bestProduct?.quantity ?? 0} sold, {stats?.bestProduct?.refundedQuantity ?? 0} back)
+                      </span>
+                    ) : null}
                   </span>
                 </div>
               </CardContent>
@@ -925,7 +1012,7 @@ export default function ReportsView() {
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
               {monthlySummary.map((m) => {
                 const isBest = bestMonth && m.month === bestMonth.month && m.year === bestMonth.year;
-                const barWidth = maxMonthRevenue > 0 ? (m.revenue / maxMonthRevenue) * 100 : 0;
+                const barWidth = maxMonthRevenue > 0 ? (m.netRevenue / maxMonthRevenue) * 100 : 0;
                 return (
                   <Card
                     key={`${m.year}-${m.monthIndex}`}
@@ -940,10 +1027,16 @@ export default function ReportsView() {
                           </Badge>
                         )}
                       </div>
-                      <p className="text-lg font-bold">{money(m.revenue)}</p>
+                      <p className="text-lg font-bold">{money(m.netRevenue)}</p>
                       <p className="text-xs text-muted-foreground">
-                        Profit: <span className="text-teal-600 font-medium">{money(m.profit)}</span>
+                        Net profit:{' '}
+                        <span className="text-teal-600 font-medium">{money(m.netProfit)}</span>
                       </p>
+                      {m.refunds > 0 ? (
+                        <p className="text-xs text-muted-foreground">
+                          {money(m.refunds)} refunded of {money(m.revenue)}
+                        </p>
+                      ) : null}
                       <p className="text-xs text-muted-foreground">
                         {m.sales} sales · {m.items} items
                       </p>
@@ -969,8 +1062,8 @@ export default function ReportsView() {
                     <XAxis dataKey="month" fontSize={11} tickLine={false} axisLine={false} minTickGap={10} tickMargin={8} />
                     <YAxis fontSize={11} tickLine={false} axisLine={false} tickMargin={8} width={45} />
                     <ChartTooltip content={<ChartTooltipContent />} />
-                    <Bar dataKey="revenue" fill="var(--color-revenue)" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="profit" fill="var(--color-profit)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="netRevenue" fill="var(--color-revenue)" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="netProfit" fill="var(--color-profit)" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ChartContainer>
               </div>
@@ -1018,7 +1111,10 @@ export default function ReportsView() {
                   <>
                     {dailyBreakdown.map((d) => {
                       const isHighest = highestRevenueDay?.date === d.date;
-                      const avgTxn = d.sales > 0 ? d.revenue / d.sales : 0;
+                      // Average of what the day kept, over the day's own sales —
+                      // gross revenue divided by sales would describe money that
+                      // was later handed back.
+                      const avgTxn = d.sales > 0 ? d.netRevenue / d.sales : 0;
                       return (
                         <TableRow
                           key={d.date}
@@ -1033,8 +1129,17 @@ export default function ReportsView() {
                             </div>
                           </TableCell>
                           <TableCell className="text-right font-mono">{d.sales}</TableCell>
-                          <TableCell className="text-right font-medium">{money(d.revenue)}</TableCell>
-                          <TableCell className="text-right text-teal-600 font-medium">{money(d.profit)}</TableCell>
+                          <TableCell className="text-right font-medium">
+                            {money(d.netRevenue)}
+                            {d.refunds > 0 ? (
+                              <div className="text-[10px] font-normal text-muted-foreground">
+                                {money(d.refunds)} refunded
+                              </div>
+                            ) : null}
+                          </TableCell>
+                          <TableCell className="text-right text-teal-600 font-medium">
+                            {money(d.netProfit)}
+                          </TableCell>
                           <TableCell className="text-right font-mono">{d.items}</TableCell>
                           <TableCell className="text-right font-mono text-muted-foreground">{money(avgTxn)}</TableCell>
                         </TableRow>
@@ -1044,12 +1149,21 @@ export default function ReportsView() {
                     <TableRow className="bg-gray-50 font-semibold border-t-2 border-gray-200">
                       <TableCell>Totals</TableCell>
                       <TableCell className="text-right font-mono">{dailyTotals.sales}</TableCell>
-                      <TableCell className="text-right">{money(dailyTotals.revenue)}</TableCell>
-                      <TableCell className="text-right text-teal-600">{money(dailyTotals.profit)}</TableCell>
+                      <TableCell className="text-right">
+                        {money(dailyTotals.netRevenue)}
+                        {dailyTotals.refunds > 0 ? (
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            {money(dailyTotals.refunds)} refunded
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-right text-teal-600">
+                        {money(dailyTotals.netProfit)}
+                      </TableCell>
                       <TableCell className="text-right font-mono">{dailyTotals.items}</TableCell>
                       <TableCell className="text-right font-mono">
                         {dailyTotals.sales > 0
-                          ? money(dailyTotals.revenue / dailyTotals.sales)
+                          ? money(dailyTotals.netRevenue / dailyTotals.sales)
                           : money(0)}
                       </TableCell>
                     </TableRow>
@@ -1087,15 +1201,15 @@ export default function ReportsView() {
                 <TableRow>
                   <TableHead>Staff Member</TableHead>
                   <TableHead className="text-right">Transactions</TableHead>
-                  <TableHead className="text-right">Revenue ({currencyCode})</TableHead>
-                  <TableHead className="text-right">Profit ({currencyCode})</TableHead>
+                  <TableHead className="text-right">Net Revenue ({currencyCode})</TableHead>
+                  <TableHead className="text-right">Net Profit ({currencyCode})</TableHead>
                   <TableHead className="text-right">Avg. Sale Value</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {cashierPerformance.map((c) => {
                   const isTop = topCashier?.userId === c.userId;
-                  const avgSale = c.sales > 0 ? c.revenue / c.sales : 0;
+                  const avgSale = c.sales > 0 ? c.netRevenue / c.sales : 0;
                   return (
                     <TableRow key={c.userId} className={isTop ? 'bg-emerald-50 hover:bg-emerald-100' : ''}>
                       <TableCell>
@@ -1118,8 +1232,15 @@ export default function ReportsView() {
                         </div>
                       </TableCell>
                       <TableCell className="text-right font-mono">{c.sales}</TableCell>
-                      <TableCell className="text-right font-medium">{money(c.revenue)}</TableCell>
-                      <TableCell className="text-right text-teal-600 font-medium">{money(c.profit)}</TableCell>
+                      <TableCell className="text-right font-medium">
+                        {money(c.netRevenue)}
+                        {c.refunds > 0 ? (
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            {money(c.refunds)} refunded
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-right text-teal-600 font-medium">{money(c.netProfit)}</TableCell>
                       <TableCell className="text-right font-mono text-muted-foreground">{money(avgSale)}</TableCell>
                     </TableRow>
                   );
@@ -1179,8 +1300,24 @@ export default function ReportsView() {
                           {product.name}
                         </div>
                       </TableCell>
-                      <TableCell className="text-right font-mono">{product.quantity}</TableCell>
-                      <TableCell className="text-right font-medium">{money(product.revenue)}</TableCell>
+                      <TableCell className="text-right font-mono">
+                        {/* Net of returns: the list is "what earned its place",
+                            and a line that sells 400 and returns 380 has not. */}
+                        {product.netQuantity}
+                        {product.refundedQuantity > 0 ? (
+                          <div className="text-[10px] text-muted-foreground">
+                            {product.refundedQuantity} back
+                          </div>
+                        ) : null}
+                      </TableCell>
+                      <TableCell className="text-right font-medium">
+                        {money(product.netRevenue)}
+                        {product.refunds > 0 ? (
+                          <div className="text-[10px] font-normal text-muted-foreground">
+                            of {money(product.revenue)}
+                          </div>
+                        ) : null}
+                      </TableCell>
                     </TableRow>
                   ))
                 ) : (

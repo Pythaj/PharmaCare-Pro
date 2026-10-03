@@ -22,6 +22,7 @@
  * and is still checked against what the user is allowed to see.
  */
 
+import { ValidationError } from '@/lib/api-error';
 import type { UserRole } from '@/lib/require-auth';
 
 /** Sentinel used by the client and the API to mean "no branch filter". */
@@ -162,17 +163,29 @@ export function branchRelationWhere(
 }
 
 /**
- * The branch a NEW record must be stamped with. Never null for a write: a sale
- * with no branch cannot be reported on, so an unconfigured salesperson must be
- * stopped here rather than produce unattributable money.
+ * The branch a NEW record must be stamped with.
  *
- * @returns the branch id, or null when the caller must reject the write.
+ * Never null for a write, and it throws rather than returning null so the rule
+ * cannot be forgotten: this function used to be a plain accessor returning
+ * `string | null`, and every route ignored it and hand-rolled
+ * `if (!branchId) return 400` instead. A "safety net" nobody calls is worse
+ * than none, because the next reader assumes the invariant is enforced
+ * centrally when in fact each route is on its own.
+ *
+ * A sale, batch, register or return with no branch cannot be reported on, so an
+ * admin parked in the consolidated "all branches" view must be stopped here
+ * rather than produce unattributable stock or money. Every write route that
+ * touches stock, money or a till calls this first.
+ *
+ * @param message What the operator should do about it, e.g. "Select a branch
+ *   before recording a sale". Surfaced verbatim as a 400.
+ * @throws ValidationError (HTTP 400) when the session has no single branch.
  */
-export function branchIdForWrite(scope: BranchScope): string | null {
+export function requireBranchForWrite(scope: BranchScope, message: string): string {
   // Admins may transact in a specific branch but not in "all branches" — money
   // must always belong to exactly one till.
   if (scope.branchId) return scope.branchId;
-  return null;
+  throw new ValidationError(message);
 }
 
 /** Human label for the UI, e.g. "Main Branch" or "All branches". */

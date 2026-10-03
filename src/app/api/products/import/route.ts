@@ -4,6 +4,9 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding'
+import { normalizeOptionalText } from '@/lib/product-input'
+import { requireBranchForWrite } from '@/lib/branches'
+import { parseErrorResponse } from '@/lib/api-error'
 
 /**
  * Case-insensitive product lookup that behaves the same on SQLite and
@@ -69,13 +72,10 @@ export async function POST(request: NextRequest) {
     // Imported batches become real stock, so they must land in a specific
     // branch. There is no sensible "import into all branches" — that would
     // create the same batch in every shop and multiply the stock.
-    const branchId = auth.scope!.branchId
-    if (!branchId) {
-      return NextResponse.json(
-        { error: 'Select the branch that is receiving this stock before importing' },
-        { status: 400 }
-      )
-    }
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select the branch that is receiving this stock before importing'
+    )
 
     const body = await request.json().catch(() => ({}))
     const items: ImportRow[] = Array.isArray(body.items) ? body.items : []
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
 
       for (let i = 0; i < items.length; i++) {
         const row = items[i]
-        const name = typeof row.name === 'string' ? row.name.trim() : ''
+        const name = normalizeOptionalText(row.name)
 
         if (!name) {
           errors.push({ row: i + 1, name: '', message: 'Product name is required' })
@@ -118,8 +118,13 @@ export async function POST(request: NextRequest) {
 
           // Resolve category by name — auto-creating it when the row names a
           // category that does not exist yet (keeps imports self-contained).
+          //
+          // An empty Category cell that reached us as the TEXT "null" (or
+          // "undefined") must not become a category named "null": that created a
+          // real category row and filed genuine drugs under it, where it then
+          // appeared in the category filter as if a pharmacist had created it.
           let categoryId: string | null = null
-          const categoryName = typeof row.category === 'string' ? row.category.trim() : ''
+          const categoryName = normalizeOptionalText(row.category)
           if (categoryName) {
             const existingCategory = await tx.category.findFirst({ where: { name: categoryName } })
             if (existingCategory) {
@@ -132,15 +137,9 @@ export async function POST(request: NextRequest) {
 
           const data = {
             name,
-            genericName:
-              typeof row.genericName === 'string' && row.genericName.trim()
-                ? row.genericName.trim()
-                : null,
+            genericName: normalizeOptionalText(row.genericName) || null,
             categoryId,
-            description:
-              typeof row.description === 'string' && row.description.trim()
-                ? row.description.trim()
-                : null,
+            description: normalizeOptionalText(row.description) || null,
             unit,
             reorderLevel,
             defaultCostPrice,
@@ -264,6 +263,8 @@ export async function POST(request: NextRequest) {
       total: items.length,
     })
   } catch (error) {
+    const mapped = parseErrorResponse(error, 'Failed to import products')
+    if (mapped) return mapped
     console.error('Product bulk import error:', error)
     return NextResponse.json({ error: 'Failed to import products' }, { status: 500 })
   }

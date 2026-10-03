@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, hashPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { setAuthCookie } from '@/lib/auth-cookie';
 import { validateNewPassword } from '@/lib/password-policy';
 import { normalizeEmail } from '@/lib/email';
 
@@ -84,18 +85,14 @@ export async function POST(request: NextRequest) {
       userId: updated.id,
       email: updated.email,
       role: updated.role,
+      // The session's selected branch, so completing setup cannot drop an admin
+      // back to the whole-company view.
+      branchId: auth.user!.activeBranchId,
     });
 
     // The token stays in the HttpOnly cookie only — never in the response body.
     const response = NextResponse.json({ user: updated }, { status: 200 });
-    const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
-    response.cookies.set('auth_token', token, {
-      httpOnly: true,
-      secure: secureCookie,
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/',
-    });
+    setAuthCookie(response, token);
 
     return response;
   } catch (error) {

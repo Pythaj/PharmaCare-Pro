@@ -87,54 +87,13 @@ export function classifyProductExpiry(
   return result;
 }
 
-export interface StockCounts {
-  totalItems: number;
-  itemsInStock: number;
-  outOfStockCount: number;
-  lowStockCount: number;
-}
-
-export interface ExpiryCounts {
-  /** Batches already past their expiry date and still holding stock. */
-  expiredCount: number;
-  /** Batches expiring within EXPIRY_WARNING_DAYS and still holding stock. */
-  expiringSoonCount: number;
-}
-
-/**
- * Counts products and batches from one pass over already-fetched data.
- * `batches` are expected to be the product's batches that still hold stock
- * (quantity > 0) — expired/depleted batches hold no stock and are not alerts.
+/*
+ * A former `countStockAndExpiry` bulk helper was removed from this module. It had
+ * no callers, and it classified expiry through `classifyBatchExpiry` WITHOUT the
+ * `warningDays` argument, so it silently answered with the 90-day fallback no
+ * matter what the owner had configured. Keeping an unused copy of the rule that
+ * disagrees with the live one is worse than having no copy: the next caller would
+ * have picked it up and reintroduced two different alert counts for one pharmacy.
+ * Endpoints classify through `classifyStock`/`classifyBatchExpiry` with
+ * `getExpiryAlertDays()` threaded in.
  */
-export function countStockAndExpiry(
-  products: { reorderLevel: number; batches: { quantity: number; expiryDate: Date | string }[] }[],
-  now: Date = new Date()
-): StockCounts & ExpiryCounts {
-  const counts: StockCounts & ExpiryCounts = {
-    totalItems: 0,
-    itemsInStock: 0,
-    outOfStockCount: 0,
-    lowStockCount: 0,
-    expiredCount: 0,
-    expiringSoonCount: 0,
-  };
-
-  for (const product of products) {
-    counts.totalItems += 1;
-
-    const totalStock = product.batches.reduce((sum, b) => sum + b.quantity, 0);
-    const status = classifyStock(totalStock, product.reorderLevel);
-    if (status === 'out_of_stock') counts.outOfStockCount += 1;
-    else if (status === 'low_stock') counts.lowStockCount += 1;
-    if (totalStock > 0) counts.itemsInStock += 1;
-
-    for (const batch of product.batches) {
-      if (batch.quantity <= 0) continue;
-      const expiry = classifyBatchExpiry(batch.expiryDate, now);
-      if (expiry === 'expired') counts.expiredCount += 1;
-      else if (expiry === 'expiring_soon') counts.expiringSoonCount += 1;
-    }
-  }
-
-  return counts;
-}

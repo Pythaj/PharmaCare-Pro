@@ -79,6 +79,24 @@ async function main() {
   const dryRun = process.argv.includes('--dry-run');
 
   const db = new PrismaClient({ datasources: { db: { url } } });
+
+  // Batches are owned by exactly one branch and `branchId` is NOT NULL, so the
+  // stock this script loads has to land somewhere specific. Required rather than
+  // defaulted: silently picking the first branch would file a client's opening
+  // stock under another branch's shelf, which is precisely the mistake the
+  // branchId column exists to prevent.
+  const branchCode = String(process.env.TARGET_BRANCH_CODE ?? '').trim();
+  if (!branchCode) {
+    throw new Error(
+      'TARGET_BRANCH_CODE is required — the Branch.code that should own the imported stock batches.'
+    );
+  }
+  const branch = await db.branch.findUnique({ where: { code: branchCode } });
+  if (!branch) {
+    const known = (await db.branch.findMany({ select: { code: true } })).map((b) => b.code).join(', ');
+    throw new Error(`No branch with code "${branchCode}". Existing codes: ${known || '(none)'}`);
+  }
+
   const products = loadClientProducts();
 
   try {
@@ -154,10 +172,23 @@ async function main() {
       }
 
       // Upsert the starting batch with the client's on-hand stock.
+      //
+      // The compound key is (productId, batchNumber, branchId): the same
+      // supplier delivery can legitimately exist in two branches, so it is part
+      // of the batch's identity. The old `productId_batchNumber` selector no
+      // longer exists in the schema, and omitting branchId trips the NOT NULL
+      // constraint — either way this used to throw on the first product.
       await db.batch.upsert({
-        where: { productId_batchNumber: { productId, batchNumber: DEFAULT_BATCH } },
+        where: {
+          productId_batchNumber_branchId: {
+            productId,
+            batchNumber: DEFAULT_BATCH,
+            branchId: branch.id,
+          },
+        },
         create: {
           productId,
+          branchId: branch.id,
           batchNumber: DEFAULT_BATCH,
           quantity: qty,
           costPrice: cost,

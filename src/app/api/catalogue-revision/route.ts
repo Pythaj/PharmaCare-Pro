@@ -41,6 +41,13 @@ import { requireBranchScope } from '@/lib/require-auth'
  *   batches.max(updatedAt) - a batch's price or quantity changing WITHOUT the
  *     product row changing: receiving a transfer, or an Edit Drug that restocks
  *     a batch in place. This is the reason the token reads batches as well.
+ *   branchProductSettings.max(updatedAt) - a branch-specific override changing
+ *     with neither the product nor any batch moving. Setting a reorder level for
+ *     one branch, or a branch price override, writes ONLY that table (see
+ *     PATCH /api/products/[id]/branch-settings), so before this was included the
+ *     token did not move and every till kept serving the old branch value until
+ *     something unrelated happened to touch a product. The low-stock badge would
+ *     simply never appear for the branch that had just set a threshold.
  *
  * Deliberately NOT included: sales, purchases, returns, users, settings. Those
  * are not part of the catalogue a till renders, and including them would make
@@ -53,12 +60,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const [productAgg, batchAgg] = await Promise.all([
+    const [productAgg, batchAgg, branchSettingAgg] = await Promise.all([
       db.product.aggregate({
         _max: { updatedAt: true },
         _count: { _all: true },
       }),
       db.batch.aggregate({
+        _max: { updatedAt: true },
+      }),
+      db.branchProductSetting.aggregate({
         _max: { updatedAt: true },
       }),
     ])
@@ -69,6 +79,7 @@ export async function GET(request: NextRequest) {
       productAgg._count._all,
       productAgg._max.updatedAt?.getTime() ?? 0,
       batchAgg._max.updatedAt?.getTime() ?? 0,
+      branchSettingAgg._max.updatedAt?.getTime() ?? 0,
     ].join(':')
 
     // Clients poll this repeatedly, so it must never be cached by the browser,

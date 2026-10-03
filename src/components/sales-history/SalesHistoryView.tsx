@@ -36,6 +36,7 @@ import {
   Users,
   Filter,
   Layers,
+  Loader2,
   X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -87,6 +88,13 @@ import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
 import { usePharmacySettings } from '@/hooks/use-pharmacy-settings';
 import type { Branch, DailySalesRecord, Sale, SaleItem, User } from '@/types';
+import { ALL_BRANCHES } from '@/lib/branches';
+import { previousDateKey } from '@/lib/dates';
+import { switchActiveBranch } from '@/lib/switch-branch';
+// `refund-shared`, not `refunds`: this is a client component, and `refunds.ts`
+// imports the Prisma client through `@/lib/db`. The pure contract is split out
+// so the register can render an empty refund row without a browser bundle.
+import { ZERO_REFUNDS, type RefundTotals } from '@/lib/refund-shared';
 
 /** Totals the register can show for a day that has sales but no register row yet. */
 interface LiveTotals {
@@ -97,6 +105,36 @@ interface LiveTotals {
   cashTotal: number;
   cardTotal: number;
   mobileMoneyTotal: number;
+}
+
+/**
+ * Money that left the till that day, as reported by the server alongside the
+ * register. NOT persisted on the register record: `cashTotal` is a statement of
+ * record meaning "cash taken in", and stays that way.
+ *
+ * Imported, not redeclared. This interface used to be copied into this file, so
+ * a field added by the server would arrive here as `undefined` and quietly read
+ * as zero in the reconciliation.
+ */
+/** A day with no refunds — the common case, and the safe default for an older
+ *  cached response that predates the refund term. */
+const EMPTY_REFUNDS: RefundTotals = ZERO_REFUNDS;
+
+/**
+ * The cash a drawer should actually hold: taken in, less what was handed back
+ * out in cash that day.
+ *
+ * The reconciliation compares a PHYSICAL count against this figure, so it has to
+ * be net. Comparing it against gross `cashTotal` instead means every cash refund
+ * reports the cashier as short by exactly the refund they correctly paid out —
+ * a false accusation on a till that balances, printed on the closing summary as
+ * well as the screen.
+ */
+function expectedCash(
+  totals: { cashTotal: number } | null | undefined,
+  refunds: RefundTotals | null | undefined
+): number {
+  return (totals?.cashTotal ?? 0) - (refunds?.cashRefunds ?? 0);
 }
 
 /**
@@ -112,19 +150,35 @@ interface TodayBranchEntry {
   record: DailySalesRecord | null;
   sales: Sale[];
   liveTotals: LiveTotals | null;
+  /** Cash paid back out that day. Present on every branch entry, including the
+   *  consolidated ones, so the count below never has to guess at it. */
+  refunds: RefundTotals;
 }
 
-/** Read-only narrowing of the register. None of these change the signed-in
- *  branch — they filter the view only, so an admin can compare two shops without
- *  the whole app (POS, stock, reports) following them. */
+/**
+ * Narrowing of the register's contents.
+ *
+ * There is deliberately NO branch field here. This used to carry one, and it was
+ * the most misleading control in the app: it looked like "I am working in the
+ * Airport branch now", and narrowed only the register's list, while every WRITE —
+ * adding a product, receiving a delivery, editing a reorder level — went to the
+ * session's branch. An admin who picked Airport here, read Airport's day, then
+ * restocked a drug, put the stock in Main.
+ *
+ * So branch selection is not a filter: it is the operating branch, changed
+ * through `switchActiveBranch` and therefore governing viewing AND writing
+ * together. Comparing shops is still possible without switching, through the
+ * "All branches" view, which renders every branch's day as its own section.
+ *
+ * The remaining filters are genuinely view-only and stay that way.
+ */
 interface RegisterFilters {
-  branchId: string;
   paymentMethod: string;
   cashierId: string;
   query: string;
 }
 
-const NO_FILTERS: RegisterFilters = { branchId: 'all', paymentMethod: 'all', cashierId: 'all', query: '' };
+const NO_FILTERS: RegisterFilters = { paymentMethod: 'all', cashierId: 'all', query: '' };
 
 /** Register cards per page in the Past Records tab. */
 const PAST_PAGE_SIZE = 12;
@@ -262,6 +316,10 @@ function AuditGroupHeader({ group }: { group: AuditGroup }) {
 
 export default function DailySalesRegister() {
   const { currentUser, navigate, setPosPresetDate } = useAppStore();
+  // The operating branch. The register's branch control changes THIS (and reloads),
+  // rather than filtering the list, so it is the one thing the register must know
+  // about the session beyond the signed-in user.
+  const activeBranch = useAppStore((s) => s.activeBranch);
   // Receipt branding comes from system settings (single source of truth)
   const { settings } = usePharmacySettings();
   const { isAdmin } = usePermissions();
@@ -290,6 +348,10 @@ export default function DailySalesRegister() {
   const primaryEntry = todayBranches[0] ?? null;
   const todayRecord = primaryEntry?.record ?? null;
   const todaySales = primaryEntry?.sales ?? [];
+  /** Cash refunds taken off the drawer being counted tonight. */
+  const todayRefunds = primaryEntry?.refunds ?? EMPTY_REFUNDS;
+  /** What the drawer should hold, net of those refunds. */
+  const todayExpectedCash = expectedCash(todayRecord, todayRefunds);
 
   // Memoized audit groups for today's feed, after the view-only filters. The
   // feed used to render every sale on the day with no way to narrow it, so an
@@ -297,16 +359,15 @@ export default function DailySalesRegister() {
   const filteredTodaySales = useMemo(() => filterSales(todaySales, filters), [todaySales, filters]);
   const todayGroups = useMemo(() => buildAuditGroups(filteredTodaySales, todayGroupMode), [filteredTodaySales, todayGroupMode]);
 
-  // Branch sections after the view-only branch filter, and only the ones that
-  // actually have a register or takings to show. A branch with neither is noise
-  // in an owner's daily view.
-  const visibleTodayEntries = useMemo(() => {
-    const base = todayBranches.filter(
-      (e) => e.record || e.sales.length > 0 || e.liveTotals
-    );
-    if (filters.branchId === 'all') return base;
-    return base.filter((e) => e.branch.id === filters.branchId);
-  }, [todayBranches, filters.branchId]);
+  // Branch sections that actually have a register or takings to show. A branch
+  // with neither is noise in an owner's daily view. The server already scopes
+  // this to the operating branch, or to every branch on the consolidated view,
+  // so nothing narrows it further here — narrowing is what used to make a
+  // read-only branch picker look like an operating-branch selector.
+  const visibleTodayEntries = useMemo(
+    () => todayBranches.filter((e) => e.record || e.sales.length > 0 || e.liveTotals),
+    [todayBranches]
+  );
 
   /** Cashiers present in today's data, for the cashier filter. Derived from the
    *  sales themselves so the options can never name someone who rang nothing. */
@@ -346,6 +407,12 @@ export default function DailySalesRegister() {
   // Closing report
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [closedRecord, setClosedRecord] = useState<DailySalesRecord | null>(null);
+  // The close PATCH returns the record alone, so the refunds for the closed day
+  // are read separately; zeroed here until they land so the report dialog never
+  // renders a stale figure from a previously closed day.
+  const [closedRefunds, setClosedRefunds] = useState<RefundTotals>(EMPTY_REFUNDS);
+  /** Net of cash refunds, for the same reason as `todayExpectedCash`. */
+  const closedExpectedCash = expectedCash(closedRecord, closedRefunds);
   const [previousDayStats, setPreviousDayStats] = useState<{ revenue: number; profit: number } | null>(null);
 
   // Reopen dialog
@@ -382,6 +449,7 @@ export default function DailySalesRegister() {
             record: entry.record ?? null,
             sales: entry.sales ?? [],
             liveTotals: entry.liveTotals ?? null,
+            refunds: { ...EMPTY_REFUNDS, ...(entry.refunds ?? {}) },
           }))
         );
       }
@@ -472,9 +540,16 @@ export default function DailySalesRegister() {
       const notes = [
         closingNotes,
         cashCounted ? `Cash counted: ${money(parseFloat(cashCounted))}` : '',
-        cashCounted && todayRecord ? `Expected cash: ${money(todayRecord.cashTotal)}` : '',
+        // Net of cash refunds: the notes are the permanent record of WHY the
+        // difference was what it was, so a shortfall that was really a refund
+        // must not be written into the closed day as an unexplained loss.
+        cashCounted && todayRecord ? `Cash taken in: ${money(todayRecord.cashTotal)}` : '',
+        cashCounted && todayRefunds.cashRefunds > 0
+          ? `Cash refunded out: -${money(todayRefunds.cashRefunds)}`
+          : '',
+        cashCounted && todayRecord ? `Expected cash: ${money(todayExpectedCash)}` : '',
         cashCounted && todayRecord
-          ? `Cash difference: ${money(parseFloat(cashCounted) - todayRecord.cashTotal)}`
+          ? `Cash difference: ${money(parseFloat(cashCounted) - todayExpectedCash)}`
           : '',
       ].filter(Boolean).join(' | ');
 
@@ -486,6 +561,7 @@ export default function DailySalesRegister() {
       if (res.ok) {
         const data = await res.json();
         setClosedRecord(data);
+        setClosedRefunds({ ...EMPTY_REFUNDS, ...(data.refunds ?? {}) });
         setShowCloseDialog(false);
         setShowReportDialog(true);
         // PATCH returns the record without the branch relation, so merge rather
@@ -513,17 +589,25 @@ export default function DailySalesRegister() {
 
   // Fetch previous day stats for comparison
   useEffect(() => {
+    // Cleared up front, not only on success. Moving from a day that had a
+    // comparison to one that has none used to leave the old figures on screen,
+    // so a day was being compared against a number belonging to another day.
+    setPreviousDayStats(null);
     if (!todayRecord) return;
     (async () => {
       try {
-        const todayDate = new Date(todayRecord.date + 'T00:00:00');
-        todayDate.setDate(todayDate.getDate() - 1);
-        const prevDate = todayDate.toISOString().split('T')[0];
-        const res = await fetch(`/api/daily-sales?limit=1`);
+        // Pure calendar arithmetic on the key — see `shiftDateKey`. The previous
+        // spelling round-tripped through `toISOString()`, which reports the UTC
+        // day, so the comparison was only right in timezones whose midnight lines
+        // up with UTC's.
+        const prevDate = previousDateKey(todayRecord.date);
+        // The day itself, not a page to scan. This asked for `limit=1` and then
+        // searched that one record for `prevDate`, which is today's own row — so
+        // `prev` was never found and this comparison never once rendered.
+        const res = await fetch(`/api/daily-sales?date=${encodeURIComponent(prevDate)}&limit=1`);
         if (res.ok) {
           const data = await res.json();
-          const records: DailySalesRecord[] = data.records ?? [];
-          const prev = records.find(r => r.date === prevDate);
+          const prev: DailySalesRecord | undefined = (data.records ?? [])[0];
           if (prev) setPreviousDayStats({ revenue: prev.totalRevenue, profit: prev.totalProfit });
         }
       } catch { /* silent */ }
@@ -718,6 +802,7 @@ export default function DailySalesRegister() {
                 shownCount={visibleTodayEntries.reduce((sum, e) => sum + filterSales(e.sales, filters).length, 0)}
                 totalCount={todayBranches.reduce((sum, e) => sum + e.sales.length, 0)}
                 isAdmin={isAdmin}
+                activeBranchId={activeBranch?.id ?? null}
               />
               {visibleTodayEntries.length > 0 ? (
                 visibleTodayEntries.map((entry) => (
@@ -745,10 +830,13 @@ export default function DailySalesRegister() {
                         ? 'No active branches to show'
                         : 'No branch has a register or takings today'}
                     </p>
-                    {filters.branchId !== 'all' && (
-                      <Button variant="outline" size="sm" className="mt-4" onClick={() => setFilters(NO_FILTERS)}>
-                        Show all branches
-                      </Button>
+                    {isAdmin && (
+                      // The honest way back: the operating branch, not a filter.
+                      <p className="text-xs text-muted-foreground mt-2">
+                        {activeBranch
+                          ? `Nothing has traded at ${activeBranch.name} today.`
+                          : 'No active branches to show.'}
+                      </p>
                     )}
                   </CardContent>
                 </Card>
@@ -933,6 +1021,7 @@ export default function DailySalesRegister() {
                   shownCount={filteredTodaySales.length}
                   totalCount={todaySales.length}
                   isAdmin={isAdmin}
+                  activeBranchId={activeBranch?.id ?? null}
                 />
 
                 {/* Today's Transaction Feed */}
@@ -1253,16 +1342,31 @@ export default function DailySalesRegister() {
                         initial={{ opacity: 0, y: -10 }}
                         animate={{ opacity: 1, y: 0 }}
                         className={`rounded-lg p-3 text-sm ${
-                          Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01
+                          Math.abs(parseFloat(cashCounted) - todayExpectedCash) < 0.01
                             ? 'bg-emerald-50 border border-emerald-200'
-                            : parseFloat(cashCounted) > todayRecord.cashTotal
+                            : parseFloat(cashCounted) > todayExpectedCash
                             ? 'bg-amber-50 border border-amber-200'
                             : 'bg-red-50 border border-red-200'
                         }`}
                       >
-                        <div className="flex justify-between items-center">
+                        {/* Only shown when cash actually went back out. Otherwise
+                            this block would list three rows of numbers to explain
+                            a subtraction of zero. */}
+                        {todayRefunds.cashRefunds > 0 && (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <span className="font-medium text-muted-foreground">Cash taken in</span>
+                              <span className="font-semibold">{money(todayRecord.cashTotal)}</span>
+                            </div>
+                            <div className="flex justify-between items-center mt-1">
+                              <span className="font-medium text-muted-foreground">Cash refunded out</span>
+                              <span className="font-semibold">-{money(todayRefunds.cashRefunds)}</span>
+                            </div>
+                          </>
+                        )}
+                        <div className={`flex justify-between items-center ${todayRefunds.cashRefunds > 0 ? 'mt-2' : ''}`}>
                           <span className="font-medium">Expected Cash</span>
-                          <span className="font-semibold">{money(todayRecord.cashTotal)}</span>
+                          <span className="font-semibold">{money(todayExpectedCash)}</span>
                         </div>
                         <div className="flex justify-between items-center mt-1">
                           <span className="font-medium">Counted Cash</span>
@@ -1272,15 +1376,15 @@ export default function DailySalesRegister() {
                         <div className="flex justify-between items-center">
                           <span className="font-medium">Difference</span>
                           <span className={`font-bold text-base ${
-                            Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01
+                            Math.abs(parseFloat(cashCounted) - todayExpectedCash) < 0.01
                               ? 'text-emerald-600'
-                              : parseFloat(cashCounted) > todayRecord.cashTotal
+                              : parseFloat(cashCounted) > todayExpectedCash
                               ? 'text-amber-600'
                               : 'text-red-600'
                           }`}>
-                            {parseFloat(cashCounted) - todayRecord.cashTotal >= 0 ? '+' : ''}
-                            {money(parseFloat(cashCounted) - todayRecord.cashTotal)}
-                            {Math.abs(parseFloat(cashCounted) - todayRecord.cashTotal) < 0.01 && ' ✓'}
+                            {parseFloat(cashCounted) - todayExpectedCash >= 0 ? '+' : ''}
+                            {money(parseFloat(cashCounted) - todayExpectedCash)}
+                            {Math.abs(parseFloat(cashCounted) - todayExpectedCash) < 0.01 && ' ✓'}
                           </span>
                         </div>
                       </motion.div>
@@ -1487,9 +1591,21 @@ export default function DailySalesRegister() {
               {cashCounted && (
                 <div className="rounded-lg border p-3 space-y-1.5">
                   <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Cash Reconciliation</p>
+                  {closedRefunds.cashRefunds > 0 && (
+                    <>
+                      <div className="flex justify-between text-sm text-muted-foreground">
+                        <span>Cash taken in</span>
+                        <span>{money(closedRecord.cashTotal)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm text-muted-foreground">
+                        <span>Cash refunded out</span>
+                        <span>-{money(closedRefunds.cashRefunds)}</span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex justify-between text-sm">
                     <span>Expected Cash</span>
-                    <span>{money(closedRecord.cashTotal)}</span>
+                    <span>{money(closedExpectedCash)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>Counted Cash</span>
@@ -1497,14 +1613,14 @@ export default function DailySalesRegister() {
                   </div>
                   <Separator />
                   <div className={`flex justify-between text-sm font-bold ${
-                    Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01
+                    Math.abs(parseFloat(cashCounted) - closedExpectedCash) < 0.01
                       ? 'text-emerald-600'
-                      : parseFloat(cashCounted) > closedRecord.cashTotal
+                      : parseFloat(cashCounted) > closedExpectedCash
                       ? 'text-amber-600'
                       : 'text-red-600'
                   }`}>
                     <span>Difference</span>
-                    <span>{parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}{money(parseFloat(cashCounted) - closedRecord.cashTotal)}</span>
+                    <span>{parseFloat(cashCounted) - closedExpectedCash >= 0 ? '+' : ''}{money(parseFloat(cashCounted) - closedExpectedCash)}</span>
                   </div>
                 </div>
               )}
@@ -1604,10 +1720,12 @@ export default function DailySalesRegister() {
   ${cashCounted ? `
   <div class="card">
     <p class="title-sm">Cash Reconciliation</p>
-    <div class="flex"><span>Expected Cash</span><span>{money(closedRecord.cashTotal)}</span></div>
-    <div class="flex"><span>Counted Cash</span><span>{money(parseFloat(cashCounted))}</span></div>
+    ${closedRefunds.cashRefunds > 0 ? `<div class="flex"><span>Cash taken in</span><span>${money(closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>Cash refunded out</span><span>-${money(closedRefunds.cashRefunds)}</span></div>` : ''}
+    <div class="flex"><span>Expected Cash</span><span>${money(closedExpectedCash)}</span></div>
+    <div class="flex"><span>Counted Cash</span><span>${money(parseFloat(cashCounted))}</span></div>
     <div class="sep"></div>
-    <div class="flex"><span>Difference</span><span class="${Math.abs(parseFloat(cashCounted) - closedRecord.cashTotal) < 0.01 ? 'value-green' : parseFloat(cashCounted) > closedRecord.cashTotal ? 'value-amber' : 'value-red'}">${parseFloat(cashCounted) - closedRecord.cashTotal >= 0 ? '+' : ''}${money(parseFloat(cashCounted) - closedRecord.cashTotal)}</span></div>
+    <div class="flex"><span>Difference</span><span class="${Math.abs(parseFloat(cashCounted) - closedExpectedCash) < 0.01 ? 'value-green' : parseFloat(cashCounted) > closedExpectedCash ? 'value-amber' : 'value-red'}">${parseFloat(cashCounted) - closedExpectedCash >= 0 ? '+' : ''}${money(parseFloat(cashCounted) - closedExpectedCash)}</span></div>
   </div>` : ''}
   ${closingNotes ? `<div class="card"><p class="title-sm">Notes</p><p style="font-size:13px">${closingNotes}</p></div>` : ''}
   <div class="text-center" style="margin-top:20px">
@@ -1947,10 +2065,14 @@ function filterSales(sales: Sale[], filters: RegisterFilters): Sale[] {
 /**
  * The register's filter row.
  *
- * Everything here is VIEW-ONLY on purpose. The header branch switcher re-scopes
- * the entire app — POS, stock, alerts — which is the wrong tool for "show me
- * only the Airport branch's sales today"; it also reloads the page. These
- * controls narrow what is on screen and never change the signed branch.
+ * The payment / cashier / search controls narrow what is on screen and nothing
+ * else. The BRANCH control is not one of them: it changes the operating branch,
+ * so it governs every write in the app as well as this screen — it goes through
+ * `switchActiveBranch`, which re-issues the signed cookie and reloads, so stock
+ * and takings can never disagree about which shop is selected.
+ *
+ * Comparing branches needs no filter for this: "All branches" is an option
+ * here, and it renders each branch's day as its own section.
  */
 function RegisterFiltersBar({
   filters,
@@ -1960,6 +2082,7 @@ function RegisterFiltersBar({
   shownCount,
   totalCount,
   isAdmin,
+  activeBranchId,
 }: {
   filters: RegisterFilters;
   onChange: (next: RegisterFilters) => void;
@@ -1968,14 +2091,30 @@ function RegisterFiltersBar({
   shownCount: number;
   totalCount: number;
   isAdmin: boolean;
+  activeBranchId: string | null;
 }) {
   const set = (patch: Partial<RegisterFilters>) => onChange({ ...filters, ...patch });
   const hasFilters =
-    filters.branchId !== NO_FILTERS.branchId ||
     filters.paymentMethod !== NO_FILTERS.paymentMethod ||
     filters.cashierId !== NO_FILTERS.cashierId ||
     filters.query.trim() !== '';
   const narrowable = isAdmin && branches.length > 1;
+  const [switchingBranch, setSwitchingBranch] = useState(false);
+
+  // Selecting a branch here re-scopes the whole app and reloads, so it cannot be
+  // a filter: an admin narrowing to a branch and then restocking must not put
+  // the stock somewhere else. The label says so, because a control that reloads
+  // the page and changes what every other screen writes deserves to announce it.
+  const onSelectBranch = async (branchId: string) => {
+    const current = activeBranchId ?? ALL_BRANCHES;
+    if (branchId === current) return;
+    setSwitchingBranch(true);
+    const result = await switchActiveBranch(branchId);
+    if (!result.ok) {
+      toast.error(result.error ?? 'Could not switch branch');
+      setSwitchingBranch(false);
+    }
+  };
 
   return (
     <Card>
@@ -1987,18 +2126,31 @@ function RegisterFiltersBar({
           </div>
 
           {narrowable && (
-            <Select value={filters.branchId} onValueChange={(v) => set({ branchId: v })}>
-              <SelectTrigger className="h-8 w-44 text-xs">
-                <Building2 className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
-                <SelectValue placeholder="All branches" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="text-xs">All branches</SelectItem>
-                {branches.filter((b) => b.active).map((b) => (
-                  <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-1.5">
+              <Select
+                value={activeBranchId ?? ALL_BRANCHES}
+                onValueChange={onSelectBranch}
+                disabled={switchingBranch}
+              >
+                <SelectTrigger
+                  className="h-8 w-44 text-xs"
+                  title="Which branch the whole app is working in. Changing this reloads the app, and stock added or edited will go to this branch."
+                >
+                  {switchingBranch ? (
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin text-muted-foreground" />
+                  ) : (
+                    <Building2 className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />
+                  )}
+                  <SelectValue placeholder="All branches" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_BRANCHES} className="text-xs">All branches</SelectItem>
+                  {branches.filter((b) => b.active).map((b) => (
+                    <SelectItem key={b.id} value={b.id} className="text-xs">{b.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           )}
 
           <Select value={filters.paymentMethod} onValueChange={(v) => set({ paymentMethod: v })}>

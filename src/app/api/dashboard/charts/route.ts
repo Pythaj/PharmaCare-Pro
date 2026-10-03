@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchWhere } from '@/lib/branches'
 import { localDateKey, localMonthKey, startOfLocalDayOffset, startOfLocalMonthOffset } from '@/lib/dates'
+import { fetchRefundLines } from '@/lib/refunds'
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -39,6 +40,27 @@ export async function GET(request: NextRequest) {
       select: { totalAmount: true, profit: true, createdAt: true },
     })
 
+    // Declared up here because the refund fetch below spans the MONTHLY window,
+    // which is the wider of the two this route charts.
+    const sixMonthsAgo = startOfLocalMonthOffset(now, 5)
+
+    // Refunds over the last 6 months — the wider of the two windows this route
+    // charts, fetched ONCE and bucketed locally for both. Asking for fourteen
+    // daily sums and six monthly sums would be twenty round trips to compute
+    // twenty numbers from the same handful of rows.
+    const refundLines = await fetchRefundLines({ gte: sixMonthsAgo }, ownerScope)
+    const dailyRefundMap = new Map<string, { refunds: number; profit: number }>()
+    for (let i = 13; i >= 0; i--) {
+      dailyRefundMap.set(localDateKey(startOfLocalDayOffset(now, i)), { refunds: 0, profit: 0 })
+    }
+    for (const refund of refundLines) {
+      const entry = dailyRefundMap.get(localDateKey(refund.createdAt))
+      if (entry) {
+        entry.refunds += refund.totalRefund
+        entry.profit += refund.refundedProfit
+      }
+    }
+
     // Build daily maps keyed by LOCAL date
     const dailySalesMap = new Map<string, { sales: number; profit: number }>()
     for (let i = 13; i >= 0; i--) {
@@ -55,49 +77,82 @@ export async function GET(request: NextRequest) {
     }
 
     const dailySales: { name: string; value: number }[] = []
+    const dailyRevenue: { name: string; gross: number; refunds: number; net: number }[] = []
     const profitTrend: { name: string; value: number; value2: number }[] = []
     for (let i = 13; i >= 0; i--) {
       const d = startOfLocalDayOffset(now, i)
-      const entry = dailySalesMap.get(localDateKey(d)) ?? { sales: 0, profit: 0 }
+      const key = localDateKey(d)
+      const entry = dailySalesMap.get(key) ?? { sales: 0, profit: 0 }
+      const refunded = dailyRefundMap.get(key) ?? { refunds: 0, profit: 0 }
       dailySales.push({
         name: DAY_NAMES[d.getDay()],
-        value: round2(entry.sales),
+        // NET, matching the tile the user reads above the chart. A line that
+        // disagreed with its own headline is how a chart stops being believed.
+        value: round2(entry.sales - refunded.refunds),
+      })
+      dailyRevenue.push({
+        name: DAY_NAMES[d.getDay()],
+        gross: round2(entry.sales),
+        refunds: round2(refunded.refunds),
+        net: round2(entry.sales - refunded.refunds),
       })
       // The profit trend chart plots sales (value) against profit (value2) on
       // two axes — value2 was never populated, so the second series was flat
       // at zero for its entire life.
       profitTrend.push({
         name: DAY_NAMES[d.getDay()],
-        value: round2(entry.sales),
-        value2: round2(entry.profit),
+        value: round2(entry.sales - refunded.refunds),
+        // Profit is reversed by the refund too, not just the revenue: leaving
+        // the margin on goods that were given back would report a branch as more
+        // profitable than it is, precisely when its returns are worst.
+        value2: round2(entry.profit - refunded.profit),
       })
     }
 
     // Monthly revenue: last 6 local months
-    const sixMonthsAgo = startOfLocalMonthOffset(now, 5)
     const monthlySalesRaw = await db.sale.findMany({
       where: { ...ownerScope, createdAt: { gte: sixMonthsAgo } },
       select: { totalAmount: true, createdAt: true },
     })
 
-    const monthlyRevenueMap = new Map<string, number>()
+    const monthlyRevenueMap = new Map<string, { sales: number; refunds: number }>()
     for (let i = 5; i >= 0; i--) {
-      monthlyRevenueMap.set(localMonthKey(startOfLocalMonthOffset(now, i)), 0)
+      monthlyRevenueMap.set(localMonthKey(startOfLocalMonthOffset(now, i)), {
+        sales: 0,
+        refunds: 0,
+      })
     }
 
     for (const sale of monthlySalesRaw) {
       const key = localMonthKey(sale.createdAt)
       if (monthlyRevenueMap.has(key)) {
-        monthlyRevenueMap.set(key, (monthlyRevenueMap.get(key) ?? 0) + Number(sale.totalAmount))
+        const entry = monthlyRevenueMap.get(key)!
+        entry.sales += Number(sale.totalAmount)
       }
     }
 
+    // Buckets the SAME refund rows fetched above into months. No second query: the
+    // 6-month range already covers every day on the chart.
+    for (const refund of refundLines) {
+      const entry = monthlyRevenueMap.get(localMonthKey(refund.createdAt))
+      if (entry) entry.refunds += refund.totalRefund
+    }
+
     const monthlyRevenue: { name: string; value: number }[] = []
+    const monthlyRevenueDetail: { name: string; gross: number; refunds: number; net: number }[] = []
     for (let i = 5; i >= 0; i--) {
       const m = startOfLocalMonthOffset(now, i)
+      const key = localMonthKey(m)
+      const entry = monthlyRevenueMap.get(key) ?? { sales: 0, refunds: 0 }
       monthlyRevenue.push({
         name: MONTH_NAMES[m.getMonth()],
-        value: round2(monthlyRevenueMap.get(localMonthKey(m)) ?? 0),
+        value: round2(entry.sales - entry.refunds),
+      })
+      monthlyRevenueDetail.push({
+        name: MONTH_NAMES[m.getMonth()],
+        gross: round2(entry.sales),
+        refunds: round2(entry.refunds),
+        net: round2(entry.sales - entry.refunds),
       })
     }
 
@@ -136,6 +191,10 @@ export async function GET(request: NextRequest) {
       monthlyRevenue,
       topSelling,
       profitTrend,
+      // The gross/refunds/net split behind those two lines, so the chart can
+      // show WHAT came back rather than only that the net dipped.
+      dailyRevenue,
+      monthlyRevenueDetail,
     })
   } catch (error) {
     console.error('Dashboard charts error:', error)

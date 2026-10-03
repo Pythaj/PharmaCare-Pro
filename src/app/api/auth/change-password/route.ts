@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, verifyPassword, hashPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { setAuthCookie } from '@/lib/auth-cookie';
 import { validateNewPassword } from '@/lib/password-policy';
 
 /**
@@ -75,23 +76,23 @@ export async function POST(request: NextRequest) {
       ipAddress: getClientIp(request),
     });
 
-    // Re-issue a fresh token so other sessions keep a consistent signature
+    // Re-issue a fresh token so other sessions keep a consistent signature.
+    //
+    // `branchId` MUST be carried over. It is the session's selected branch, not
+    // the account's home branch, and dropping it silently resets an admin to the
+    // whole-company view: they would be browsing every branch's takings and,
+    // worse, `POST /api/sales` would refuse them with "select a branch" from a
+    // till that was working a moment ago.
     const token = generateToken({
       userId: updated.id,
       email: updated.email,
       role: updated.role,
+      branchId: auth.user!.activeBranchId,
     });
 
     // The token is delivered by the HttpOnly cookie only, never in the body.
     const response = NextResponse.json({ message: 'Password updated', user: updated }, { status: 200 });
-    const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
-    response.cookies.set('auth_token', token, {
-      httpOnly: true,
-      secure: secureCookie,
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/',
-    });
+    setAuthCookie(response, token);
 
     return response;
   } catch (error) {

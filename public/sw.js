@@ -30,7 +30,20 @@ self.addEventListener('install', (event) => {
           cache.add(url).catch(() => {})
         )
       );
-      await self.skipWaiting();
+      // Deliberately NOT self.skipWaiting() here.
+      //
+      // This used to call skipWaiting(), which activates a new release over any
+      // tab that is already open, immediately and without asking. Combined with
+      // clients.claim() in the activate handler that meant a deploy could pull
+      // the app out from under a cashier in the middle of a sale: the shell and
+      // its JS chunks are replaced while the in-flight transaction is still on
+      // screen, so the page can end up running new code against a request the
+      // old code started.
+      //
+      // Waiting instead leaves the new worker in `waiting` until the page asks
+      // for it via the SKIP_WAITING message below, which ServiceWorkerRegister
+      // only sends once the user has been told and has agreed. An old-but-working
+      // build beats a mid-transaction one.
     })()
   );
 });
@@ -75,6 +88,28 @@ self.addEventListener('fetch', (event) => {
     // error surfaces as a real network error. The app already degrades to an
     // offline notice, and stale-but-wrong branch data is far worse than an
     // honest "you are offline".
+    return;
+  }
+
+  // Same reasoning, different transport: React Server Component payloads.
+  //
+  // The block above only catches /api/ paths, but in the App Router the actual
+  // data for a page arrives as an RSC request to the page's OWN pathname with
+  // `?_rsc=<buildId>` and an `RSC: 1` header — `/products?_rsc=abc`, not
+  // `/api/products`. Those payloads are server-rendered for the current
+  // session and carry the same branch-scoped rows the /api/ routes return
+  // (stock levels, prices, customer details, sale totals).
+  //
+  // So these requests used to fall through to the catch-all networkFirst() at
+  // the bottom and be written into DYNAMIC_CACHE: one cache entry, shared by
+  // every user and branch, never varied on the cookie. On a dropped connection
+  // the fallback would then serve Branch B's client the exact payload Branch A
+  // had loaded. Guarding `/api/` while caching the identical data one layer up
+  // was the same leak with the comments saying it had been prevented.
+  //
+  // Prefetches (`Next-Router-Prefetch: 1`) are partial and speculative, so they
+  // must never be cached either.
+  if (request.headers.get('RSC') === '1' || url.searchParams.has('_rsc')) {
     return;
   }
 
@@ -123,18 +158,26 @@ async function cacheFirst(request, cacheName) {
 }
 
 async function networkFirst(request, cacheName, timeoutMs) {
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('timeout')), timeoutMs)
-  );
+  // The timer is cleared on every exit path. It used to be left pending for the
+  // whole timeout window whenever the fetch won the race, so a session that
+  // walked a few hundred pages accumulated hundreds of live timers; on a
+  // low-memory tablet that is real pressure, and the rejected promise from
+  // each one is discarded silently.
+  let timer;
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('timeout')), timeoutMs);
+  });
 
   try {
     const res = await Promise.race([fetch(request.clone()), timeoutPromise]);
+    clearTimeout(timer);
     if (res.ok) {
       const cache = await caches.open(cacheName);
       cache.put(request, res.clone()).catch(() => {});
     }
     return res;
   } catch {
+    clearTimeout(timer);
     try {
       const cached = await caches.match(request);
       if (cached) return cached;

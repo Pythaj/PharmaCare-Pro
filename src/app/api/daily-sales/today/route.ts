@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
-import { buildDailyAggregates, type DailyAggregates } from '@/lib/daily-sales'
+import { aggregateSales, findOrCreateDailyRecord } from '@/lib/daily-sales'
+import { aggregateRefunds, fetchRefundTotals } from '@/lib/refunds'
+import { endOfLocalDay, localDateKey, startOfLocalDay } from '@/lib/dates'
 import { toNumber } from '@/lib/utils'
 
 /** A sale with its money columns flattened, the batch identified, and the
@@ -81,15 +83,12 @@ export async function GET(request: NextRequest) {
     // not to UTC: a till that opens at 22:00 local must roll over at local
     // midnight, and a UTC boundary would close its day eight hours early.
     const now = new Date()
-    const todayStr = now.getFullYear() + '-' +
-      String(now.getMonth() + 1).padStart(2, '0') + '-' +
-      String(now.getDate()).padStart(2, '0')
+    const todayStr = localDateKey(now)
 
-    const dayStart = new Date(todayStr + 'T00:00:00')
+    const dayStart = startOfLocalDay(now)
     // Exclusive upper bound at next midnight — includes the full final second
     // of the day that T23:59:59 dropped
-    const dayEnd = new Date(todayStr + 'T00:00:00')
-    dayEnd.setDate(dayEnd.getDate() + 1)
+    const dayEnd = endOfLocalDay(now)
     const dayRange = { gte: dayStart, lt: dayEnd }
 
     // A salesperson sees their OWN sales, not their colleagues'. Forced from the
@@ -122,38 +121,18 @@ export async function GET(request: NextRequest) {
     }
 
     if (branchId) {
-      // ── Single branch: the full find-or-create-and-refresh behaviour ───────
-      let record: any = await db.dailySalesRecord.findFirst({
+      // ── Single branch: find-or-create-and-refresh, race-safe ───────────────
+      //
+      // `findOrCreateDailyRecord` owns the create/recompute step, including the
+      // race: this route used to read then create, so a second browser tab (or a
+      // sale arriving at the same moment) opened the same day's register twice
+      // and the loser returned a 500 for what is a completely normal action.
+      await findOrCreateDailyRecord(todayStr, branchId, viewer.userId, { refreshClosedDays: false })
+
+      const record: any = await db.dailySalesRecord.findFirst({
         where: { date: todayStr, branchId },
         include: recordInclude,
       })
-
-      if (!record) {
-        // Auto-create if doesn't exist — aggregates derived from existing sales
-        const aggregates = await buildDailyAggregates(dayStart, dayEnd, undefined, branchId)
-
-        record = await db.dailySalesRecord.create({
-          data: {
-            date: todayStr,
-            branchId,
-            status: 'open',
-            openedBy: viewer.userId,
-            ...aggregates,
-          },
-          include: recordInclude,
-        })
-      } else if (record.status === 'open') {
-        // Refresh stats if day is still open (sales might have been added).
-        // Only while open: a closed day's totals are a statement of record and
-        // must not move because someone back-dated a sale into it.
-        const aggregates = await buildDailyAggregates(dayStart, dayEnd, undefined, branchId)
-
-        record = await db.dailySalesRecord.update({
-          where: { id: record.id },
-          data: { ...aggregates },
-          include: recordInclude,
-        })
-      }
 
       const todaySales = await db.sale.findMany({
         where: {
@@ -165,6 +144,13 @@ export async function GET(request: NextRequest) {
         orderBy: { createdAt: 'desc' },
       })
 
+      // Refunds are fetched for the whole day, NOT narrowed by `userFilter`.
+      // A cashier can only see their own SALES, but the drawer they are counting
+      // is shared: a refund a colleague processed took cash out of the same till
+      // and has to be netted off their expected cash too. Hiding it would make
+      // the reconciliation fail for a till that is in fact correct.
+      const refunds = await fetchRefundTotals(dayStart, dayEnd, branchId)
+
       return NextResponse.json({
         scope: 'branch',
         date: todayStr,
@@ -173,6 +159,7 @@ export async function GET(request: NextRequest) {
             branch: record?.branch ?? { id: branchId, name: 'This branch', code: '' },
             record: flattenRecord(record),
             sales: todaySales.map(flattenSale),
+            refunds,
           },
         ],
       })
@@ -188,7 +175,7 @@ export async function GET(request: NextRequest) {
     // Two queries for the whole business, not one pair per branch. An admin
     // opening the register used to cost a round trip per shop; with a dozen
     // branches that is a visible stall.
-    const [records, sales] = await Promise.all([
+    const [records, sales, refundRows] = await Promise.all([
       db.dailySalesRecord.findMany({ where: { date: todayStr }, include: recordInclude }),
       db.sale.findMany({
         where: {
@@ -199,6 +186,20 @@ export async function GET(request: NextRequest) {
         include: saleInclude,
         orderBy: { createdAt: 'desc' },
       }),
+      // One query for the whole business, then bucketed in memory. Same totals the
+      // single-branch path produces, still narrowed by tender so each branch's
+      // card can net its own cash off.
+      db.return.findMany({
+        where: {
+          createdAt: dayRange,
+          status: 'approved',
+          sale: { branchId: { in: activeBranches.map((b) => b.id) } },
+        },
+        select: {
+          totalRefund: true,
+          sale: { select: { paymentMethod: true, branchId: true } },
+        },
+      }),
     ])
 
     const recordsByBranch = new Map(records.map((r) => [r.branchId, r]))
@@ -207,6 +208,14 @@ export async function GET(request: NextRequest) {
       const list = salesByBranch.get(sale.branchId)
       if (list) list.push(sale)
       else salesByBranch.set(sale.branchId, [sale])
+    }
+
+    const refundsByBranch = new Map<string, { totalRefund: unknown; paymentMethod: string }[]>()
+    for (const row of refundRows) {
+      const list = refundsByBranch.get(row.sale.branchId)
+      const entry = { totalRefund: row.totalRefund, paymentMethod: row.sale.paymentMethod }
+      if (list) list.push(entry)
+      else refundsByBranch.set(row.sale.branchId, [entry])
     }
 
     return NextResponse.json({
@@ -219,45 +228,17 @@ export async function GET(request: NextRequest) {
           branch,
           record: flattenRecord(record),
           sales: branchSales.map(flattenSale),
+          refunds: aggregateRefunds(refundsByBranch.get(branch.id) ?? []),
           // A branch that traded today but has no register row yet still has to
           // show its takings, otherwise the owner sees an empty card next to a
           // branch that is visibly busy in the POS. Derived from the same sales
           // rows above, and clearly marked as not yet a register.
-          liveTotals: record ? null : deriveTotals(branchSales),
+          liveTotals: record ? null : aggregateSales(branchSales),
         }
       }),
     })
   } catch (error) {
     console.error('Daily sales today error:', error)
     return NextResponse.json({ error: 'Failed to fetch today\'s sales record' }, { status: 500 })
-  }
-}
-
-/**
- * Register-shaped totals computed from a day's sales.
- *
- * Used only for the consolidated view, where a branch may have taken money
- * without a register row existing. Mirrors `buildDailyAggregates` so the numbers
- * a branch shows before its register is opened are the same numbers it will show
- * once one is.
- */
-function deriveTotals(sales: any[]): DailyAggregates {
-  const amounts = sales.map((s) => ({
-    totalAmount: toNumber(s.totalAmount),
-    profit: toNumber(s.profit),
-    paymentMethod: s.paymentMethod as string,
-  }))
-
-  return {
-    totalRevenue: amounts.reduce((sum, s) => sum + s.totalAmount, 0),
-    totalProfit: amounts.reduce((sum, s) => sum + s.profit, 0),
-    totalTransactions: amounts.length,
-    totalItemsSold: sales.reduce(
-      (sum, s) => sum + (s.items ?? []).reduce((is: number, i: any) => is + i.quantity, 0),
-      0
-    ),
-    cashTotal: amounts.filter((s) => s.paymentMethod === 'cash').reduce((sum, s) => sum + s.totalAmount, 0),
-    cardTotal: amounts.filter((s) => s.paymentMethod === 'card').reduce((sum, s) => sum + s.totalAmount, 0),
-    mobileMoneyTotal: amounts.filter((s) => s.paymentMethod === 'mobile_money').reduce((sum, s) => sum + s.totalAmount, 0),
   }
 }

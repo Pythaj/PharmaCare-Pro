@@ -3,6 +3,7 @@ import { db } from '@/lib/db';
 import { requireAuth } from '@/lib/require-auth';
 import { generateToken, verifyPassword } from '@/lib/auth';
 import { logAudit, getClientIp } from '@/lib/audit';
+import { setAuthCookie } from '@/lib/auth-cookie';
 import { normalizeEmail } from '@/lib/email';
 
 const publicUser = {
@@ -82,22 +83,21 @@ export async function PATCH(request: NextRequest) {
       ipAddress: getClientIp(request),
     });
 
-    // Re-issue the JWT so an updated email is reflected in the session
+    // Re-issue the JWT so an updated email is reflected in the session.
+    //
+    // `branchId` is the session's selected branch and has to survive a profile
+    // save: without it the new token drops the branch claim, `resolveSession`
+    // falls back to the whole-company view, and an admin who was mid-shift on one
+    // till is silently looking at every branch's numbers.
     const token = generateToken({
       userId: updated.id,
       email: updated.email,
       role: updated.role,
+      branchId: auth.user!.activeBranchId,
     });
 
     const response = NextResponse.json({ user: updated }, { status: 200 });
-    const secureCookie = process.env.NODE_ENV === 'production' && process.env.COOKIE_SECURE !== 'false';
-    response.cookies.set('auth_token', token, {
-      httpOnly: true,
-      secure: secureCookie,
-      sameSite: 'lax',
-      maxAge: 60 * 60 * 24 * 7,
-      path: '/',
-    });
+    setAuthCookie(response, token);
 
     return response;
   } catch (error) {

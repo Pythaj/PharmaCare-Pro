@@ -2,80 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
-import { branchRelationWhere, branchWhere } from '@/lib/branches'
+import { branchRelationWhere, branchWhere, requireBranchForWrite } from '@/lib/branches'
 import { recomputeDailyRecord, ensureDailyRecord } from '@/lib/daily-sales'
-
-/** Money is stored and printed to 2dp, so it is computed to 2dp. */
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
-
-class ValidationError extends Error {}
-
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-
-/**
- * Resolves the effective sale timestamp from an optional YYYY-MM-DD saleDate.
- * Backdating is admin-only; the current time-of-day is preserved so intra-day
- * ordering stays meaningful. Returns { dateKey, dayStart, dayEnd } helpers too.
- */
-/**
- * True only for a Prisma unique-constraint failure on `Sale.invoiceNo`.
- *
- * Deliberately narrow: the sale-create path has other things that can fail
- * (insufficient stock, expired batch, expired product), and retrying those would
- * re-run side effects or mask a real business rule. Only the invoice-number
- * race is safe to retry, because the losing attempt has already rolled back.
- */
-function isInvoiceNumberCollision(err: unknown): boolean {
-  if (!err || typeof err !== 'object') return false
-  const e = err as { code?: unknown; meta?: { target?: unknown } }
-  if (e.code !== 'P2002') return false
-  const target = e.meta?.target
-  if (Array.isArray(target)) {
-    return target.some((t) => String(t).includes('invoiceNo'))
-  }
-  // Some drivers report the constraint as a bare string.
-  return typeof target === 'string' && target.includes('invoiceNo')
-}
-
-function resolveSaleDate(saleDate: unknown, role: string, now = new Date()) {
-  if (!saleDate) {
-    const ds = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1)
-    return { saleAt: now, dateKey: ds, dayStart, dayEnd }
-  }
-
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(saleDate))
-  if (!m) {
-    throw new ValidationError('saleDate must use the YYYY-MM-DD format')
-  }
-  const yyyy = Number(m[1])
-  const mm = Number(m[2])
-  const dd = Number(m[3])
-  const dt = new Date(yyyy, mm - 1, dd)
-  if (dt.getFullYear() !== yyyy || dt.getMonth() !== mm - 1 || dt.getDate() !== dd) {
-    throw new ValidationError('Invalid saleDate')
-  }
-
-  const dateKey = `${yyyy}-${pad2(mm)}-${pad2(dd)}`
-  const todayKey = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`
-
-  if (dateKey !== todayKey && role !== 'admin') {
-    throw new ValidationError('Only the admin can record a sale for a past date')
-  }
-
-  const dayStart = new Date(yyyy, mm - 1, dd)
-  const dayEnd = new Date(yyyy, mm - 1, dd + 1)
-  const saleAt = dateKey === todayKey
-    ? now
-    : new Date(yyyy, mm - 1, dd, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds())
-
-  return { saleAt, dateKey, dayStart, dayEnd }
-}
+import { ValidationError, parseErrorResponse } from '@/lib/api-error'
+import { roundMoney } from '@/lib/money'
+import { decrementBatchStock, restoreBatchStock, type RestorableLine } from '@/lib/stock'
+import { parsePaymentMethod, parseSaleLines, resolveSaleDate } from '@/lib/sale-input'
+import { nextInvoiceNumber } from '@/lib/invoice-sequence'
+import { isUniqueViolationOn } from '@/lib/prisma-errors'
 
 function normalizeSale(sale: any) {
   return {
@@ -206,13 +140,10 @@ export async function POST(request: NextRequest) {
   // A sale belongs to exactly one till. An admin looking at "All branches" is
   // browsing, not transacting — they must pick a branch before ringing up a
   // sale, otherwise the money would be unattributable to any shop.
-  const branchId = auth.scope!.branchId
-  if (!branchId) {
-    return NextResponse.json(
-      { error: 'Select a branch before recording a sale' },
-      { status: 400 }
-    )
-  }
+  //
+  // Inside the try below, because the guard throws a ValidationError and the
+  // route's catch is what turns that into a 400. Left outside, the very refusal
+  // meant to protect the ledger would surface as a 500 "server error".
   const branchCode = auth.branch?.code || 'GEN'
 
   // Backorders: when the pharmacy allows negative stock, an out-of-stock item
@@ -228,55 +159,45 @@ export async function POST(request: NextRequest) {
   const allowNegativeStock = allowNegSetting ? allowNegSetting.value === 'true' : true
 
   try {
+    const branchId = requireBranchForWrite(
+      auth.scope!,
+      'Select a branch before recording a sale'
+    )
     const body = await request.json()
     const {
       customerId,
-      items,
-      paymentMethod = 'cash',
+      items: rawItems,
+      paymentMethod: rawPaymentMethod,
       notes,
       saleDate,
     } = body
+
+    const paymentMethod = parsePaymentMethod(rawPaymentMethod)
 
     // Admin-only backdating: the sale's recorded date is its invoice day and
     // the day its register totals land on. Expiry checks use this same date.
     const { saleAt, dateKey, dayStart, dayEnd } = resolveSaleDate(saleDate, auth.user!.role)
 
-    if (!Array.isArray(items) || items.length === 0) {
-      return NextResponse.json(
-        { error: 'Items are required' },
-        { status: 400 }
-      )
-    }
-
-    const validPaymentMethods = ['cash', 'card', 'mobile_money']
-    if (!validPaymentMethods.includes(paymentMethod)) {
-      return NextResponse.json(
-        { error: 'Invalid payment method' },
-        { status: 400 }
-      )
-    }
-
-    // Validate structure up-front
-    for (const item of items) {
-      if (!item.productId) {
-        throw new ValidationError('Each item must have a productId')
-      }
-      const qty = Number(item.quantity)
-      if (!Number.isInteger(qty) || qty < 1) {
-        throw new ValidationError('Item quantities must be positive whole numbers')
-      }
-    }
+    // Shape-checked and de-duplicated up front: lines naming the same batch are
+    // merged so the guarded decrement below is asked for the combined quantity
+    // rather than for each line's share of the same shelf.
+    const items = parseSaleLines(rawItems)
 
     // Use Prisma transaction for atomic stock deduction + sale creation.
     // Prices are derived server-side from the cheapest-eligible or selected
     // batch — the client's unitPrice is never trusted (Rule 13/14).
     //
-    // Wrapped in a retry because the invoice number is allocated from a count.
-    // Two cashiers at the same branch on the same day can read the same count
-    // and pick the same number; invoiceNo is @unique, so the loser gets a
-    // constraint violation rather than a duplicate receipt. Retrying re-reads
-    // the count and allocates the next free number, which is correct because the
-    // failed attempt rolled back entirely. Anything that is not a unique
+    // The invoice number now comes from `nextInvoiceNumber`, which increments a
+    // stored per-branch-per-day high-water mark instead of recounting rows. That
+    // makes allocation atomic on its own, so concurrent sales no longer collide:
+    // the old count-then-write needed the retry below, and a count also REISSUED a
+    // number once a mis-keyed sale was deleted (count drops, next sale takes the
+    // freed number, two transactions share one receipt).
+    //
+    // The retry is kept as a safety net rather than removed: it costs nothing,
+    // and if the sequence ever disagrees with what is on file (a hand-entered
+    // invoice, a restored backup) the unique constraint still catches it and
+    // re-allocating is the correct response. Anything that is not a unique
     // violation on invoiceNo is re-thrown untouched, so a genuine stock or
     // validation failure is never retried or masked.
     let sale: any = null
@@ -285,28 +206,30 @@ export async function POST(request: NextRequest) {
     for (let attempt = 0; attempt < 5 && sale === null; attempt++) {
       try {
         sale = await db.$transaction(async (tx) => {
-        // Generate invoice number for the sale's recorded day (supports
+        // Reserve the invoice number for the sale's recorded day (supports
         // backdating: the next sequence continues that day's own invoices).
         //
-        // The branch code is part of the number because the sequence is counted
+        // The branch code is part of the number because the sequence is kept
         // per branch: without it, Branch A and Branch B both selling on the same
         // day would compute INV-20260926-0001 and collide on the @unique
         // constraint — or, worse, hand two customers the same receipt number.
-        const dateStr = `${saleAt.getFullYear()}${pad2(saleAt.getMonth() + 1)}${pad2(saleAt.getDate())}`
-        const count = await tx.sale.count({
-          where: {
-            createdAt: { gte: dayStart, lt: dayEnd },
-            branchId,
-          },
+        // `dateKey` rather than a key recomputed from `saleAt`: it is the day
+        // `dayStart`/`dayEnd` were built from, so the sequence row is keyed to
+        // the same window it is seeded from.
+        const invoiceNo = await nextInvoiceNumber(tx, {
+          branchId,
+          branchCode,
+          date: dateKey,
+          dayStart,
+          dayEnd,
         })
-        const invoiceNo = `${branchCode}-INV-${dateStr}-${String(count + 1).padStart(4, '0')}`
 
         let subtotal = 0
         let profit = 0
         const saleItemsData: any[] = []
 
         for (const item of items) {
-          const quantity = Math.floor(Number(item.quantity))
+          const quantity = item.quantity
 
           if (item.batchId) {
         // Explicit batch (POS sends per-batch cart lines) — price is the
@@ -363,9 +286,15 @@ export async function POST(request: NextRequest) {
           expiryDate: batch.expiryDate || null,
         })
 
-        await tx.batch.update({
-          where: { id: item.batchId },
-          data: { quantity: { decrement: quantity } },
+        // Guarded: the quantity check above was a read, and between it and this
+        // write another till can take the same units. Matching on
+        // `quantity >= n` makes the loser of that race update zero rows and roll
+        // the whole sale back, instead of recording stock that left the shelf.
+        await decrementBatchStock(tx, {
+          batchId: item.batchId,
+          quantity,
+          label: batch.batchNumber,
+          allowNegative: allowNegativeStock,
         })
       } else {
         // No batch: FEFO across eligible (non-expired) batches. Because
@@ -420,9 +349,13 @@ export async function POST(request: NextRequest) {
             expiryDate: batch.expiryDate || null,
           })
 
-          await tx.batch.update({
-            where: { id: batch.id },
-            data: { quantity: { decrement: deductQty } },
+          // Guarded for the same reason as the explicit-batch path above: the
+          // allocation read the batch moments ago, and a concurrent sale may
+          // have taken it since.
+          await decrementBatchStock(tx, {
+            batchId: batch.id,
+            quantity: deductQty,
+            label: batch.batchNumber,
           })
           remainingQty -= deductQty
         }
@@ -470,7 +403,7 @@ export async function POST(request: NextRequest) {
     // — so the total is the subtotal by definition. It is still computed (not
     // aliased) so the charged figure is derived from the same rounded line
     // totals that are persisted, and the two can never disagree by a cent.
-    const totalAmount = round2(subtotal)
+    const totalAmount = roundMoney(subtotal)
 
     const newSale = await tx.sale.create({
       data: {
@@ -506,7 +439,7 @@ export async function POST(request: NextRequest) {
         return newSale
       })
       } catch (err) {
-        if (isInvoiceNumberCollision(err)) {
+        if (isUniqueViolationOn(err, 'invoiceNo')) {
           lastCollision = err
           continue
         }
@@ -515,8 +448,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (sale === null) {
-      // Five concurrent sales at the same till exhausted the retry budget. The
-      // counter is genuinely contended, so fail loudly rather than guess.
+      // The retry is now only a safety net (allocation itself is atomic), so
+      // reaching here means the stored sequence kept disagreeing with what is on
+      // file — a hand-entered invoice number, or a restored backup. Fail loudly
+      // rather than issue a number that is already taken.
       console.error('Could not allocate an invoice number after 5 attempts:', lastCollision)
       throw new Error('Could not allocate an invoice number — please retry the sale')
     }
@@ -545,12 +480,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(normalizeSale(sale), { status: 201 })
   } catch (error) {
     console.error('Sale create error:', error)
-    const message = error instanceof Error ? error.message : 'Failed to create sale'
-    const isValidation = error instanceof ValidationError ||
-      (error instanceof Error && (message.includes('Insufficient') || message.includes('expired')))
+    const mapped = parseErrorResponse(error, 'Failed to create sale')
+    if (mapped) return mapped
+
+    // The stock guard and the expiry rules can also surface as a plain Error
+    // from a driver this module does not own, so the wording still decides
+    // whether this was the customer's mistake or ours.
+    const message = error instanceof Error ? error.message : ''
+    const isClientFault = message.includes('Insufficient') || message.includes('expired')
     return NextResponse.json(
-      { error: message },
-      { status: isValidation ? 400 : 500 }
+      { error: message || 'Failed to create sale' },
+      { status: isClientFault ? 400 : 500 }
     )
   }
 }
@@ -597,19 +537,93 @@ export async function DELETE(request: NextRequest) {
       select: { date: true, branchId: true },
     })
 
-    // Delete returns first (they reference sales). A Return carries no branch of
-    // its own — it inherits one from the sale it refunds — so its boundary has
-    // to be expressed through that relation, or a Branch A clear would take
-    // Branch B's refunds with it.
-    const returnWhere = isSingleBranch ? branchRelationWhere(scope, 'sale') : {}
-    const returnCount = await db.return.count({ where: returnWhere })
-    if (returnCount > 0) {
-      await db.return.deleteMany({ where: returnWhere })
+    // What each sale still owes its batches, read BEFORE the wipe.
+    //
+    // `DELETE` used to remove the sales and cascade their items away without
+    // touching stock, so clearing a register permanently destroyed the record
+    // that those units had left the shelf. The books then said the pharmacy held
+    // stock it had sold, and the next purchase order was short by exactly the
+    // day's takings. Voiding one sale (DELETE /api/sales/[id]) already restored
+    // its units; this is the same rule applied to the whole set.
+    //
+    // Only the UNRETURNED units are credited back. An approved return has already
+    // put its units on the shelf, and the return records are being deleted here
+    // too — crediting the sold quantity as well would hand back the same units
+    // twice and leave the batch holding stock that never existed.
+    const salesToClear = await db.sale.findMany({
+      where: branchFilter,
+      select: {
+        branchId: true,
+        items: {
+          select: {
+            batchId: true,
+            quantity: true,
+            returnItems: {
+              where: { return: { status: 'approved' } },
+              select: { quantity: true },
+            },
+          },
+        },
+      },
+    })
+
+    // Net units per batch, per owning branch. Aggregating first keeps the wipe to
+    // one UPDATE per batch touched rather than one per sale line, which matters
+    // when the "clear sales" action covers a month of trading.
+    const owedByBatch = new Map<string, RestorableLine & { branchId: string }>()
+    for (const sale of salesToClear) {
+      for (const item of sale.items) {
+        if (!item.batchId) continue
+        const returned = item.returnItems.reduce((sum, r) => sum + Number(r.quantity ?? 0), 0)
+        const outstanding = Number(item.quantity) - returned
+        if (outstanding <= 0) continue
+        const batchKey = `${sale.branchId}:${item.batchId}`
+        const current = owedByBatch.get(batchKey)
+        owedByBatch.set(batchKey, {
+          branchId: sale.branchId,
+          batchId: item.batchId,
+          quantity: (current?.quantity ?? 0) + outstanding,
+        })
+      }
     }
 
-    // SaleItems cascade on sale delete
-    const saleCount = await db.sale.count({ where: branchFilter })
-    await db.sale.deleteMany({ where: branchFilter })
+    const owedByBranch = new Map<string, RestorableLine[]>()
+    for (const owed of owedByBatch.values()) {
+      const lines = owedByBranch.get(owed.branchId) ?? []
+      lines.push({ batchId: owed.batchId, quantity: owed.quantity })
+      owedByBranch.set(owed.branchId, lines)
+    }
+
+    // A Return carries no branch of its own — it inherits one from the sale it
+    // refunds — so its boundary has to be expressed through that relation, or a
+    // Branch A clear would take Branch B's refunds with it.
+    const returnWhere = isSingleBranch ? branchRelationWhere(scope, 'sale') : {}
+    const returnCount = await db.return.count({ where: returnWhere })
+
+    // One transaction: the credits, the return rows and the sales must all land
+    // or none of them may. Restoring stock outside it would leave inventory that
+    // no sale accounts for if the delete then failed.
+    const saleCount = await db.$transaction(async (tx) => {
+      // `restoreBatchStock` re-asserts the owner branch itself; the batch ids
+      // come from the sale records, so each credit is checked against the shelf it
+      // belongs to rather than trusted.
+      for (const [ownerBranchId, lines] of owedByBranch) {
+        await restoreBatchStock(
+          tx,
+          lines,
+          ownerBranchId,
+          `DELETE /api/sales (bulk${isSingleBranch ? ', one branch' : ', all branches'})`
+        )
+      }
+
+      if (returnCount > 0) {
+        await tx.return.deleteMany({ where: returnWhere })
+      }
+
+      // SaleItems cascade on sale delete
+      const deleted = await tx.sale.deleteMany({ where: branchFilter })
+      return deleted.count
+    })
 
     // Recompute register totals for every affected day (they all become 0,
     // preserving open/close history while reflecting the wiped sales)

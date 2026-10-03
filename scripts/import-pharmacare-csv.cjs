@@ -54,6 +54,25 @@ async function main() {
     process.exit(1);
   }
 
+  // Batches are owned by exactly one branch and `branchId` is NOT NULL, so the
+  // opening stock imported below has to belong to a specific branch. Required
+  // rather than guessed: defaulting to "the first branch" would file one
+  // pharmacy's stock on another branch's shelf.
+  const branchCode = String(process.env.TARGET_BRANCH_CODE ?? '').trim();
+  if (!branchCode) {
+    console.error(
+      '  ❌ TARGET_BRANCH_CODE is required — the Branch.code that should own the imported stock batches.'
+    );
+    process.exit(1);
+  }
+  const branch = await db.branch.findUnique({ where: { code: branchCode } });
+  if (!branch) {
+    const known = (await db.branch.findMany({ select: { code: true } })).map((b) => b.code).join(', ');
+    console.error(`  ❌ No branch with code "${branchCode}". Existing codes: ${known || '(none)'}`);
+    process.exit(1);
+  }
+  console.log(`  Target branch: ${branch.name} (${branch.code})`);
+
   const raw = fs.readFileSync(CSV_PATH, 'utf8');
   const rows = parseCSV(raw);
   console.log(`  Loaded ${rows.length} rows from CSV\n`);
@@ -110,11 +129,23 @@ async function main() {
           }
         });
         
-        // Upsert batch with current stock/prices
+        // Upsert batch with current stock/prices.
+        // Compound key is (productId, batchNumber, branchId): a supplier delivery
+        // can exist in two branches, so the branch is part of the identity. The
+        // old `productId_batchNumber` selector no longer exists in the schema,
+        // and leaving out branchId violates NOT NULL — so every row of this
+        // import used to fail while the script still reported success.
         await db.batch.upsert({
-          where: { productId_batchNumber: { productId: product.id, batchNumber } },
+          where: {
+            productId_batchNumber_branchId: {
+              productId: product.id,
+              batchNumber,
+              branchId: branch.id,
+            },
+          },
           create: {
             productId: product.id,
+            branchId: branch.id,
             batchNumber,
             quantity: stockQty,
             costPrice,
@@ -147,6 +178,7 @@ async function main() {
         await db.batch.create({
           data: {
             productId: product.id,
+            branchId: branch.id,
             batchNumber,
             quantity: stockQty,
             costPrice,
@@ -172,6 +204,15 @@ async function main() {
   console.log(`     Errors:  ${errors}\n`);
 
   await db.$disconnect();
+
+  // Fail loudly if anything went wrong. Row errors are caught per-row so one bad
+  // row does not abort the run, which previously meant a completely failed
+  // import still exited 0 — an operator had no way to tell "nothing imported"
+  // from "nothing to import".
+  if (errors > 0) {
+    console.error(`  ❌ ${errors} row(s) failed. Re-run after fixing the cause.`);
+    process.exitCode = 1;
+  }
 }
 
 main().catch(err => {

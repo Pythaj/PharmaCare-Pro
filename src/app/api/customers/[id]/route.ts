@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireAdmin, requireAuth } from '@/lib/require-auth'
+import { requireAdmin, requireBranchScope } from '@/lib/require-auth'
+import { branchWhere } from '@/lib/branches'
 import { logAudit, getClientIp } from '@/lib/audit'
 import {
   parseCustomerName,
@@ -13,17 +14,26 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const auth = await requireAuth(request)
+  // Branch-scoped. The customer row itself is shared, but the purchase history
+  // that makes this endpoint valuable is branch-owned, and it was being read
+  // unfiltered: `where: { customerId: id }` returned the 20 most recent receipts
+  // from EVERY branch — invoice number, total, profit and tender — to any
+  // signed-in salesperson. `totalPurchases` below summed the same unfiltered
+  // set. Scoping the Sale relation is the fix; the parent row has no branch to
+  // filter on, which is exactly why this was easy to get wrong.
+  const auth = await requireBranchScope(request)
   if (!auth.success) {
     return NextResponse.json({ error: auth.error }, { status: auth.status })
   }
 
   try {
     const { id } = await params
+    const saleScope = branchWhere(auth.scope!)
+
     const customer = await db.customer.findUnique({
       where: { id },
       include: {
-        _count: { select: { sales: true } },
+        _count: { select: { sales: { where: saleScope } } },
       },
     })
     if (!customer) {
@@ -31,7 +41,7 @@ export async function GET(
     }
 
     const sales = await db.sale.findMany({
-      where: { customerId: id },
+      where: { customerId: id, ...saleScope },
       select: {
         invoiceNo: true,
         totalAmount: true,
@@ -45,7 +55,7 @@ export async function GET(
     })
 
     const totalPurchases = await db.sale.aggregate({
-      where: { customerId: id },
+      where: { customerId: id, ...saleScope },
       _sum: { totalAmount: true },
     })
 

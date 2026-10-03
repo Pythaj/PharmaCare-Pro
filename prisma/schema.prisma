@@ -37,6 +37,7 @@ model Branch {
   transfersOut StockTransfer[] @relation("TransferOut")
   transfersIn  StockTransfer[] @relation("TransferIn")
   productSettings BranchProductSetting[]
+  saleSequences SaleSequence[]
 
   @@map("branches")
 }
@@ -399,6 +400,60 @@ model DailySalesRecord {
   @@unique([date, branchId])
   @@index([branchId])
   @@map("daily_sales_records")
+}
+
+/// The high-water mark of invoice numbers issued at one branch on one day.
+///
+/// WHY THIS EXISTS
+///
+/// Invoice numbers were allocated as `count(sales) + 1`. That is correct only
+/// while rows are never removed — and they are: `DELETE /api/sales/[id]` exists
+/// and is exercised for mis-keyed receipts. Deleting ACC-INV-20260114-0007 drops
+/// the count, so the next sale at that branch is issued 0007 again. Two different
+/// transactions then share one receipt number for the rest of the day.
+///
+/// That breaks three things at once:
+///   - the audit log, which records both the deletion and the later creation
+///     under the same number, so the trail reads as a sale that was deleted and
+///     never replaced;
+///   - customer disputes. "My receipt was 0007" becomes ambiguous, and the
+///     lookup can land on the wrong sale — or on nothing, if the other one was
+///     the one deleted;
+///   - the day-end reconciliation, where an owner checking that the receipt book
+///     is unbroken finds a repeat.
+///
+/// A count cannot fix this because the information it needs — the highest number
+/// ever issued — is destroyed along with the row. So it is stored, here, and never
+/// decremented.
+///
+/// ALLOCATION
+///
+/// One upsert per sale, inside the sale's own transaction:
+///   create -> seeded from the highest number already on file (see
+///            `nextInvoiceNumber`), so numbers already issued by the old
+///            count-based code are never reissued on the day the change lands;
+///   update -> `{ increment: 1 }`, which is atomic.
+///
+/// Concurrent sales therefore get distinct numbers from a single statement
+/// without a lock, on both PostgreSQL and the SQLite build.
+///
+/// Because the bump shares the sale's transaction, a failed sale does not
+/// consume a number — there are no gaps — and a retry after a rollback re-reads
+/// the same number rather than skipping one.
+model SaleSequence {
+  /// Local calendar day, YYYY-MM-DD, matching `Sale.createdAt`'s day in the
+  /// branch's own timezone. NOT a timestamp: the sequence is per printed day.
+  date      String
+  branchId  String
+  /// The highest number issued so far for this branch and day.
+  lastNumber Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  branch Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([branchId, date])
+  @@index([date])
+  @@map("sale_sequences")
 }
 
 model SystemSetting {

@@ -3,11 +3,10 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchWhere } from '@/lib/branches'
 import { getExpiryAlertDays } from '@/lib/server-settings'
-import { classifyStock } from '@/lib/inventory-alerts'
-import {
-  createEffectiveValueResolver,
-  loadBranchProductOverrides,
-} from '@/lib/branch-product-settings'
+import { aggregateRefundMoney, fetchRefundLines } from '@/lib/refunds'
+import { computeAlertCounts } from '@/lib/stock-alert-counts'
+
+const round2 = (n: number) => Math.round(n * 100) / 100
 
 /**
  * GET /api/dashboard/stats
@@ -55,14 +54,6 @@ export async function GET(request: NextRequest) {
     const stockScope = branchScope
     const since = (from: Date) => ({ createdAt: { gte: from } })
 
-    // The reorder threshold is per-branch, resolved in one query. On "All
-    // branches" this is empty, so every product falls back to the chain-wide
-    // `Product.reorderLevel` — the honest answer when there is no single branch
-    // to answer for.
-    const resolveValues = createEffectiveValueResolver(
-      await loadBranchProductOverrides(auth.scope!.branchId)
-    )
-
     const [
       todaySalesResult,
       weeklySalesResult,
@@ -71,11 +62,12 @@ export async function GET(request: NextRequest) {
       totalProfitResult,
       todayTransactionsResult,
       todaySaleItemsResult,
+      todayRefundsResult,
+      weeklyRefundsResult,
+      monthlyRefundsResult,
+      totalRefundsResult,
+      refundLines,
       stockBatches,
-      productRows,
-      stockByProduct,
-      expiringSoonBatches,
-      expiredBatches,
       todayBatchesResult,
     ] = await Promise.all([
       db.sale.aggregate({
@@ -105,66 +97,55 @@ export async function GET(request: NextRequest) {
         where: { sale: { ...ownerScope, ...since(today) } },
         _sum: { quantity: true },
       }),
+      // Refunds for each revenue window. Without these the tiles were gross
+      // only, so a branch whose returns were climbing looked like it was trading
+      // better than it was — the same mistake the register had with its cash.
+      // Scoped to the SELLER (not the operator who processed the refund) so a
+      // salesperson's "my takings" stay their own.
+      aggregateRefundMoney({ gte: today }, ownerScope),
+      aggregateRefundMoney({ gte: sevenDaysAgo }, ownerScope),
+      aggregateRefundMoney({ gte: thirtyDaysAgo }, ownerScope),
+      aggregateRefundMoney(undefined, ownerScope),
+      // Margin given back all-time. This one has to read the refund LINES: margin
+      // lives on the sale items, so `_sum` over `Return.totalRefund` can only
+      // ever describe the cash. One extra query for the profit tile is cheaper
+      // than shipping a profit figure that silently means something else.
+      fetchRefundLines(undefined, ownerScope),
       // Only batches that still hold stock can contribute value.
       db.batch.findMany({
         where: { ...stockScope, quantity: { gt: 0 } },
         select: { quantity: true, costPrice: true },
-      }),
-      // Two columns only — this used to pull every Product field for every product.
-      db.product.findMany({
-        where: { active: true },
-        select: { id: true, reorderLevel: true },
-      }),
-      // Aggregate in SQL instead of loading every batch row into memory and
-      // folding it per product in JS.
-      db.batch.groupBy({
-        by: ['productId'],
-        where: { ...stockScope, quantity: { gt: 0 } },
-        _sum: { quantity: true },
-      }),
-      // Expiring soon: inside the configured window and NOT already expired.
-      db.batch.count({
-        where: {
-          ...stockScope,
-          quantity: { gt: 0 },
-          expiryDate: { gt: now, lte: expiryHorizon },
-        },
-      }),
-      // Expired: its own count, instead of being lumped in with "expiring".
-      db.batch.count({
-        where: {
-          ...stockScope,
-          quantity: { gt: 0 },
-          expiryDate: { lte: now },
-        },
       }),
       db.batch.count({
         where: { ...stockScope, ...since(today) },
       }),
     ])
 
+    // Low-stock and expiry counts are shared with the header's
+    // `/api/dashboard/alerts-count`, which the bell polls from every page. One
+    // implementation, so the badge and this tile can never warn about different
+    // windows or disagree about what counts as "low".
+    const {
+      lowStockCount,
+      expiringCount,
+      expiredCount,
+      productsInStock,
+    } = await computeAlertCounts(db, {
+      stockWhere: stockScope,
+      branchId: auth.scope!.branchId ?? null,
+      expiryHorizon,
+      now,
+    })
+
     const totalInventoryValue = stockBatches.reduce(
       (sum, b) => sum + b.quantity * Number(b.costPrice),
       0
     )
 
-    const stockByProductId = new Map(
-      stockByProduct.map((row) => [row.productId, row._sum.quantity ?? 0])
+    const refundedProfit = round2(
+      refundLines.reduce((sum, line) => sum + line.refundedProfit, 0)
     )
-
-    let productsInStock = 0
-    let lowStockCount = 0
-    for (const product of productRows) {
-      const stock = stockByProductId.get(product.id) ?? 0
-      if (stock > 0) productsInStock += 1
-      // The shared classifier, not a fourth inline copy of the rule. It agreed
-      // with `classifyStock` today, but duplicating the definition is how the
-      // inventory screen and this tile end up disagreeing after one of them is
-      // edited. Zero stock is deliberately not "low" — it has its own figure.
-      if (classifyStock(stock, resolveValues(product).reorderLevel) === 'low_stock') {
-        lowStockCount += 1
-      }
-    }
+    const grossProfit = Number(totalProfitResult._sum.profit || 0)
 
     return NextResponse.json({
       // Reflects the boundary the figures were actually computed under. This
@@ -177,12 +158,31 @@ export async function GET(request: NextRequest) {
       weeklySales: Number(weeklySalesResult._sum.totalAmount || 0),
       monthlySales: Number(monthlySalesResult._sum.totalAmount || 0),
       totalRevenue: Number(totalRevenueResult._sum.totalAmount || 0),
-      totalProfit: Number(totalProfitResult._sum.profit || 0),
+      totalProfit: grossProfit,
+      grossProfit,
+      refundedProfit,
+      netProfit: round2(grossProfit - refundedProfit),
+      // Gross stays, net is the headline. A tile showing only net would hide how
+      // much was refunded; a tile showing only gross would overstate the
+      // business. Every revenue figure above now has its net counterpart, named
+      // so the UI cannot label one with the other's meaning.
+      todayRefunds: todayRefundsResult.totalRefunds,
+      weeklyRefunds: weeklyRefundsResult.totalRefunds,
+      monthlyRefunds: monthlyRefundsResult.totalRefunds,
+      totalRefunds: totalRefundsResult.totalRefunds,
+      todayRefundCount: todayRefundsResult.refundCount,
+      weeklyRefundCount: weeklyRefundsResult.refundCount,
+      monthlyRefundCount: monthlyRefundsResult.refundCount,
+      totalRefundCount: totalRefundsResult.refundCount,
+      todayNetSales: round2(Number(todaySalesResult._sum.totalAmount || 0) - todayRefundsResult.totalRefunds),
+      weeklyNetSales: round2(Number(weeklySalesResult._sum.totalAmount || 0) - weeklyRefundsResult.totalRefunds),
+      monthlyNetSales: round2(Number(monthlySalesResult._sum.totalAmount || 0) - monthlyRefundsResult.totalRefunds),
+      netRevenue: round2(Number(totalRevenueResult._sum.totalAmount || 0) - totalRefundsResult.totalRefunds),
       totalInventoryValue: Number(totalInventoryValue),
       productsInStock,
       lowStockCount,
-      expiringCount: expiringSoonBatches,
-      expiredCount: expiredBatches,
+      expiringCount,
+      expiredCount,
       todayTransactions: todayTransactionsResult,
       productsSoldToday: todaySaleItemsResult._sum.quantity || 0,
       stockReceivedToday: todayBatchesResult,

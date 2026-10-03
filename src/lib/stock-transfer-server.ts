@@ -13,6 +13,7 @@ import {
   UNSETTLED_STATUSES,
   applyTransferStock,
 } from '@/lib/stock-transfer';
+import { toNumber } from '@/lib/utils';
 
 /** The minimum Prisma surface this module needs, for testability. */
 type DbLike = Pick<Prisma.TransactionClient, 'stockTransferLine'>;
@@ -70,6 +71,16 @@ export async function committedQuantityByBatch(
  * Availability is re-checked here (via the guarded decrement) rather than
  * trusted from the create-time check, because units may legitimately have been
  * sold or returned between raising a transfer and completing it.
+ *
+ * CLAIM FIRST. The status is moved to `completed` with a conditional write
+ * BEFORE any stock moves, and that write is the real guard against a
+ * double-dispatch. It used to be an unconditional update at the end, with the
+ * "is it still open?" test living in the route — outside the transaction. Two
+ * dispatchers clicking Complete on the same docket therefore both passed the
+ * test, and the crate left the building twice: the source was debited twice and
+ * the destination credited with stock that never existed. Now exactly one
+ * transaction can win the claim, and the loser is told the transfer is already
+ * settled before it has moved anything.
  */
 export async function completeTransfer(
   tx: Prisma.TransactionClient,
@@ -101,6 +112,23 @@ export async function completeTransfer(
     throw new TransferValidationError('Transfer not found');
   }
 
+  const settledAt = new Date();
+  const claimed = await tx.stockTransfer.updateMany({
+    where: { id: transferId, status: { in: [...UNSETTLED_STATUSES] } },
+    data: {
+      status: 'completed',
+      approvedById: userId,
+      approvedAt: settledAt,
+      completedAt: settledAt,
+    },
+  });
+
+  if (claimed.count === 0) {
+    throw new TransferValidationError(
+      `Transfer ${transfer.reference} is already ${transfer.status} — its stock was settled once and must not be moved again`
+    );
+  }
+
   const destBatchBySource = await applyTransferStock(
     tx,
     transfer.toBranchId,
@@ -112,8 +140,8 @@ export async function completeTransfer(
       // The line's snapshotted cost, not the source batch's current one: a price
       // edit at the source after the transfer was raised must not silently
       // restate what the receiving shop now holds stock at.
-      costPrice: Number(line.unitCost),
-      sellingPrice: Number(line.sourceBatch.sellingPrice),
+      costPrice: toNumber(line.unitCost),
+      sellingPrice: toNumber(line.sourceBatch.sellingPrice),
       expiryDate: line.sourceBatch.expiryDate,
     }))
   );
@@ -127,16 +155,6 @@ export async function completeTransfer(
       });
     }
   }
-
-  await tx.stockTransfer.update({
-    where: { id: transferId },
-    data: {
-      status: 'completed',
-      approvedById: userId,
-      approvedAt: new Date(),
-      completedAt: new Date(),
-    },
-  });
 
   return {
     reference: transfer.reference,

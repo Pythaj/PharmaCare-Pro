@@ -249,13 +249,43 @@ export interface AuditLog {
 
 // ===== Dashboard Stats =====
 export interface DashboardStats {
-  /** 'all' for an admin, 'own' for a cashier — the money figures are scoped. */
+  /** 'all' for an admin, 'own' for a cashier - the money figures are scoped. */
   scope: 'all' | 'own';
+  /** GROSS takings for each window: what the tills collected, before returns. */
   todaySales: number;
   weeklySales: number;
   monthlySales: number;
+  /** GROSS across all time. See the `*NetSales` fields for what was kept. */
   totalRevenue: number;
+  /** GROSS margin all-time, kept beside its net counterpart for the same reason. */
   totalProfit: number;
+  grossProfit: number;
+  /** Margin handed back on approved returns: qty x (unitPrice - costPrice). */
+  refundedProfit: number;
+  /** GROSS profit minus the margin given back. The figure to headline. */
+  netProfit: number;
+  /**
+   * NET = gross minus approved refunds. These are the figures to headline; the
+   * gross ones stay visible beside them because "we sold 400 and gave 50 back"
+   * is a true and useful sentence, and a branch whose returns are climbing must
+   * not be able to hide behind a gross total.
+   */
+  todayNetSales: number;
+  weeklyNetSales: number;
+  monthlyNetSales: number;
+  netRevenue: number;
+  /** Approved refunds in each window, and all time. */
+  todayRefunds: number;
+  weeklyRefunds: number;
+  monthlyRefunds: number;
+  totalRefunds: number;
+  todayRefundCount: number;
+  weeklyRefundCount: number;
+  monthlyRefundCount: number;
+  totalRefundCount: number;
+  /** The branch these figures were computed for; null on "All branches". */
+  branchId: string | null;
+  branch: Branch | null;
   totalInventoryValue: number;
   productsInStock: number;
   lowStockCount: number;

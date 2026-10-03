@@ -134,8 +134,12 @@ export async function PUT(
       // creating it does. Without this, a branch created inactive (or closed and
       // later reopened) came back with an empty shelf, because its catalogue rows
       // are only seeded for active branches.
+      //
+      // Scoped to the branch being reopened, for the same reason as
+      // POST /api/branches: no reason to write another branch's catalogue from
+      // inside this transaction.
       if (result.active && !branch.active) {
-        await seedCatalogueForAllBranches(tx);
+        await seedCatalogueForAllBranches(tx, undefined, [result.id]);
       }
 
       return result;

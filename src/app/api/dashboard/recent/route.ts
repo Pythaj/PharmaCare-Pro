@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { branchRelationWhere, branchWhere } from '@/lib/branches'
-import { classifyBatchExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
+import { classifyBatchExpiry, classifyStock, daysUntil, EXPIRY_CRITICAL_DAYS } from '@/lib/inventory-alerts'
+import { getExpiryAlertDays } from '@/lib/server-settings'
 import {
   createEffectiveValueResolver,
   loadBranchProductOverrides,
@@ -36,6 +37,11 @@ export async function GET(request: NextRequest) {
 
     const isAdmin = auth.user!.role === 'admin'
     const branchScope = branchWhere(auth.scope!)
+    // The owner's configured expiry window. Without this the panel below fell back
+    // to the 90-day constant, so a pharmacy set to warn at 14 days saw far fewer
+    // "expiring soon" alerts on the dashboard than on the Inventory screen — the
+    // same shelf, two different answers.
+    const expiryWarningDays = await getExpiryAlertDays()
     // Per-branch reorder thresholds, loaded once. Empty on "All branches", so
     // every product falls back to its chain-wide default there.
     const resolveValues = createEffectiveValueResolver(
@@ -157,7 +163,7 @@ export async function GET(request: NextRequest) {
 
       // Expiry per batch: expired trumps the product-level "expiring soon".
       for (const batch of batches) {
-        const status = classifyBatchExpiry(batch.expiryDate, now)
+        const status = classifyBatchExpiry(batch.expiryDate, now, expiryWarningDays)
         if (status === 'good') continue
 
         const daysLeft = daysUntil(batch.expiryDate, now)
@@ -171,7 +177,9 @@ export async function GET(request: NextRequest) {
           message: isExpired
             ? `Batch ${batch.batchNumber} expired ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? '' : 's'} ago (${batch.quantity} units)`
             : `Batch ${batch.batchNumber} expires in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${batch.quantity} units)`,
-          severity: isExpired || daysLeft <= 30 ? 'danger' : 'warning',
+          // Named constant, not a bare 30: the threshold that decides "danger"
+          // should not be a different number from the one the policy declares.
+          severity: isExpired || daysLeft <= EXPIRY_CRITICAL_DAYS ? 'danger' : 'warning',
           quantity: batch.quantity,
           expiryDate: batch.expiryDate.toISOString(),
         })
@@ -202,6 +210,9 @@ export async function GET(request: NextRequest) {
       })),
       recentPurchases,
       recentReturns,
+      // Echoed so the panel can label its own alert list with the same window the
+      // server classified against, rather than implying a hardcoded one.
+      expiryWarningDays,
       stockAlerts: stockAlerts.slice(0, 50),
     })
   } catch (error) {

@@ -94,6 +94,17 @@ interface BatchEditRow {
   costPrice: number;
   sellingPrice: number;
   expiryDate: string;
+  /**
+   * Which shelf this row belongs to. Populated from the API's `batch.branch`.
+   *
+   * It is here so a batch can never be edited without the screen being able to
+   * say whose stock it is. On the consolidated "All branches" view the product
+   * endpoint returns every branch's batches merged into one list, and an earlier
+   * version of this editor rendered them identically — quantity, price and a
+   * delete button, with nothing to say a given row was another shop's shelf.
+   */
+  branchId?: string | null;
+  branchName?: string | null;
 }
 
 /** Converts a date (ISO string or Date) into a YYYY-MM-DD value for <input type="date">. */
@@ -1081,7 +1092,7 @@ export default function ProductsView() {
       if (res.ok) {
         const data = await res.json();
         const rows: BatchEditRow[] = (Array.isArray(data.batches) ? data.batches : []).map(
-          (b: Batch & { currentQty?: number }, i: number) => ({
+          (b: Batch & { currentQty?: number; branch?: { id: string; name: string } | null }, i: number) => ({
             key: `existing-${b.id ?? i}`,
             id: b.id,
             batchNumber: b.batchNumber,
@@ -1089,13 +1100,27 @@ export default function ProductsView() {
             costPrice: Number(b.costPrice) || 0,
             sellingPrice: Number(b.sellingPrice) || 0,
             expiryDate: toDateInputValue(b.expiryDate),
+            branchId: b.branch?.id ?? null,
+            branchName: b.branch?.name ?? null,
           })
         );
         setEditBatches(rows);
         setEditBatchesOriginal(rows);
         if (rows.length > 0) setEditActiveBatchKey(rows[0].key);
+      } else {
+        // A failed lookup must not present an empty stock list as "this branch has
+        // no stock" — that reads as a real, alarming answer to the owner's
+        // question. Say the load failed instead.
+        const body = await res.json().catch(() => ({}));
+        setEditBatches([]);
+        setEditBatchesOriginal([]);
+        toast.error(body.error ?? 'Could not load this product\'s stock. Check your connection and try again.');
       }
-    } catch { /* silent */ }
+    } catch {
+      setEditBatches([]);
+      setEditBatchesOriginal([]);
+      toast.error('Could not reach the server to load this product\'s stock. Nothing has been changed.');
+    }
   };
 
   const updateBatchRow = (key: string, patch: Partial<BatchEditRow>) => {
@@ -1137,29 +1162,54 @@ export default function ProductsView() {
 
     const activeBatch = editBatches.find((r) => r.key === editActiveBatchKey);
 
-    if (editBatches.length === 0) {
-      toast.error('Add at least one stock batch for this drug before saving.');
-      return;
-    }
-    if (activeBatch?.quantity != null && Number(activeBatch.quantity) < 0) {
-      toast.error('Stock quantity cannot be negative.');
-      return;
-    }
-    if (!activeBatch?.batchNumber.trim()) {
-      toast.info('Leave batch number blank to auto-generate one.');
+    /* No blanket "at least one batch" rule. This handler saves two independent
+       things: the chain-wide catalogue row, and this branch's stock. Requiring a
+       batch before saving meant a drug that is stocked nowhere — or a plain
+       rename of a drug whose stock lives at other branches — could not be saved
+       at all, so fixing a typo in a product name required inventing a fake
+       batch. Stock still has to be valid when there is stock to save; it just
+       no longer has to exist for a catalogue edit to go through. */
+
+    /* Every row, not just the selected one. Validation used to read
+       `activeBatch` alone, which meant with four rows on screen the owner could
+       put -50 in the third and -9 in the fourth, leave the first selected, pass
+       validation, and have both negatives sent to the server. Each row is its
+       own batch record; each one gets checked. */
+    for (const row of editBatches) {
+      const label = row.batchNumber.trim() || `batch #${editBatches.indexOf(row) + 1}`;
+      const qty = Number(row.quantity);
+      if (!Number.isFinite(qty) || qty < 0) {
+        toast.error(`Quantity for ${label} cannot be negative.`);
+        return;
+      }
+      if (Number(row.costPrice) < 0 || Number(row.sellingPrice) < 0) {
+        toast.error(`Prices for ${label} cannot be negative.`);
+        return;
+      }
+      if (Number(row.sellingPrice) < Number(row.costPrice)) {
+        /* Not a hard error — clearance and expiry dumps legitimately sell below
+           cost. Just make it explicit rather than letting it look like a typo. */
+        toast.warning(
+          `${label} sells below cost (${Number(row.sellingPrice).toFixed(2)} < ${Number(row.costPrice).toFixed(2)}). Saving anyway — confirm that is intended.`,
+          { duration: 6000 }
+        );
+        break;
+      }
     }
 
-    // Receiving stock means putting it on a specific shelf, so it needs a
-    // specific shop. The server refuses without one — this says why first,
-    // instead of letting the user fill in a whole batch and then read a 400.
-    // Only NEW batches are blocked: editing a batch that already exists at the
-    // selected branch is a different operation, and with no branch selected
-    // there is nothing to update anyway (the edit list is branch-scoped, so it
-    // is empty).
-    const addingNewBatches = editBatches.some((r) => !r.id);
-    if (addingNewBatches && !activeBranch) {
+    /* Receiving stock means putting it on a specific shelf, so it needs a
+       specific shop. The server refuses without one — this says why first,
+       instead of letting the user fill in a whole batch and then read a 400.
+
+       This guards *any* batch write, not just new rows. It used to check only
+       "did the user add a new batch", which left the destructive half
+       unprotected: on the consolidated view the list holds every branch's
+       batches, so dropping one row and saving fired DELETE at another shop's
+       stock. The server rejected it, but only after the user had already filled
+       in the form and submitted. */
+    if (editBatches.length > 0 && !activeBranch) {
       toast.error(
-        'Select the branch receiving this stock first. Stock belongs to one branch — it is never shared.',
+        'Select the branch whose stock you are changing first. Stock belongs to one branch — it is never shared.',
         { duration: 6000 }
       );
       return;
@@ -1232,10 +1282,20 @@ export default function ProductsView() {
       }
 
       if (errors.length > 0) {
-        toast.warning(`${errors.length} issue(s) saving — review the batches below. First issue: ${errors[0]}`);
-      } else {
-        toast.success(`"${editForm.name.trim()}" updated successfully`);
+        /* Stay open. This closed the dialog and then said "review the batches
+           below" — pointing the owner at the very rows that had just been
+           dismissed, so the only way to see the rejected change was to reopen
+           and redo it. The product row was already committed by step 1, so
+           closing would also leave a half-applied edit looking like a clean
+           failure. */
+        toast.error(
+          `${errors.length} stock change(s) were rejected — nothing was lost, fix them below and save again. First issue: ${errors[0]}`,
+          { duration: 8000 }
+        );
+        return;
       }
+
+      toast.success(`"${editForm.name.trim()}" updated successfully`);
       setShowEditDialog(false);
       setEditProduct(null);
       // Batch quantities and prices are what the tills read, so a stock edit has
@@ -2303,13 +2363,46 @@ export default function ProductsView() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="text-emerald-700 border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50"
+                    disabled={!activeBranch}
+                    title={
+                      activeBranch
+                        ? undefined
+                        : 'Select a branch first — stock belongs to one branch, never to all of them at once'
+                    }
+                    className="text-emerald-700 border-emerald-200 bg-emerald-50/60 hover:bg-emerald-50 disabled:opacity-50"
                     onClick={addBatchRow}
                   >
                     <PackagePlus className="h-3.5 w-3.5 mr-1" />
                     Add Batch
                   </Button>
                 </div>
+
+                {/* One `disabled` fieldset gates every stock control below —
+                    quantities, prices, expiry, the per-row delete button and the
+                    "Add Batch" button alike.
+
+                    This is the client half of a server rule. `PATCH`/`DELETE
+                    /api/batches/[id]` now require a selected branch (they used to
+                    skip the ownership check entirely on "All branches"), and this
+                    fieldset means the screen stops offering an edit that the API
+                    will refuse, instead of letting the owner fill in a form and
+                    only then be told to pick a branch. It also closes the worst
+                    version of the bug: on the consolidated view this list merges
+                    every branch's batches, so a quantity box with no branch label
+                    next to it is an invitation to restock the wrong shop. */}
+                <fieldset disabled={!activeBranch} className="space-y-3.5 disabled:opacity-60">
+                    {/* A disabled fieldset greys its contents out with no stated
+                        reason, and "why is this grey?" is a support call. The
+                        legend carries the reason and sits with the controls it
+                        governs. Hidden from assistive tech rather than repeated:
+                        the banner below already narrates the same rule in full,
+                        so a screen reader would hear it twice. */}
+                    {!activeBranch && (
+                      <legend className="sr-only">
+                        Stock and pricing for the selected branch. Choose a branch to
+                        edit.
+                      </legend>
+                    )}
 
                 {/* Stated up front rather than only on save: the batches below
                     are entered before anything is rejected, and a user who only
@@ -2346,7 +2439,22 @@ export default function ProductsView() {
                   <div className="rounded-xl border-2 border-dashed border-slate-200 p-6 text-center">
                     <Boxes className="h-6 w-6 text-slate-300 mx-auto mb-2" />
                     <p className="text-sm text-slate-500">No stock batches yet.</p>
-                    <p className="text-xs text-slate-400 mt-1">Click <span className="font-medium text-emerald-600">Add Batch</span> to create the first stock entry for this drug.</p>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {activeBranch ? (
+                        <>
+                          Click{' '}
+                          <span className="font-medium text-emerald-600">Add Batch</span> to
+                          create the first stock entry for this drug.
+                        </>
+                      ) : (
+                        /* No branch selected means every branch's batches were
+                           asked for and none came back, so this really is "no
+                           stock anywhere". Telling this user to click a disabled
+                           button would be the same non-answer the API's 400 used
+                           to be. */
+                        <>This drug is stocked at no branch. Select a branch, then add a batch.</>
+                      )}
+                    </p>
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -2375,6 +2483,23 @@ export default function ProductsView() {
                               {row.id && (
                                 <Badge variant="outline" className="text-[9px] px-1.5 py-0 h-4 bg-slate-50 text-slate-400 border-slate-200">
                                   existing
+                                </Badge>
+                              )}
+                              {/* Only shown on the consolidated view, because
+                                  that is the only time it is ambiguous. With a
+                                  branch selected the API filters batches to that
+                                  one branch, so every row is already the same
+                                  shelf and a badge would just be noise. On "All
+                                  branches" the list spans every shop, and a bare
+                                  quantity box is precisely how the wrong shelf
+                                  gets restocked. */}
+                              {!activeBranch && row.branchName && (
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] px-1.5 py-0 h-4 gap-1 bg-amber-50 text-amber-800 border-amber-300 font-semibold"
+                                >
+                                  <Building2 className="h-2.5 w-2.5" />
+                                  {row.branchName}
                                 </Badge>
                               )}
                             </div>
@@ -2507,6 +2632,7 @@ export default function ProductsView() {
                     </div>
                   );
                 })()}
+                </fieldset>
               </div>
             </div>
           )}
