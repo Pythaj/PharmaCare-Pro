@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, Fragment } from 'rea
 import { money, configuredCurrency } from '@/lib/currency';
 import { useAppStore } from '@/stores/app-store';
 import { cn } from '@/lib/utils';
-import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, PackagePlus, Boxes, RefreshCcw, Package, Loader2, Building2 } from 'lucide-react';
+import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, PackagePlus, Boxes, RefreshCcw, Package, Loader2, Building2, Package2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { LoadError } from '@/components/ui/load-error';
 import { Button } from '@/components/ui/button';
@@ -691,7 +691,27 @@ export default function ProductsView() {
   // `openingQuantity` is a string, not a number, so a half-typed "1" of "100"
   // is not clobbered to 0 by `parseFloat('1') || 0` on every keystroke. It is
   // parsed once, at save time, and the server revalidates it.
-  const [addForm, setAddForm] = useState({
+  interface OpeningBatchItem {
+    batchNumber?: string;
+    quantity?: number | string;
+    expiryDate?: string;
+    costPrice?: number;
+    sellingPrice?: number;
+  }
+
+  const [addForm, setAddForm] = useState<{
+    name: string;
+    genericName: string;
+    categoryId: string;
+    unit: string;
+    reorderLevel: number;
+    defaultCostPrice: number;
+    defaultSellingPrice: number;
+    openingQuantity: string;
+    openingBatchNumber: string;
+    openingExpiry: string;
+    openingBatches: OpeningBatchItem[];
+  }>({
     name: '',
     genericName: '',
     categoryId: '',
@@ -702,10 +722,12 @@ export default function ProductsView() {
     openingQuantity: '',
     openingBatchNumber: '',
     openingExpiry: '',
+    openingBatches: [],
   });
   // Track an auto-detected category/generic so we can show a clear "auto-filled"
   // affordance without clobbering deliberate edits by the owner.
   const [addAutoDetected, setAddAutoDetected] = useState(false);
+  const [addTab, setAddTab] = useState<'basic' | 'pricing' | 'stock'>('basic');
   const [submitting, setSubmitting] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [productToDelete, setProductToDelete] = useState<ProductWithStock | null>(null);
@@ -929,16 +951,37 @@ export default function ProductsView() {
   const handleAddProduct = async () => {
     if (!addForm.name.trim()) { toast.error('Product name is required'); return; }
 
+    const singleQty = Number(addForm.openingQuantity) || 0;
+    const effectiveOpeningBatches: OpeningBatchItem[] = addForm.openingBatches.length > 0
+      ? addForm.openingBatches
+      : singleQty > 0
+        ? [{
+            quantity: singleQty,
+            batchNumber: addForm.openingBatchNumber.trim() || undefined,
+            expiryDate: addForm.openingExpiry || undefined,
+            costPrice: addForm.defaultCostPrice,
+            sellingPrice: addForm.defaultSellingPrice,
+          }]
+        : [];
+
     // Checked here so the admin gets an instant, specific message instead of a
     // round-trip. The server refuses it too — this is a courtesy, not the guard.
-    const openingQty = addForm.openingQuantity.trim() === '' ? 0 : Number(addForm.openingQuantity);
-    if (!Number.isFinite(openingQty) || !Number.isInteger(openingQty) || openingQty < 0) {
-      toast.error('Opening quantity must be a whole number of 0 or more');
+    const totalOpeningQty = effectiveOpeningBatches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
+    if (totalOpeningQty > 0 && !activeBranch) {
+      toast.error('Select the branch holding this stock, or leave batches empty');
       return;
     }
-    if (openingQty > 0 && !activeBranch) {
-      toast.error('Select the branch holding this stock, or set the quantity to 0');
-      return;
+    // Validate each batch
+    for (const batch of effectiveOpeningBatches) {
+      const qty = Number(batch.quantity);
+      if (!Number.isFinite(qty) || !Number.isInteger(qty) || qty < 0) {
+        toast.error('Batch quantities must be whole numbers of 0 or more');
+        return;
+      }
+      if (batch.expiryDate && new Date(batch.expiryDate) < new Date()) {
+        toast.error(`Batch ${batch.batchNumber || '(unnamed)'} has an expired date`);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -954,13 +997,14 @@ export default function ProductsView() {
           reorderLevel: addForm.reorderLevel,
           defaultCostPrice: addForm.defaultCostPrice,
           defaultSellingPrice: addForm.defaultSellingPrice,
-          // Sent as a nested object rather than flat fields so the server can
-          // tell "no opening stock" from "opening stock of zero".
-          initialStock: {
-            quantity: openingQty,
-            batchNumber: addForm.openingBatchNumber.trim() || undefined,
-            expiryDate: addForm.openingExpiry || undefined,
-          },
+          // Multiple batches for initial stock
+          initialStockBatches: effectiveOpeningBatches.map((b) => ({
+            quantity: Number(b.quantity) || 0,
+            batchNumber: b.batchNumber?.trim() || undefined,
+            expiryDate: b.expiryDate || undefined,
+            costPrice: b.costPrice ? Number(b.costPrice) : undefined,
+            sellingPrice: b.sellingPrice ? Number(b.sellingPrice) : undefined,
+          })),
         }),
       });
       if (!res.ok) {
@@ -968,10 +1012,10 @@ export default function ProductsView() {
         throw new Error(data.error || 'Failed to add product');
       }
       const saved = await res.json().catch(() => null);
-      const stocked = saved?.openingStock;
+      const totalStocked = saved?.openingStock?.quantity ?? effectiveOpeningBatches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
       toast.success(
-        stocked
-          ? `"${addForm.name}" added — ${stocked.quantity} unit(s) stocked at ${stocked.branchName ?? activeBranch?.name}`
+        totalStocked > 0
+          ? `"${addForm.name}" added — ${totalStocked} unit(s) stocked at ${activeBranch?.name}`
           : `"${addForm.name}" added with price ${money(addForm.defaultSellingPrice)}`
       );
       setShowAddDialog(false);
@@ -987,6 +1031,7 @@ export default function ProductsView() {
         openingQuantity: '',
         openingBatchNumber: '',
         openingExpiry: '',
+        openingBatches: [],
       });
       notifyCatalogueChanged();
       fetchProducts(search, categoryFilter);
@@ -1830,8 +1875,10 @@ export default function ProductsView() {
             openingQuantity: '',
             openingBatchNumber: '',
             openingExpiry: '',
+            openingBatches: [],
           });
           setAddAutoDetected(false);
+          setAddTab('basic');
         }
         setShowAddDialog(open);
       }}>

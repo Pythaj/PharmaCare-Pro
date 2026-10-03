@@ -281,7 +281,7 @@ export async function POST(request: NextRequest) {
     if (!auth.success) {
       return NextResponse.json({ error: auth.error }, { status: auth.status })
     }
-    const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice, initialStock } = body
+    const { name, genericName, categoryId, description, unit, reorderLevel, defaultCostPrice, defaultSellingPrice, initialStock, initialStockBatches } = body
 
     // Shared validators — see lib/product-input for what these replaced.
     const parsedName = parseProductName(name)
@@ -327,23 +327,57 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: parsedSelling.error }, { status: 400 })
     }
 
-    // The optional "how many are on the shelf now?" box. Absent/zero is normal —
-    // the drug joins the catalogue at every branch with no stock anywhere.
-    const parsedStock = parseOpeningStock(initialStock)
-    if (!parsedStock.ok) {
-      return NextResponse.json({ error: parsedStock.error }, { status: 400 })
+    // Process multiple opening batches if passed, otherwise fall back to single initialStock
+    const batchesToCreate: { quantity: number; batchNumber: string; expiryDate: Date; costPrice: number; sellingPrice: number }[] = []
+
+    if (Array.isArray(initialStockBatches) && initialStockBatches.length > 0) {
+      for (let i = 0; i < initialStockBatches.length; i++) {
+        const item = initialStockBatches[i]
+        const q = Number(item.quantity) || 0
+        if (q <= 0) continue
+        const bNum = item.batchNumber?.trim() || (i === 0 ? SEED_BATCH_NUMBER : `BATCH-${Date.now()}-${i + 1}`)
+        const exp = item.expiryDate
+          ? new Date(`${item.expiryDate}T00:00:00`)
+          : new Date(new Date().setFullYear(new Date().getFullYear() + 100))
+        const cPrice = item.costPrice !== undefined ? Number(item.costPrice) : parsedCost.value
+        const sPrice = item.sellingPrice !== undefined ? Number(item.sellingPrice) : parsedSelling.value
+        batchesToCreate.push({
+          quantity: q,
+          batchNumber: bNum,
+          expiryDate: exp,
+          costPrice: cPrice,
+          sellingPrice: sPrice,
+        })
+      }
+    } else {
+      const parsedStock = parseOpeningStock(initialStock)
+      if (!parsedStock.ok) {
+        return NextResponse.json({ error: parsedStock.error }, { status: 400 })
+      }
+      const opening = parsedStock.value
+      if (opening) {
+        const bNum = opening.batchNumber || SEED_BATCH_NUMBER
+        const exp = opening.expiryDate
+          ? new Date(`${opening.expiryDate}T00:00:00`)
+          : new Date(new Date().setFullYear(new Date().getFullYear() + 100))
+        batchesToCreate.push({
+          quantity: opening.quantity,
+          batchNumber: bNum,
+          expiryDate: exp,
+          costPrice: parsedCost.value,
+          sellingPrice: parsedSelling.value,
+        })
+      }
     }
-    const opening = parsedStock.value
+
+    const hasStockToReceive = batchesToCreate.length > 0
 
     // A `Product` is chain-wide catalogue data, so an admin with no branch
     // selected can still create one. But the opening quantity is real stock,
     // which is physically held at ONE branch — so receiving it needs a branch
     // and is refused on "All branches" rather than being filed somewhere
     // arbitrary. This is the same rule `POST /api/batches` enforces.
-    //
-    // The guard therefore applies to the STOCK, not to the product: adding a
-    // drug to the catalogue with no quantity is legitimate from any branch.
-    const stockBranchId = opening
+    const stockBranchId = hasStockToReceive
       ? requireBranchForWrite(
           auth.scope!,
           'Select the branch holding this stock before saving, or leave the quantity at 0 to add the drug to the catalogue without stock'
@@ -361,9 +395,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Create the product AND materialise its per-branch catalogue rows in one
-    // transaction. Seeding separately would leave a window where the product
-    // exists but is sellable nowhere — the exact state that made a freshly added
-    // drug invisible at every branch.
+    // transaction.
     const product = await db.$transaction(async (tx) => {
       const created = await tx.product.create({
         data: {
@@ -385,56 +417,33 @@ export async function POST(request: NextRequest) {
       // every till straight away while real quantities stay owner-entered.
       await seedCatalogueForAllBranches(tx, [created.id])
 
-      // The opening count is written INSIDE the same transaction as the product.
-      // Doing it after would leave a window where the drug exists with no stock
-      // anywhere — and if the batch write then failed, the admin would be told it
-      // saved while the quantity they typed was silently lost.
-      if (opening && stockBranchId) {
-        const batchNumber = opening.batchNumber || SEED_BATCH_NUMBER
+      // The opening counts are written INSIDE the same transaction as the product.
+      if (hasStockToReceive && stockBranchId) {
+        for (const batchItem of batchesToCreate) {
+          const counted = {
+            quantity: batchItem.quantity,
+            costPrice: batchItem.costPrice,
+            sellingPrice: batchItem.sellingPrice,
+            expiryDate: batchItem.expiryDate,
+          }
 
-        // A real expiry when one was given; otherwise the seeded far-future date,
-        // which must not read as "expired" on the low-stock panel.
-        const expiryDate = opening.expiryDate
-          ? new Date(`${opening.expiryDate}T00:00:00`)
-          : new Date(new Date().setFullYear(new Date().getFullYear() + 100))
-
-        // Priced from the catalogue figures the admin just entered, so the drug
-        // cannot be sold for 0 on the strength of a fresh batch — the exact
-        // failure `seedCatalogueForAllBranches` documents.
-        const counted = {
-          quantity: opening.quantity,
-          costPrice: parsedCost.value,
-          sellingPrice: parsedSelling.value,
-          expiryDate,
-        }
-
-        await tx.batch.upsert({
-          where: {
-            productId_batchNumber_branchId: {
-              productId: created.id,
-              batchNumber,
-              branchId: stockBranchId,
+          await tx.batch.upsert({
+            where: {
+              productId_batchNumber_branchId: {
+                productId: created.id,
+                batchNumber: batchItem.batchNumber,
+                branchId: stockBranchId,
+              },
             },
-          },
-          create: {
-            productId: created.id,
-            branchId: stockBranchId,
-            batchNumber,
-            ...counted,
-          },
-          // Deliberately NOT `update: {}`. The seeding call above has already
-          // created a quantity-0 STOCK-001 row for this exact (product, branch), so
-          // when the admin leaves the batch number blank — the common case — this
-          // upsert MATCHES that row instead of creating a new one. An empty update
-          // would leave it at zero, silently discarding the opening count the admin
-          // just typed while the API still answered 201: the drug would appear on
-          // the till as "in stock" and then have nothing to sell.
-          //
-          // Overwriting is safe precisely because the product is brand new. This is
-          // the only batch that can exist for it, and it was created seconds ago at
-          // zero, so there is no counted stock here to clobber.
-          update: counted,
-        })
+            create: {
+              productId: created.id,
+              branchId: stockBranchId,
+              batchNumber: batchItem.batchNumber,
+              ...counted,
+            },
+            update: counted,
+          })
+        }
       }
 
       return created
@@ -443,20 +452,22 @@ export async function POST(request: NextRequest) {
     // Name the branch in the audit trail when an opening count was booked in.
     // "Created product X" alone cannot answer "which shelf did those units
     // land on?" six months later during a stock take.
-    const stockBranch = opening && stockBranchId
+    const stockBranch = hasStockToReceive && stockBranchId
       ? await db.branch.findUnique({
           where: { id: stockBranchId },
           select: { name: true },
         })
       : null
 
+    const totalOpeningQuantity = batchesToCreate.reduce((sum, b) => sum + b.quantity, 0)
+
     await logAudit({
       userId: auth.user!.userId,
       action: 'CREATE',
       entity: 'Product',
       entityId: product.id,
-      details: opening
-        ? `Created product "${product.name}" with ${opening.quantity} unit(s) of opening stock at ${stockBranch?.name ?? stockBranchId}`
+      details: hasStockToReceive
+        ? `Created product "${product.name}" with ${totalOpeningQuantity} unit(s) of opening stock at ${stockBranch?.name ?? stockBranchId}`
         : `Created product "${product.name}" with no stock`,
       ipAddress: getClientIp(request),
     })
@@ -466,10 +477,10 @@ export async function POST(request: NextRequest) {
         ...product,
         // Echoed so the client can confirm WHERE the quantity went instead of
         // assuming the branch it had selected.
-        openingStock: opening
+        openingStock: hasStockToReceive
           ? {
-              quantity: opening.quantity,
-              batchNumber: opening.batchNumber || SEED_BATCH_NUMBER,
+              quantity: totalOpeningQuantity,
+              batchNumber: batchesToCreate[0]?.batchNumber || SEED_BATCH_NUMBER,
               branchId: stockBranchId,
               branchName: stockBranch?.name ?? null,
             }
