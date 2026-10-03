@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/collapsible';
 import { useAppStore } from '@/stores/app-store';
 import { usePermissions } from '@/hooks/use-permissions';
+import { LoadError } from '@/components/ui/load-error';
 import { classifyBatchExpiry, daysUntil } from '@/lib/inventory-alerts';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -151,6 +152,8 @@ export default function InventoryView() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<StockFilter>('all');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const navigate = useAppStore((s) => s.navigate);
   const { canManageInventory } = usePermissions();
 
@@ -171,28 +174,43 @@ export default function InventoryView() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setError(null);
       try {
         const [alertsRes, productsRes] = await Promise.all([
           fetch('/api/inventory/alerts'),
           fetch('/api/products?search='),
         ]);
-        if (alertsRes.ok && !cancelled) {
-          const data = await alertsRes.json();
-          setAlerts(data);
+        if (cancelled) return;
+        // Report the first failure rather than rendering an empty shelf. A 500
+        // here used to leave both states at their defaults, so the screen showed
+        // "no low stock, no expiring stock" — the one answer this screen exists
+        // to give, stated wrongly.
+        if (!alertsRes.ok || !productsRes.ok) {
+          const failed = !alertsRes.ok ? alertsRes : productsRes;
+          const body = await failed.json().catch(() => ({}));
+          setError(
+            body.error ?? `Could not load inventory (HTTP ${failed.status}). Nothing shown is a stock count.`
+          );
+          return;
         }
-        if (productsRes.ok && !cancelled) {
-          const data = await productsRes.json();
-          const mapped = (data.products ?? []).map((p: any) => ({
-            ...p,
-            batches: p.batches?.map((b: any) => ({ ...b, currentQty: b.quantity })) ?? [],
-          }));
-          setProducts(mapped);
+        const data = await alertsRes.json();
+        if (!cancelled) setAlerts(data);
+        const prodData = await productsRes.json();
+        const mapped = (prodData.products ?? []).map((p: any) => ({
+          ...p,
+          batches: p.batches?.map((b: any) => ({ ...b, currentQty: b.quantity })) ?? [],
+        }));
+        if (!cancelled) setProducts(mapped);
+      } catch {
+        if (!cancelled) {
+          setError('Could not reach the server to load inventory.');
         }
-      } catch { /* silent */ }
-      if (!cancelled) setLoading(false);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [retryNonce]);
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -307,6 +325,8 @@ export default function InventoryView() {
           Monitor stock levels, expiry dates, and inventory health across all products.
         </p>
       </div>
+
+      {error && <LoadError message={error} onRetry={() => setRetryNonce((n) => n + 1)} />}
 
       {/* ===== Summary Dashboard Cards ===== */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">

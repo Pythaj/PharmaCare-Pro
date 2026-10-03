@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { requireBranchScope } from '@/lib/require-auth'
 import { logAudit, getClientIp } from '@/lib/audit'
 import { classifyProductExpiry, classifyStock, daysUntil } from '@/lib/inventory-alerts'
-import { getExpiryAlertDays } from '@/lib/server-settings'
+import { getExpiryAlertDays, getLowStockThreshold } from '@/lib/server-settings'
 import { seedCatalogueForAllBranches, SEED_BATCH_NUMBER } from '@/lib/catalogue-seeding'
 import { requireBranchForWrite } from '@/lib/branches'
 import { parseErrorResponse } from '@/lib/api-error'
@@ -311,7 +311,8 @@ export async function POST(request: NextRequest) {
 
     // 0 means "never reorder" and must survive: `reorderLevel || 10` used to
     // overwrite it and quietly flag the product as low stock forever.
-    const parsedReorderLevel = parseReorderLevel(reorderLevel, 10)
+    const defaultReorder = await getLowStockThreshold()
+    const parsedReorderLevel = parseReorderLevel(reorderLevel, defaultReorder)
     if (!parsedReorderLevel.ok) {
       return NextResponse.json({ error: parsedReorderLevel.error }, { status: 400 })
     }

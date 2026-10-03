@@ -8,6 +8,7 @@ import { ValidationError, parseErrorResponse } from '@/lib/api-error'
 import { roundMoney } from '@/lib/money'
 import { decrementBatchStock, restoreBatchStock, type RestorableLine } from '@/lib/stock'
 import { parsePaymentMethod, parseSaleLines, resolveSaleDate } from '@/lib/sale-input'
+import { getRequireCustomer, getMaxLineItems } from '@/lib/server-settings'
 import { nextInvoiceNumber } from '@/lib/invoice-sequence'
 import { isUniqueViolationOn } from '@/lib/prisma-errors'
 
@@ -182,6 +183,18 @@ export async function POST(request: NextRequest) {
     // merged so the guarded decrement below is asked for the combined quantity
     // rather than for each line's share of the same shelf.
     const items = parseSaleLines(rawItems)
+
+    // maxLineItems: reject carts that exceed the configured limit
+    const maxLineItems = await getMaxLineItems()
+    if (items.length > maxLineItems) {
+      throw new ValidationError(`Cart exceeds the maximum of ${maxLineItems} line items. Remove some items or increase the limit in Settings.`)
+    }
+
+    // requireCustomer: reject sales without a customer when enabled
+    const requireCustomer = await getRequireCustomer()
+    if (requireCustomer && !customerId) {
+      throw new ValidationError('A customer must be selected before completing this sale. Enable "Require Customer" in Settings to change this behavior.')
+    }
 
     // Use Prisma transaction for atomic stock deduction + sale creation.
     // Prices are derived server-side from the cheapest-eligible or selected

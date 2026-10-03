@@ -40,6 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { LoadError } from '@/components/ui/load-error';
 import { useCatalogueSync } from '@/lib/use-catalogue-sync';
 import {
   Dialog,
@@ -1048,7 +1049,10 @@ export default function POSView() {
   const [activeCategory, setActiveCategory] = useState<string>('All');
 
   const [notes, setNotes] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>('cash');
+  const defaultPaymentMethod = settings.pos.defaultPaymentMethod;
+  const validPaymentMethods: ('cash' | 'card' | 'mobile_money')[] = ['cash', 'card', 'mobile_money'];
+  const initialPaymentMethod = validPaymentMethods.includes(defaultPaymentMethod as any) ? defaultPaymentMethod as 'cash' | 'card' | 'mobile_money' : 'cash';
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card' | 'mobile_money'>(initialPaymentMethod);
   const [showReceipt, setShowReceipt] = useState(false);
   const [completedSale, setCompletedSale] = useState<{
     invoiceNo: string;
@@ -1067,6 +1071,7 @@ export default function POSView() {
   const [cashReceived, setCashReceived] = useState(0);
   const [saleDate, setSaleDate] = useState(() => toDateKey(new Date()));
   const [loading, setLoading] = useState(true);
+  const [productsError, setProductsError] = useState<string | null>(null);
   const [cartOpen, setCartOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
 
@@ -1126,7 +1131,7 @@ export default function POSView() {
         const data = await res.json();
         setCustomers(data.customers ?? []);
       }
-    } catch { /* silent — customer attach is optional in POS */ }
+    } catch { /* non-fatal: customer attach is optional in POS */ }
   }, []);
 
   useEffect(() => {
@@ -1216,8 +1221,14 @@ export default function POSView() {
         setProducts(newProducts);
         const cats = [...new Set(newProducts.map((p: Product) => p.category?.name).filter(Boolean))] as string[];
         setCategories(['All', ...cats]);
+        setProductsError(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setProductsError(data.error ?? `Could not load products (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      setProductsError('Could not reach the server to load products.');
+    }
   }, []);
 
   // Stable, argument-free wrapper for useCatalogueSync. Search stays local and
@@ -1455,6 +1466,17 @@ export default function POSView() {
       toast.error('Cart is empty');
       return;
     }
+    // maxLineItems: enforce the configured limit client-side for immediate feedback
+    const maxLineItems = settings.pos.maxLineItems;
+    if (maxLineItems > 0 && cart.length > maxLineItems) {
+      toast.error(`Cart exceeds the maximum of ${maxLineItems} line items. Remove some items or increase the limit in Settings.`);
+      return;
+    }
+    // requireCustomer: enforce customer selection when enabled
+    if (settings.pos.requireCustomer && !selectedCustomerId) {
+      toast.error('A customer must be selected before completing this sale. Add a customer or disable "Require Customer" in Settings.');
+      return;
+    }
     // Guard against double-submits (rapid taps / queued clicks) — the request
     // itself is also stock-locking on the server, but never queue two posts.
     if (submittingRef.current) return;
@@ -1652,6 +1674,16 @@ export default function POSView() {
     );
   }
 
+  // A cashier cannot sell against an empty catalogue, so when the product load
+  // failed and nothing is cached, say so instead of showing "No products found".
+  if (!products.length && productsError) {
+    return (
+      <div className="p-6">
+        <LoadError message={productsError} onRetry={() => { void fetchProducts(''); }} />
+      </div>
+    );
+  }
+
   // ── Customer attach bar (shared by desktop cart panel & mobile sheet) ──
   const customerBlock = (
     <div className="shrink-0 px-3 py-2 border-b border-slate-100/80 bg-white/90">
@@ -1719,6 +1751,14 @@ export default function POSView() {
 
         {/* Stock Movement Ticker */}
         <StockMovementTicker changes={stockChanges} />
+
+        {productsError && (
+          <LoadError
+            message={productsError}
+            onRetry={() => { void fetchProducts(''); }}
+            className="mb-3"
+          />
+        )}
 
         {/* Category Tabs */}
         <div className="flex gap-2 mb-3 overflow-x-auto pb-2 hide-scrollbar-mobile -mx-3 px-3 lg:mx-0 lg:px-0 scrollbar-none">
@@ -2134,156 +2174,165 @@ export default function POSView() {
 
       {/* Receipt Modal */}
       <Dialog open={showReceipt} onOpenChange={(open) => { if (!open) handleCloseReceipt(); }}>
-        <DialogContent className="max-w-sm p-0 gap-0 overflow-hidden">
-          <DialogTitle className="sr-only">Sale Completed - Receipt</DialogTitle>
-          <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
-          {completedSale && (
-            <div>
-              {/* Professional Receipt */}
-              <div
-                id="receipt-print"
-                className="bg-white text-slate-900 overflow-hidden"
-              >
-                {/* Receipt Header - Pharmacy Branding */}
-                <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-4 py-3 text-white text-center relative overflow-hidden">
-                  <div className="absolute inset-0 opacity-10 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px'}} />
-                  <div className="relative">
-                    <div className="flex items-center justify-center gap-1.5 mb-0.5">
-                      <PillLogo className="h-4 w-4 text-emerald-200" />
-                      <h3 className="text-base font-bold tracking-wide">{settings.pharmacy.name}</h3>
-                      <PillLogo className="h-4 w-4 text-emerald-200" />
-                    </div>
-                    <p className="text-emerald-100 text-[10px]">{settings.pharmacy.address}</p>
-                    <p className="text-emerald-100 text-[10px]">Tel: {settings.pharmacy.phone}</p>
-                  </div>
-                </div>
-
-                {/* Success badge */}
-                <div className="flex items-center justify-center -mt-4 relative z-10">
-                  <div className="h-8 w-8 rounded-full bg-emerald-100 border-2 border-white shadow flex items-center justify-center">
-                    <CheckCircle className="h-4 w-4 text-emerald-600" />
-                  </div>
-                </div>
-
-                {/* Receipt Body */}
-                <div className="px-4 py-3 space-y-2.5">
-                  {/* Transaction Details */}
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
-                    <div className="flex justify-between col-span-2">
-                      <span className="text-slate-400 font-medium uppercase text-[9px] tracking-wider">Invoice</span>
-                      <span className="font-bold text-slate-800 font-mono">{completedSale.invoiceNo}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Date</span>
-                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Time</span>
-                      <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
-                    </div>
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Cashier</span>
-                      <p className="font-medium text-slate-700 text-[11px]">{currentUser?.name ?? '-'}</p>
-                    </div>
-                    {/* The invoice number already carries the branch code; printing
-                        the branch name too is what makes a returned or disputed
-                        receipt traceable back to a specific shop. */}
-                    {receiptBranchLabel && (
-                      <div>
-                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Branch</span>
-                        <p className="font-medium text-slate-700 text-[11px]">{receiptBranchLabel}</p>
-                      </div>
-                    )}
-                    {completedSale.customerName && (
-                      <div>
-                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Customer</span>
-                        <p className="font-medium text-slate-700 text-[11px]">{completedSale.customerName}</p>
-                      </div>
-                    )}
-                    <div>
-                      <span className="text-slate-400 text-[9px] uppercase tracking-wider">Payment</span>
-                      <p className="font-medium text-slate-700 capitalize text-[11px]">{completedSale.paymentMethod.replace('_', ' ')}</p>
-                    </div>
-                    {completedSale.changeDue !== undefined && completedSale.changeDue > 0 && (
-                      <div>
-                        <span className="text-slate-400 text-[9px] uppercase tracking-wider">Change</span>
-                        <p className="font-medium text-emerald-600 font-mono text-[11px]">{money(completedSale.changeDue)}</p>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Dashed separator */}
-                  <div className="border-t border-dashed border-slate-200" />
-
-                  {/* Items Table */}
-                  <div>
-                    <div className="grid grid-cols-12 gap-1.5 text-[9px] font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-200">
-                      <span className="col-span-5">Item</span>
-                      <span className="col-span-2 text-center">Qty</span>
-                      <span className="col-span-2 text-right">Price</span>
-                      <span className="col-span-3 text-right">Total</span>
-                    </div>
-                    <div className="divide-y divide-dotted divide-slate-200">
-                      {completedSale.items.map((item, i) => (
-                        <div key={i} className="grid grid-cols-12 gap-1.5 py-1.5 text-[11px]">
-                          <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
-                          <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
-                          <span className="col-span-2 text-right text-slate-500 font-mono">{money(item.unitPrice)}</span>
-                          <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{money(item.total)}</span>
+        {(() => {
+          const widthMap: Record<string, string> = { '58mm': 'max-w-[220px]', '80mm': 'max-w-[300px]', 'A4': 'max-w-[794px]' };
+          const widthClass = widthMap[settings.receipt.width] ?? 'max-w-sm';
+          return (
+            <DialogContent className={`p-0 gap-0 overflow-hidden ${widthClass}`}>
+              <DialogTitle className="sr-only">Sale Completed - Receipt</DialogTitle>
+              <DialogDescription className="sr-only">Sale receipt and transaction details</DialogDescription>
+              {completedSale && (
+                <div>
+                  {/* Professional Receipt */}
+                  <div
+                    id="receipt-print"
+                    className="bg-white text-slate-900 overflow-hidden"
+                  >
+                    {/* Receipt Header - Pharmacy Branding */}
+                    <div className="bg-gradient-to-br from-emerald-600 to-emerald-700 px-4 py-3 text-white text-center relative overflow-hidden">
+                      <div className="absolute inset-0 opacity-10 pointer-events-none" style={{backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px'}} />
+                      <div className="relative">
+                        <div className="flex items-center justify-center gap-1.5 mb-0.5">
+                          <PillLogo className="h-4 w-4 text-emerald-200" />
+                          <h3 className="text-base font-bold tracking-wide">{settings.pharmacy.name}</h3>
+                          <PillLogo className="h-4 w-4 text-emerald-200" />
                         </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Dashed separator */}
-                  <div className="border-t border-dashed border-slate-200" />
-
-                  {/* Totals */}
-                  <div className="space-y-1 text-[11px]">
-                    <div className="flex justify-between text-slate-500">
-                      <span>Items</span>
-                      <span className="font-mono">{completedSale.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                        <p className="text-emerald-100 text-[10px]">{settings.pharmacy.address}</p>
+                        <p className="text-emerald-100 text-[10px]">Tel: {settings.pharmacy.phone}</p>
+                        {settings.receipt.headerText && (
+                          <p className="text-emerald-100 text-[10px] mt-1">{settings.receipt.headerText}</p>
+                        )}
+                      </div>
                     </div>
 
-                    {/* Total box */}
-                    <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-1">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-xs text-emerald-800 uppercase tracking-wider">Total</span>
-                        <span className="font-black text-lg text-emerald-700 font-mono">{money(completedSale.totalAmount)}</span>
+                    {/* Success badge */}
+                    <div className="flex items-center justify-center -mt-4 relative z-10">
+                      <div className="h-8 w-8 rounded-full bg-emerald-100 border-2 border-white shadow flex items-center justify-center">
+                        <CheckCircle className="h-4 w-4 text-emerald-600" />
+                      </div>
+                    </div>
+
+                    {/* Receipt Body */}
+                    <div className="px-4 py-3 space-y-2.5">
+                      {/* Transaction Details */}
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px]">
+                        <div className="flex justify-between col-span-2">
+                          <span className="text-slate-400 font-medium uppercase text-[9px] tracking-wider">Invoice</span>
+                          <span className="font-bold text-slate-800 font-mono">{completedSale.invoiceNo}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 text-[9px] uppercase tracking-wider">Date</span>
+                          <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 text-[9px] uppercase tracking-wider">Time</span>
+                          <p className="font-medium text-slate-700 text-[11px]">{new Date(completedSale.createdAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 text-[9px] uppercase tracking-wider">Cashier</span>
+                          <p className="font-medium text-slate-700 text-[11px]">{currentUser?.name ?? '-'}</p>
+                        </div>
+                        {/* The invoice number already carries the branch code; printing
+                            the branch name too is what makes a returned or disputed
+                            receipt traceable back to a specific shop. */}
+                        {receiptBranchLabel && (
+                          <div>
+                            <span className="text-slate-400 text-[9px] uppercase tracking-wider">Branch</span>
+                            <p className="font-medium text-slate-700 text-[11px]">{receiptBranchLabel}</p>
+                          </div>
+                        )}
+                        {completedSale.customerName && (
+                          <div>
+                            <span className="text-slate-400 text-[9px] uppercase tracking-wider">Customer</span>
+                            <p className="font-medium text-slate-700 text-[11px]">{completedSale.customerName}</p>
+                          </div>
+                        )}
+                        <div>
+                          <span className="text-slate-400 text-[9px] uppercase tracking-wider">Payment</span>
+                          <p className="font-medium text-slate-700 capitalize text-[11px]">{completedSale.paymentMethod.replace('_', ' ')}</p>
+                        </div>
+                        {completedSale.changeDue !== undefined && completedSale.changeDue > 0 && (
+                          <div>
+                            <span className="text-slate-400 text-[9px] uppercase tracking-wider">Change</span>
+                            <p className="font-medium text-emerald-600 font-mono text-[11px]">{money(completedSale.changeDue)}</p>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Dashed separator */}
+                      <div className="border-t border-dashed border-slate-200" />
+
+                      {/* Items Table */}
+                      <div>
+                        <div className="grid grid-cols-12 gap-1.5 text-[9px] font-semibold text-slate-400 uppercase tracking-wider pb-1 border-b border-slate-200">
+                          <span className="col-span-5">Item</span>
+                          <span className="col-span-2 text-center">Qty</span>
+                          <span className="col-span-2 text-right">Price</span>
+                          <span className="col-span-3 text-right">Total</span>
+                        </div>
+                        <div className="divide-y divide-dotted divide-slate-200">
+                          {completedSale.items.map((item, i) => (
+                            <div key={i} className="grid grid-cols-12 gap-1.5 py-1.5 text-[11px]">
+                              <span className="col-span-5 text-slate-700 font-medium truncate">{item.productName}</span>
+                              <span className="col-span-2 text-center text-slate-600 font-mono">{item.quantity}</span>
+                              <span className="col-span-2 text-right text-slate-500 font-mono">{money(item.unitPrice)}</span>
+                              <span className="col-span-3 text-right text-slate-800 font-bold font-mono">{money(item.total)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Dashed separator */}
+                      <div className="border-t border-dashed border-slate-200" />
+
+                      {/* Totals */}
+                      <div className="space-y-1 text-[11px]">
+                        <div className="flex justify-between text-slate-500">
+                          <span>Items</span>
+                          <span className="font-mono">{completedSale.items.reduce((n, i) => n + i.quantity, 0)}</span>
+                        </div>
+
+                        {/* Total box */}
+                        <div className="bg-emerald-50 rounded-lg px-3 py-2 mt-1">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-xs text-emerald-800 uppercase tracking-wider">Total</span>
+                            <span className="font-black text-lg text-emerald-700 font-mono">{money(completedSale.totalAmount)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Dashed separator */}
+                      <div className="border-t border-dashed border-slate-200" />
+
+                      {/* Footer */}
+                      <div className="text-center space-y-0.5">
+                        {settings.receipt.footerText && (
+                          <p className="text-[10px] text-slate-400 font-medium">{settings.receipt.footerText}</p>
+                        )}
+                        <p className="text-[9px] text-slate-300">{settings.pharmacy.tagline}</p>
+                        <div className="flex items-center justify-center gap-1 pt-1">
+                          {Array.from({ length: 28 }).map((_, i) => (
+                            <div key={i} className="w-[1.5px] h-3 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
+                          ))}
+                        </div>
                       </div>
                     </div>
                   </div>
-
-                  {/* Dashed separator */}
-                  <div className="border-t border-dashed border-slate-200" />
-
-                  {/* Footer */}
-                  <div className="text-center space-y-0.5">
-                    {settings.receipt.footerText && (
-                      <p className="text-[10px] text-slate-400 font-medium">{settings.receipt.footerText}</p>
-                    )}
-                    <p className="text-[9px] text-slate-300">{settings.pharmacy.tagline}</p>
-                    <div className="flex items-center justify-center gap-1 pt-1">
-                      {Array.from({ length: 28 }).map((_, i) => (
-                        <div key={i} className="w-[1.5px] h-3 bg-slate-300 rounded-full" style={{ opacity: i % 3 === 0 ? 1 : 0.4 }} />
-                      ))}
-                    </div>
+                  {/* Action buttons */}
+                  <div className="flex gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/50">
+                    <Button variant="outline" size="sm" className="flex-1 h-9" onClick={handleCloseReceipt}>
+                      Close
+                    </Button>
+                    <Button size="sm" className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
+                      <Printer className="h-3.5 w-3.5 mr-1" />
+                      Print
+                    </Button>
                   </div>
                 </div>
-              </div>
-              {/* Action buttons */}
-              <div className="flex gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/50">
-                <Button variant="outline" size="sm" className="flex-1 h-9" onClick={handleCloseReceipt}>
-                  Close
-                </Button>
-                <Button size="sm" className="flex-1 h-9 bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => window.print()}>
-                  <Printer className="h-3.5 w-3.5 mr-1" />
-                  Print
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
+              )}
+            </DialogContent>
+          );
+        })()}
       </Dialog>
     </div>
   );

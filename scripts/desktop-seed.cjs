@@ -22,22 +22,34 @@ async function main() {
   const db = new PrismaClient({ datasources: { db: { url: process.env.DATABASE_URL } } });
 
   try {
-    const ownerHash = await bcrypt.hash('PharmaCare@2026!', 12);
+    // The desktop build bakes in a first-run owner. That account ships with the
+    // published default password, so it MUST be forced to change it on first
+    // sign-in. An operator can pre-empt the default by exporting OWNER_* before
+    // building; the password is then theirs and no forced change is needed.
+    const ownerEmail = process.env.OWNER_EMAIL || 'admin@pharmacare.com';
+    const ownerPassword = process.env.OWNER_PASSWORD || 'PharmaCare@2026!';
+    const ownerName = process.env.OWNER_NAME || 'Pharmacy Owner';
+    const usingDefaultPassword = !process.env.OWNER_PASSWORD;
+
+    const ownerHash = await bcrypt.hash(ownerPassword, 12);
 
     const owner = await db.user.upsert({
-      where: { email: 'admin@pharmacare.com' },
-      update: { password: ownerHash, active: true, role: 'admin' },
+      where: { email: ownerEmail },
+      // Never reset an existing owner's password on a re-seed; only make sure
+      // the account is a live admin again.
+      update: { active: true, role: 'admin' },
       create: {
-        name: 'Pharmacy Owner',
-        email: 'admin@pharmacare.com',
+        name: ownerName,
+        email: ownerEmail,
         password: ownerHash,
         role: 'admin',
         phone: '',
         active: true,
+        mustChangePassword: usingDefaultPassword,
       },
     });
 
-    console.log(`    admin@pharmacare.com (${owner.role})`);
+    console.log(`    ${owner.email} (${owner.role})${usingDefaultPassword ? ' — must change password at first login' : ''}`);
 
     // A branch must exist before any stock can. Stock is owned by exactly one
     // branch, so without this the drug import has nowhere to put a batch — which

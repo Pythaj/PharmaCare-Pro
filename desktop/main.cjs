@@ -87,8 +87,17 @@ function provisionDatabase() {
     }
     const template = path.join(nextAppDir(), 'db', 'template.db');
     if (!fs.existsSync(template)) {
-      wp('WARNING: template.db missing — starting with a fresh empty database.');
-      fs.writeFileSync(target, '', { flag: 'a' });
+      // An empty database has no owner account, so the app would start up and
+      // then be impossible to sign in to. This means the package is broken
+      // (the build failed to seed template.db) — stop with a clear message
+      // instead of presenting an unusable login screen.
+      wp('ERROR: template.db missing — refusing to start without a seeded database.');
+      dialog.showErrorBox(
+        APP_TITLE,
+        'The application database template is missing.\n\n' +
+          'This installation appears to be incomplete. Please reinstall PharmaCare Pro.'
+      );
+      app.exit(1);
       return;
     }
     fs.copyFileSync(template, target);

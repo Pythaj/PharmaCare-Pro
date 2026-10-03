@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner';
 import type { Return, Sale } from '@/types';
 import { allocateRefunds, sumRefunds } from '@/lib/returns';
+import { LoadError } from '@/components/ui/load-error';
 
 interface ReturnItemRow {
   saleItemId: string;
@@ -49,6 +50,8 @@ export default function ReturnsView() {
   const [returnToDelete, setReturnToDelete] = useState<Return | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [actingOnId, setActingOnId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const [form, setForm] = useState({ saleId: '', reason: '', status: 'approved' as NewReturnStatus });
   const [returnItems, setReturnItems] = useState<ReturnItemRow[]>([]);
@@ -60,9 +63,13 @@ export default function ReturnsView() {
       if (res.ok) {
         const data = await res.json();
         setReturns(data.returns ?? []);
+        setError(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? `Could not load returns (HTTP ${res.status})`);
       }
     } catch {
-      /* silent — the table keeps its last good state */
+      setError('Could not reach the server to load returns.');
     }
   }, []);
 
@@ -73,13 +80,17 @@ export default function ReturnsView() {
           fetch('/api/returns'),
           fetch('/api/sales?limit=50'),
         ]);
-        if (returnsRes.ok) { const d = await returnsRes.json(); setReturns(d.returns ?? []); }
+        if (returnsRes.ok) { const d = await returnsRes.json(); setReturns(d.returns ?? []); setError(null); }
+        else {
+          const d = await returnsRes.json().catch(() => ({}));
+          setError(d.error ?? `Could not load returns (HTTP ${returnsRes.status})`);
+        }
         if (salesRes.ok) { const d = await salesRes.json(); setSales(d.sales ?? []); }
-      } catch { /* silent */ }
+      } catch { setError('Could not reach the server to load returns.'); }
       setLoading(false);
     }
     init();
-  }, []);
+  }, [retryNonce]);
 
   const selectedSale = useMemo(
     () => sales.find((s) => s.id === form.saleId) ?? null,
@@ -275,6 +286,8 @@ export default function ReturnsView() {
         </Button>
       </div>
 
+      {error && <LoadError message={error} onRetry={() => setRetryNonce((n) => n + 1)} />}
+
       <Card>
         <CardContent className="p-0">
           <div className="max-h-[500px] overflow-y-auto">
@@ -359,7 +372,7 @@ export default function ReturnsView() {
                       </TableCell>
                     </TableRow>
                   ))
-                ) : (
+                ) : error ? null : (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
                       No returns recorded yet

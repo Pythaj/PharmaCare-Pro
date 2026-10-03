@@ -82,6 +82,15 @@ export async function getMaxLineItems(): Promise<number> {
   return max > 0 ? Math.floor(max) : 1;
 }
 
+/** Default low-stock threshold for new products (`notifications.lowStockThreshold`). */
+export async function getLowStockThreshold(): Promise<number> {
+  const threshold = await readNumber(
+    'notifications.lowStockThreshold',
+    defaultSettings.notifications.lowStockThreshold
+  );
+  return threshold > 0 ? Math.floor(threshold) : 1;
+}
+
 /**
  * Deletes setting rows whose feature has been removed from the app.
  *

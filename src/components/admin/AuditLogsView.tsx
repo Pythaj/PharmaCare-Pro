@@ -14,12 +14,15 @@ import {
 } from '@/components/ui/select';
 import type { AuditLog } from '@/types';
 import { AUDIT_ACTIONS, AUDIT_ENTITIES, AUDIT_ACTION_COLORS } from '@/lib/audit-actions';
+import { LoadError } from '@/components/ui/load-error';
 
 const ALL = 'all';
 
 export default function AuditLogsView() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [actionFilter, setActionFilter] = useState(ALL);
   const [entityFilter, setEntityFilter] = useState(ALL);
   const [search, setSearch] = useState('');
@@ -39,6 +42,7 @@ export default function AuditLogsView() {
 
     async function fetchLogs() {
       setLoading(true);
+      setError(null);
       try {
         const params = new URLSearchParams();
         if (actionFilter !== ALL) params.set('action', actionFilter);
@@ -51,14 +55,24 @@ export default function AuditLogsView() {
           if (current !== requestId.current) return;
           setLogs(data.logs ?? []);
         } else if (current === requestId.current) {
+          // Distinguish "no matching rows" from "the request failed" — an empty
+          // table said the former for both, so a 403 or 500 read as a clean,
+          // empty audit trail.
+          const body = await res.json().catch(() => ({}));
           setLogs([]);
+          setError(body.error ?? `Could not load audit logs (HTTP ${res.status})`);
         }
-      } catch { /* silent */ }
+      } catch {
+        if (current === requestId.current) {
+          setLogs([]);
+          setError('Could not reach the server to load audit logs.');
+        }
+      }
       if (current === requestId.current) setLoading(false);
     }
 
     fetchLogs();
-  }, [actionFilter, entityFilter, debouncedSearch]);
+  }, [actionFilter, entityFilter, debouncedSearch, retryNonce]);
 
   return (
     <div className="space-y-4 p-6">
@@ -105,6 +119,8 @@ export default function AuditLogsView() {
           </Select>
         </div>
       </div>
+
+      {error && <LoadError message={error} onRetry={() => setRetryNonce((n) => n + 1)} />}
 
       <Card>
         <CardContent className="p-0">
@@ -158,7 +174,7 @@ export default function AuditLogsView() {
                       </TableCell>
                     </TableRow>
                   ))
-                ) : (
+                ) : error ? null : (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground py-12">
                       No audit logs found

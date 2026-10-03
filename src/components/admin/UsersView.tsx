@@ -24,6 +24,7 @@ import {
 import { toast } from 'sonner';
 import type { User, Branch } from '@/types';
 import { MIN_PASSWORD_LENGTH } from '@/lib/password-policy';
+import { LoadError } from '@/components/ui/load-error';
 
 export default function UsersView() {
   const [users, setUsers] = useState<User[]>([]);
@@ -37,6 +38,8 @@ export default function UsersView() {
   const [resetPassword, setResetPassword] = useState('');
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
 
   const fetchUsers = async () => {
     try {
@@ -44,20 +47,35 @@ export default function UsersView() {
       if (res.ok) {
         const data = await res.json();
         setUsers(data.users ?? []);
+        setError(null);
+      } else {
+        // A failed list used to render as "No users found", which is a very
+        // different statement from "the staff list did not load".
+        const data = await res.json().catch(() => ({}));
+        setUsers([]);
+        setError(data.error ?? `Could not load users (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      setUsers([]);
+      setError('Could not reach the server to load users.');
+    }
   };
 
   useEffect(() => {
     fetchUsers();
     setLoading(false);
     // Branch options for the add-user form; staff assignment is a required
-    // field for sales accounts, so the dialog needs the list up front.
+    // field for sales accounts, so the dialog needs the list up front. If it
+    // fails, a sales account cannot be created — say so rather than silently
+    // offering an empty branch select.
     fetch('/api/branches')
-      .then((res) => (res.ok ? res.json() : { branches: [] }))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('branches'))))
       .then((data) => setBranches(data.branches ?? []))
-      .catch(() => setBranches([]));
-  }, []);
+      .catch(() => {
+        setBranches([]);
+        toast.error('Could not load branch options. Adding a salesperson will fail until this loads.');
+      });
+  }, [retryNonce]);
 
   const handleAddUser = async () => {
     if (!addForm.name.trim()) { toast.error('Name is required'); return; }
@@ -99,6 +117,9 @@ export default function UsersView() {
       if (res.ok) {
         toast.success(`User ${user.active ? 'deactivated' : 'activated'} successfully`);
         fetchUsers();
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error ?? 'Failed to update user status');
       }
     } catch {
       toast.error('Failed to update user status');
@@ -118,6 +139,9 @@ export default function UsersView() {
         setShowResetDialog(false);
         setSelectedUser(null);
         setResetPassword('');
+      } else {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error ?? 'Failed to reset password');
       }
     } catch {
       toast.error('Failed to reset password');
@@ -152,6 +176,8 @@ export default function UsersView() {
           Add User
         </Button>
       </div>
+
+      {error && <LoadError message={error} onRetry={() => setRetryNonce((n) => n + 1)} />}
 
       <Card>
         <CardContent className="p-0">
@@ -263,7 +289,7 @@ export default function UsersView() {
                       </TableCell>
                     </TableRow>
                   ))
-                ) : (
+                ) : error ? null : (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
                       No users found

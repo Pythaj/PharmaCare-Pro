@@ -101,8 +101,6 @@ import {
   type DisplaySettings,
   type POSSettings,
   type NotificationSettings,
-  type BusinessSettings,
-  type DataSettings,
 } from '@/lib/app-settings';
 import { parseCSV, downloadText, CATEGORY_CSV_TEMPLATE, PRODUCT_CSV_TEMPLATE } from '@/lib/csv';
 
@@ -111,16 +109,6 @@ import { parseCSV, downloadText, CATEGORY_CSV_TEMPLATE, PRODUCT_CSV_TEMPLATE } f
 // such as POSView (Rule 18).
 
 // ─── Constants ──────────────────────────────────────────────────
-
-const DAYS_OF_WEEK = [
-  { label: 'Sunday', value: '0' },
-  { label: 'Monday', value: '1' },
-  { label: 'Tuesday', value: '2' },
-  { label: 'Wednesday', value: '3' },
-  { label: 'Thursday', value: '4' },
-  { label: 'Friday', value: '5' },
-  { label: 'Saturday', value: '6' },
-];
 
 const defaults: AllSettings = defaultSettings;
 
@@ -293,8 +281,6 @@ export default function SettingsView() {
   const [display, setDisplay] = useState<DisplaySettings>(defaults.display);
   const [pos, setPos] = useState<POSSettings>(defaults.pos);
   const [notifications, setNotifications] = useState<NotificationSettings>(defaults.notifications);
-  const [business, setBusiness] = useState<BusinessSettings>(defaults.business);
-  const [data, setData] = useState<DataSettings>(defaults.data);
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -350,8 +336,6 @@ export default function SettingsView() {
       }
       if (s.pos) setPos({ ...defaults.pos, ...s.pos });
       if (s.notifications) setNotifications({ ...defaults.notifications, ...s.notifications });
-      if (s.business) setBusiness({ ...defaults.business, ...s.business });
-      if (s.data) setData({ ...defaults.data, ...s.data });
     };
 
     (async () => {
@@ -368,8 +352,6 @@ export default function SettingsView() {
               display: { ...defaults.display, ...unflat.display },
               pos: { ...defaults.pos, ...unflat.pos },
               notifications: { ...defaults.notifications, ...unflat.notifications },
-              business: { ...defaults.business, ...unflat.business },
-              data: { ...defaults.data, ...unflat.data },
             }));
             return;
           }
@@ -397,8 +379,8 @@ export default function SettingsView() {
 
   // Gather all settings into one object
   const gatherSettings = useCallback((): AllSettings => {
-    return { pharmacy, receipt, display, pos, notifications, business, data };
-  }, [pharmacy, receipt, display, pos, notifications, business, data]);
+    return { pharmacy, receipt, display, pos, notifications };
+  }, [pharmacy, receipt, display, pos, notifications]);
 
   // Save all settings at once.
   //
@@ -533,21 +515,6 @@ export default function SettingsView() {
   // It is replaced by the branch-scoped, counted reset in BranchResetPanel,
   // mounted on the Data & Security tab below.
 
-  // Toggle a day in closedDays
-  const toggleClosedDay = (dayValue: string) => {
-    const currentDays = business.closedDays
-      ? business.closedDays.split(',').filter(Boolean)
-      : [];
-    const idx = currentDays.indexOf(dayValue);
-    if (idx >= 0) {
-      currentDays.splice(idx, 1);
-    } else {
-      currentDays.push(dayValue);
-      currentDays.sort((a, b) => Number(a) - Number(b));
-    }
-    setBusiness({ ...business, closedDays: currentDays.join(',') });
-  };
-
   // Reset all settings to defaults
   const handleReset = () => {
     setPharmacy(defaults.pharmacy);
@@ -555,8 +522,6 @@ export default function SettingsView() {
     setDisplay(defaults.display);
     setPos(defaults.pos);
     setNotifications(defaults.notifications);
-    setBusiness(defaults.business);
-    setData(defaults.data);
     toast.info('Settings reset to defaults');
   };
 
@@ -958,24 +923,7 @@ export default function SettingsView() {
                         />
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">Shown in sidebar and header</p>
-                    </div>
-                    <div>
-                      <Label htmlFor="pharmacy-name" className="text-sm font-medium">Pharmacy Name</Label>
-                      <div className="relative mt-1.5">
-                        <Building2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="pharmacy-name"
-                          value={pharmacy.name}
-                          onChange={(e) => setPharmacy({ ...pharmacy, name: e.target.value })}
-                          className="pl-10"
-                          placeholder="Enter pharmacy name"
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">Business name for receipts</p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+</div>
                     <div>
                       <Label htmlFor="pharmacy-tagline" className="text-sm font-medium">Tagline</Label>
                       <div className="relative mt-1.5">
@@ -990,20 +938,7 @@ export default function SettingsView() {
                       </div>
                       <p className="text-xs text-muted-foreground mt-1">Shown in sidebar under logo</p>
                     </div>
-                    <div>
-                      <Label htmlFor="favicon-url" className="text-sm font-medium">Favicon URL</Label>
-                      <div className="relative mt-1.5">
-                        <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="favicon-url"
-                          value={pharmacy.faviconUrl}
-                          onChange={(e) => setPharmacy({ ...pharmacy, faviconUrl: e.target.value })}
-                          className="pl-10"
-                          placeholder="https://example.com/favicon.ico"
-                        />
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">Browser tab icon (optional)</p>
-                    </div>
+
                   </div>
 
                   <div>
@@ -1121,45 +1056,11 @@ export default function SettingsView() {
                         </SelectContent>
                       </Select>
                     </div>
-                    <div>
-                      <Label className="text-sm font-medium flex items-center gap-1.5">
-                        <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
-                        Date Format
-                      </Label>
-                      <Select
-                        value={display.dateFormat}
-                        onValueChange={(v) => setDisplay({ ...display, dateFormat: v })}
-                      >
-                        <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="dd/MM/yyyy">DD/MM/YYYY</SelectItem>
-                          <SelectItem value="MM/dd/yyyy">MM/DD/YYYY</SelectItem>
-                          <SelectItem value="yyyy-MM-dd">YYYY-MM-DD</SelectItem>
-                          <SelectItem value="dd-MMM-yyyy">DD-MMM-YYYY</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div>
-                      <Label className="text-sm font-medium flex items-center gap-1.5">
-                        <Clock className="h-3.5 w-3.5 text-muted-foreground" />
-                        Time Format
-                      </Label>
-                      <Select
-                        value={display.timeFormat}
-                        onValueChange={(v) => setDisplay({ ...display, timeFormat: v })}
-                      >
-                        <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="HH:mm">24-Hour (14:30)</SelectItem>
-                          <SelectItem value="hh:mm a">12-Hour (2:30 PM)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
                   </div>
                 </CardContent>
-              </Card>
-            </>
-          )}
+                </Card>
+              </>
+            )}
 
           {/* ── Receipt ─────────────────────────────── */}
           {activeTab === 'receipt' && (
@@ -1270,14 +1171,6 @@ export default function SettingsView() {
 
                 <div className="space-y-3">
                   {toggleRow(
-                    'auto-print',
-                    <ToggleLeft className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Auto-Print Receipt',
-                    'Automatically print receipt after completing a sale',
-                    pos.autoPrintReceipt,
-                    (checked) => setPos({ ...pos, autoPrintReceipt: checked }),
-                  )}
-                  {toggleRow(
                     'require-customer',
                     <Building2 className="h-3.5 w-3.5 text-muted-foreground" />,
                     'Require Customer for Sale',
@@ -1308,15 +1201,6 @@ export default function SettingsView() {
                   'Alert thresholds and notification preferences',
                 )}
                 <CardContent className="space-y-5 pt-0">
-                  {toggleRow(
-                    'enable-notifications',
-                    <Bell className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Enable Notifications',
-                    'Show alerts for low stock and expiring products',
-                    notifications.enableNotifications,
-                    (checked) => setNotifications({ ...notifications, enableNotifications: checked }),
-                  )}
-
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <Label htmlFor="low-stock-threshold" className="text-sm font-medium">Low Stock Alert Threshold</Label>
@@ -1356,99 +1240,13 @@ export default function SettingsView() {
                       </div>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card className="overflow-hidden">
-                {sectionHeader(
-                  <Clock className="h-4 w-4" />,
-                  'Business Hours',
-                  'Set operating hours and closed days for your pharmacy',
-                )}
-                <CardContent className="space-y-4 pt-0">
-                  {toggleRow(
-                    'enable-hours',
-                    <Store className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Enable Business Hours',
-                    'Restrict POS availability to operating hours',
-                    business.enableHours,
-                    (checked) => setBusiness({ ...business, enableHours: checked }),
-                  )}
-
-                  {business.enableHours && (
-                    <>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <Label htmlFor="open-time" className="text-sm font-medium">Opening Time</Label>
-                          <div className="relative mt-1.5">
-                            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              id="open-time"
-                              type="time"
-                              value={business.openTime}
-                              onChange={(e) => setBusiness({ ...business, openTime: e.target.value })}
-                              className="pl-10"
-                            />
-                          </div>
-                        </div>
-                        <div>
-                          <Label htmlFor="close-time" className="text-sm font-medium">Closing Time</Label>
-                          <div className="relative mt-1.5">
-                            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                            <Input
-                              id="close-time"
-                              type="time"
-                              value={business.closeTime}
-                              onChange={(e) => setBusiness({ ...business, closeTime: e.target.value })}
-                              className="pl-10"
-                            />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <Label className="text-sm font-medium">Closed Days</Label>
-                        <p className="text-xs text-muted-foreground mb-2">Select days the business is closed</p>
-                        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
-                          {DAYS_OF_WEEK.map((day) => {
-                            const isChecked = business.closedDays
-                              .split(',')
-                              .filter(Boolean)
-                              .includes(day.value);
-                            return (
-                              <label
-                                key={day.value}
-                                className={`flex items-center justify-center gap-1.5 rounded-lg border px-2 py-2 text-xs font-medium cursor-pointer transition-all ${
-                                  isChecked
-                                    ? 'border-[var(--accent-primary)] bg-[var(--accent-primary-light)] text-[var(--accent-primary)]'
-                                    : 'border-muted bg-muted/30 text-muted-foreground hover:bg-muted/50'
-                                }`}
-                              >
-                                <Checkbox
-                                  checked={isChecked}
-                                  onCheckedChange={() => toggleClosedDay(day.value)}
-                                  className="sr-only"
-                                />
-                                <span className="select-none">{day.label.slice(0, 3)}</span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-                        <Info className="h-3 w-3" />
-                        Business hours affect POS availability. Sales outside hours will show a warning.
-                      </p>
-                    </>
-                  )}
-                </CardContent>
+</CardContent>
               </Card>
             </>
-          )}
 
-          {/* ── Catalog (Categories) ─────────────────── */}
-          {activeTab === 'catalog' && (
+            )}
+
+            {activeTab === 'catalog' && (
             <>
               <Card className="overflow-hidden">
                 {sectionHeader(
@@ -1770,111 +1568,9 @@ export default function SettingsView() {
                   <strong> category sheet</strong> first (Catalog tab) to keep everything organized.
                 </p>
               </CardContent>
-            </Card>
+</Card>
           )}
 
-          {/* ── Data & Security ──────────────────────── */}
-          {activeTab === 'data' && (
-            <Card className="overflow-hidden">
-              {sectionHeader(
-                <ShieldCheck className="h-4 w-4" />,
-                'Data & Security',
-                'Backup, session, and data management settings',
-              )}
-              <CardContent className="space-y-4 pt-0">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <Label className="text-sm font-medium flex items-center gap-1.5">
-                      <RefreshCw className="h-3.5 w-3.5 text-muted-foreground" />
-                      Auto Backup Interval
-                    </Label>
-                    <Select
-                      value={data.autoBackup}
-                      onValueChange={(v) => setData({ ...data, autoBackup: v })}
-                    >
-                      <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="off">Off</SelectItem>
-                        <SelectItem value="daily">Daily</SelectItem>
-                        <SelectItem value="weekly">Weekly</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground mt-1">Automatic data backup schedule</p>
-                  </div>
-                  <div>
-                    <Label htmlFor="session-timeout" className="text-sm font-medium flex items-center gap-1.5">
-                      <Timer className="h-3.5 w-3.5 text-muted-foreground" />
-                      Session Timeout
-                    </Label>
-                    <div className="relative mt-1.5">
-                      <Input
-                        id="session-timeout"
-                        type="number"
-                        min="5"
-                        max="1440"
-                        value={data.sessionTimeout}
-                        onChange={(e) =>
-                          setData({
-                            ...data,
-                            sessionTimeout: Math.max(5, Math.min(1440, Number(e.target.value) || 5)),
-                          })
-                        }
-                        placeholder="480"
-                      />
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">min</span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">Auto-logout after idle (default: 8 hrs)</p>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {toggleRow(
-                    'require-password',
-                    <Lock className="h-3.5 w-3.5 text-muted-foreground" />,
-                    'Require Password on Return from Idle',
-                    'Prompt for password when resuming an idle session',
-                    data.requirePassword,
-                    (checked) => setData({ ...data, requirePassword: checked }),
-                  )}
-                </div>
-
-                <Separator />
-
-                <div className="flex flex-col sm:flex-row gap-3">
-                  <Button
-                    variant="outline"
-                    className="flex-1 h-11"
-                    onClick={handleExportData}
-                    disabled={exporting}
-                  >
-                    {exporting ? (
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    ) : (
-                      <Download className="h-4 w-4 mr-2" />
-                    )}
-                    {exporting ? 'Exporting...' : 'Export All Data'}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Export creates a JSON backup of all system data.
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/*
-            The branch-scoped reset lives on its own card directly beneath the
-            data card, and it REPLACES the old "Clear Sales Data" button that used
-            to sit above.
-
-            That button called `DELETE /api/sales?confirm=yes`, which wiped every
-            sale in the business regardless of which branch the admin was
-            standing in, and was "confirmed" by a query string the client chose.
-            In a multi-branch app that is the exact accident this feature was
-            asked to make impossible: one shop wanting a clean slate would take
-            the other shops' takings with it. Clearing a branch is now an
-            explicit, counted, branch-scoped operation below.
-          */}
           {activeTab === 'data' && <BranchResetPanel />}
 
           {/* ── About ─────────────────────────────────── */}

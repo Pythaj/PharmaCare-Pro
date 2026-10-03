@@ -66,6 +66,7 @@ function formatDuration(ms: number): string {
 function ProfileDialog() {
   const { currentUser, showProfileDialog, setShowProfileDialog, loginTime, logout, navigate } = useAppStore();
   const [stats, setStats] = useState<{ totalSales: number; todaySales: number; txCount: number; weekSales: number } | null>(null);
+  const [statsError, setStatsError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sessionElapsed, setSessionElapsed] = useState(0);
 
@@ -103,8 +104,12 @@ function ProfileDialog() {
             .filter((s: { createdAt: string }) => new Date(s.createdAt) >= weekAgo)
             .reduce((sum: number, s: { totalAmount: number }) => sum + s.totalAmount, 0);
           setStats({ totalSales, todaySales, txCount: sales.length, weekSales });
+          setStatsError(false);
+        } else {
+          setStats(null);
+          setStatsError(true);
         }
-      } catch { /* silent */ }
+      } catch { setStats(null); setStatsError(true); }
       finally { setLoading(false); }
     }
     loadStats();
@@ -300,6 +305,10 @@ function ProfileDialog() {
                       <p className="text-base font-bold text-slate-800">{money(stats.todaySales)}</p>
                     </div>
                   </div>
+                ) : statsError ? (
+                  <div className="flex flex-col items-center gap-2 py-4">
+                    <p className="text-sm text-amber-700">Could not load your stats. Reopen this panel to retry.</p>
+                  </div>
                 ) : (
                   <div className="flex flex-col items-center gap-2 py-4">
                     <div className="flex h-10 w-10 items-center justify-center rounded-full" style={{ backgroundColor: 'var(--accent-primary-light)' }}>
@@ -341,6 +350,7 @@ export function Header() {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const [alertCount, setAlertCount] = useState(0);
+  const [alertsError, setAlertsError] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -382,8 +392,11 @@ export function Header() {
         if (res.ok) {
           const data = await res.json();
           setAlertCount(data.alertCount ?? 0);
+          setAlertsError(false);
+        } else {
+          setAlertsError(true);
         }
-      } catch { /* silent */ }
+      } catch { setAlertsError(true); }
     }
     fetchAlerts();
     const interval = setInterval(fetchAlerts, 60000);
@@ -501,12 +514,16 @@ export function Header() {
           size="icon"
           className="relative h-9 w-9 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
           onClick={() => navigate(isAdmin ? 'inventory' : 'sales-dashboard')}
+          title={alertsError ? 'Stock alerts could not be loaded' : undefined}
         >
           <Bell className="h-4.5 w-4.5" />
           {alertCount > 0 && (
             <Badge className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white border-2 border-white">
               {alertCount}
             </Badge>
+          )}
+          {alertsError && alertCount === 0 && (
+            <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-amber-500 border-2 border-white" />
           )}
           <span className="sr-only">Notifications</span>
         </Button>

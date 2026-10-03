@@ -3,8 +3,28 @@ import bcrypt from 'bcryptjs';
 
 const db = new PrismaClient();
 
-const OWNER_EMAIL = 'admin@pharmacare.com';
-const OWNER_PASSWORD = 'PharmaCare@2026!';
+// Credentials are env-driven so a cloud deployment can bootstrap its owner
+// without shipping a known password. The literals below are the documented
+// first-run defaults for a local/dev database and the desktop template.
+const OWNER_EMAIL = process.env.OWNER_EMAIL || 'admin@pharmacare.com';
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || 'PharmaCare@2026!';
+const OWNER_NAME = process.env.OWNER_NAME || 'Pharmacy Owner';
+// True only while the published default password is in play. Kept so the
+// account is forced to change it on first login.
+const USING_DEFAULT_PASSWORD = !process.env.OWNER_PASSWORD;
+
+// The default password is in the repository, so it must never bootstrap a
+// production owner — anyone reading the source could sign in. Refuse rather
+// than quietly create an open account. `OWNER_PASSWORD` (or a proper password
+// reset) is required for cloud deployments.
+const isProduction =
+  process.env.NODE_ENV === 'production' || process.env.VERCEL === '1';
+if (isProduction && USING_DEFAULT_PASSWORD) {
+  throw new Error(
+    'Refusing to seed the default owner password in production. ' +
+      'Set OWNER_EMAIL and OWNER_PASSWORD in the environment before seeding.'
+  );
+}
 
 async function main() {
   console.log('🌱 Seeding database...');
@@ -14,19 +34,27 @@ async function main() {
 
   const owner = await db.user.upsert({
     where: { email: OWNER_EMAIL },
-    update: { password: ownerHash, active: true, role: 'admin' },
+    // Deliberately not resetting the password for an existing owner: re-running
+    // the seed against a live database would otherwise clobber a password the
+    // owner has already changed, back to the published default.
+    update: { active: true, role: 'admin' },
     create: {
-      name: 'Pharmacy Owner',
+      name: OWNER_NAME,
       email: OWNER_EMAIL,
       password: ownerHash,
       role: 'admin',
       phone: '',
       active: true,
-      mustChangePassword: true,
+      mustChangePassword: USING_DEFAULT_PASSWORD,
     },
   });
 
   console.log(`✅ Owner: ${owner.email}`);
+  if (USING_DEFAULT_PASSWORD) {
+    console.log(
+      '⚠️  Using the default owner password — change it at first sign-in.'
+    );
+  }
 
   // Seed a few categories
   const categories = ['Analgesics', 'Antibiotics', 'Antivirals', 'Vitamins & Supplements', 'Antifungals'];
@@ -55,7 +83,7 @@ async function main() {
   console.log(`✅ System settings seeded`);
 
   console.log('\n🎉 Database ready! Owner account:');
-  console.log('   admin@pharmacare.com');
+  console.log(`   ${OWNER_EMAIL}`);
 }
 
 main()

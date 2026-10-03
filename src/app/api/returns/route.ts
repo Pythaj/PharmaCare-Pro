@@ -15,6 +15,38 @@ import { ValidationError, ConflictError, parseErrorResponse, branchMissResponse,
 import { restoreBatchStock } from '@/lib/stock'
 import { toNumber } from '@/lib/utils'
 
+/** True when the client is talking to PostgreSQL (cloud) rather than SQLite. */
+function usesPostgres(): boolean {
+  if (process.env.DATABASE_PROVIDER === 'postgresql') return true
+  return /^postgres(ql)?:\/\//.test(process.env.DATABASE_URL ?? '')
+}
+
+/**
+ * Serialize refunds for a single sale for the rest of the transaction.
+ *
+ * The cumulative over-return guarantee is "read every prior returned line, then
+ * write", which is only safe if no second refund of the same sale can interleave
+ * between the read and the commit. PostgreSQL runs transactions at READ
+ * COMMITTED by default, so it can: two requests both read the pre-existing rows,
+ * both see room, and both commit — the shelf is credited units never taken back
+ * and the till pays out twice. A transaction-scoped advisory lock makes the
+ * second request wait until the first commits, so its read sees the first's rows
+ * and the per-line check below rolls it back. The lock is released automatically
+ * when the transaction ends (commit or rollback).
+ *
+ * SQLite (local dev and the desktop build) has a single writer: a write
+ * transaction takes the database write lock and a concurrent writer fails with
+ * SQLITE_BUSY, which already serializes the two. The advisory lock is therefore
+ * only issued for PostgreSQL.
+ */
+async function lockSaleForRefund(
+  tx: { $queryRaw: (query: TemplateStringsArray, ...values: unknown[]) => Promise<unknown> },
+  saleId: string,
+): Promise<void> {
+  if (!usesPostgres()) return
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${saleId}, 0))`
+}
+
 // Returns are an admin-managed area (returns move stock and money), so the gate
 // is requireAdmin for reads and writes alike. Reads are still branch-scoped: an
 // admin parked on Branch A should reconcile Branch A's refunds, not the whole
@@ -150,6 +182,10 @@ export async function POST(request: NextRequest) {
     // Everything below commits atomically — a partial failure can never leave
     // stock restored without a return record (or vice versa)
     const result = await db.$transaction(async (tx) => {
+      // Serialize concurrent refunds of this sale before reading anything, so
+      // the over-return check below is a real guarantee and not just a hope.
+      await lockSaleForRefund(tx, saleId)
+
       // Previously returned quantities per sale item, across ALL prior
       // returns of this sale — prevents over-returning the same line twice
       const priorReturns = await tx.returnItem.findMany({
@@ -261,11 +297,13 @@ export async function POST(request: NextRequest) {
       // assertion about the committed state — and it still rolls back cleanly,
       // because throwing inside `$transaction` discards the create above.
       //
-      // This closes the interleaved case rather than proving isolation: two
-      // transactions that both re-read before either commits still pass. A hard
-      // guarantee needs SERIALIZABLE isolation, which Prisma offers on PostgreSQL
-      // but not on the SQLite connector used for local development, so it is not
-      // something this route can turn on unconditionally.
+      // The advisory lock taken at the top of this transaction is what makes
+      // this a hard guarantee rather than a best-effort one: on PostgreSQL the
+      // other transaction cannot have reached its own write until this one
+      // commits, and on SQLite the single-writer lock does the same. The
+      // re-read below is still the authoritative assertion — it catches any
+      // state the lock did not, e.g. a line that was already over-returned
+      // before this request arrived.
       const soldQty = new Map(sale.items.map((si) => [si.id, si.quantity]))
       const postReturns = await tx.returnItem.findMany({
         where: { return: { saleId, status: { in: ['approved', 'pending'] } } },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, Fragment } from 'react';
 import { money } from '@/lib/currency';
+import { UNKNOWN_SALESPERSON } from '@/lib/salesperson';
 import {
   Card,
   CardContent,
@@ -401,7 +402,7 @@ export default function BranchPerformanceView() {
         // A sale whose user row has since been deleted still needs an entry, or
         // that money becomes unfilterable. Keyed on a sentinel that cannot
         // collide with a cuid.
-        const id = person.userId ?? 'unknown';
+        const id = person.userId ?? UNKNOWN_SALESPERSON;
         if (!merged.has(id)) {
           merged.set(id, { id, name: person.name, role: person.role });
           changed = true;
@@ -749,9 +750,9 @@ export default function BranchPerformanceView() {
                           .filter(Boolean);
                         return (
                           <button
-                            key={person.userId ?? 'unknown'}
+                            key={person.userId ?? UNKNOWN_SALESPERSON}
                             type="button"
-                            onClick={() => setItemSalesperson(person.userId ?? 'unknown')}
+                            onClick={() => setItemSalesperson(person.userId ?? UNKNOWN_SALESPERSON)}
                             className="rounded-md border px-3 py-2 text-left text-sm transition-colors hover:border-primary hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                           >
                             <div className="flex items-center gap-2">

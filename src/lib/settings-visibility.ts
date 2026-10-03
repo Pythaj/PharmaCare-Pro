@@ -94,6 +94,18 @@ export const RETIRED_SETTING_KEYS = [
   'receipt.showTax',
   'receipt.showDiscount',
   'pos.defaultDiscount',
+  'pharmacy.faviconUrl',
+  'business.enableHours',
+  'business.openTime',
+  'business.closeTime',
+  'business.closedDays',
+  'data.autoBackup',
+  'data.sessionTimeout',
+  'data.requirePassword',
+  'display.dateFormat',
+  'display.timeFormat',
+  'notifications.enableNotifications',
+  'pos.autoPrintReceipt',
 ] as const;
 
 /** True when a settings key has been removed from the application. */

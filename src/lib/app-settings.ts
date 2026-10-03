@@ -17,7 +17,6 @@ export interface PharmacyInfo {
   phone: string;
   email: string;
   logoUrl: string;
-  faviconUrl: string;
 }
 
 export interface ReceiptSettings {
@@ -28,14 +27,11 @@ export interface ReceiptSettings {
 
 export interface DisplaySettings {
   currency: string;
-  dateFormat: string;
-  timeFormat: string;
   primaryColor: string;
 }
 
 export interface POSSettings {
   defaultPaymentMethod: string;
-  autoPrintReceipt: boolean;
   requireCustomer: boolean;
   allowNegativeStock: boolean;
   maxLineItems: number;
@@ -44,20 +40,6 @@ export interface POSSettings {
 export interface NotificationSettings {
   lowStockThreshold: number;
   expiryAlertDays: number;
-  enableNotifications: boolean;
-}
-
-export interface BusinessSettings {
-  enableHours: boolean;
-  openTime: string;
-  closeTime: string;
-  closedDays: string;
-}
-
-export interface DataSettings {
-  autoBackup: string;
-  sessionTimeout: number;
-  requirePassword: boolean;
 }
 
 export interface AllSettings {
@@ -66,8 +48,6 @@ export interface AllSettings {
   display: DisplaySettings;
   pos: POSSettings;
   notifications: NotificationSettings;
-  business: BusinessSettings;
-  data: DataSettings;
 }
 
 // ─── Storage ─────────────────────────────────────────────────────
@@ -85,7 +65,6 @@ export const defaultSettings: AllSettings = {
     phone: '+233 30 123 4567',
     email: 'info@greenlifepharmacy.com',
     logoUrl: '',
-    faviconUrl: '',
   },
   receipt: {
     headerText: 'GreenLife Pharmacy — Your Health, Our Priority',
@@ -94,13 +73,10 @@ export const defaultSettings: AllSettings = {
   },
   display: {
     currency: 'GHS',
-    dateFormat: 'dd/MM/yyyy',
-    timeFormat: 'HH:mm',
     primaryColor: 'emerald',
   },
   pos: {
     defaultPaymentMethod: 'cash',
-    autoPrintReceipt: true,
     requireCustomer: false,
     // Out-of-stock drugs stay sellable (recorded as backorders) so the client
     // can keep making sales while waiting on replenishment.
@@ -110,18 +86,6 @@ export const defaultSettings: AllSettings = {
   notifications: {
     lowStockThreshold: 10,
     expiryAlertDays: 30,
-    enableNotifications: true,
-  },
-  business: {
-    enableHours: false,
-    openTime: '08:00',
-    closeTime: '18:00',
-    closedDays: '0',
-  },
-  data: {
-    autoBackup: 'off',
-    sessionTimeout: 480,
-    requirePassword: true,
   },
 };
 

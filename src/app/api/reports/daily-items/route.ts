@@ -4,6 +4,7 @@ import { requireAdmin } from '@/lib/require-auth'
 import { toNumber } from '@/lib/utils'
 import { localDateKey } from '@/lib/dates'
 import { aggregateRefundsByProduct, fetchRefundLines } from '@/lib/refunds'
+import { isUnknownSalesperson } from '@/lib/salesperson'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -50,6 +51,14 @@ export async function GET(request: NextRequest) {
     // rows instead would leave the summary, the branch split and the invoice list
     // describing three different days.
     const userId = searchParams.get('userId')
+    // `unknown` is a request for sales with no user attached (the User row was
+    // deleted), not a lookup key — resolving it as a user id found nothing and
+    // 404'd the one grouping the report must be able to open. `undefined` means
+    // no salesperson filter; `null` means "userId IS NULL".
+    const unknownSalesperson = isUnknownSalesperson(userId)
+    const salespersonFilter: string | null | undefined = unknownSalesperson
+      ? null
+      : userId ?? undefined
 
     const today = new Date()
     // Default to today, in LOCAL terms. Falling back to `toISOString()` here
@@ -77,7 +86,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    if (userId) {
+    if (userId && !unknownSalesperson) {
       const user = await db.user.findUnique({
         where: { id: userId },
         select: { id: true, name: true },
@@ -92,7 +101,7 @@ export async function GET(request: NextRequest) {
         createdAt: { gte: start, lte: end },
         status: 'completed',
         ...(branchId ? { branchId } : {}),
-        ...(userId ? { userId } : {}),
+        ...(salespersonFilter !== undefined ? { userId: salespersonFilter } : {}),
       },
       select: {
         id: true,
@@ -218,7 +227,7 @@ export async function GET(request: NextRequest) {
       { gte: start, lte: end },
       {
         ...(branchId ? { branchId } : {}),
-        ...(userId ? { userId } : {}),
+        ...(salespersonFilter !== undefined ? { userId: salespersonFilter } : {}),
       }
     )
     const totalRefunds = refundLines.reduce((sum, refund) => sum + refund.totalRefund, 0)

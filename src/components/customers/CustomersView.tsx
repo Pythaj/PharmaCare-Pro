@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { toast } from 'sonner';
 import { usePermissions } from '@/hooks/use-permissions';
+import { LoadError } from '@/components/ui/load-error';
 import type { Customer } from '@/types';
 
 interface CustomerWithPurchases extends Customer {
@@ -39,6 +40,9 @@ export default function CustomersView() {
   const [customers, setCustomers] = useState<CustomerWithPurchases[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [purchaseHistory, setPurchaseHistory] = useState<{ invoiceNo: string; totalAmount: number; createdAt: string }[]>([]);
@@ -69,8 +73,20 @@ export default function CustomersView() {
         const data = await res.json();
         if (current !== listRequestId.current) return;
         setCustomers(data.customers ?? []);
+        setError(null);
+      } else if (current === listRequestId.current) {
+        // A failed search used to leave the previous list on screen, so a
+        // server error during a search looked like "these are the matches".
+        const body = await res.json().catch(() => ({}));
+        setCustomers([]);
+        setError(body.error ?? `Could not load customers (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      if (current === listRequestId.current) {
+        setCustomers([]);
+        setError('Could not reach the server to load customers.');
+      }
+    }
   };
 
   useEffect(() => {
@@ -84,8 +100,18 @@ export default function CustomersView() {
           const data = await res.json();
           if (cancelled || current !== listRequestId.current) return;
           setCustomers(data.customers ?? []);
+          setError(null);
+        } else if (current === listRequestId.current) {
+          const body = await res.json().catch(() => ({}));
+          setCustomers([]);
+          setError(body.error ?? `Could not load customers (HTTP ${res.status})`);
         }
-      } catch { /* silent */ }
+      } catch {
+        if (!cancelled && current === listRequestId.current) {
+          setCustomers([]);
+          setError('Could not reach the server to load customers.');
+        }
+      }
       if (!cancelled) setLoading(false);
     }
     initialLoad();
@@ -95,7 +121,7 @@ export default function CustomersView() {
       // setState) after the screen is gone.
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, []);
+  }, [retryNonce]);
 
   const handleSearch = (value: string) => {
     setSearch(value);
@@ -108,6 +134,7 @@ export default function CustomersView() {
     setExpandedRow(customerId);
     expandedRowRef.current = customerId;
     setLoadingHistory(true);
+    setHistoryError(null);
     try {
       const res = await fetch(`/api/customers/${customerId}`);
       if (res.ok) {
@@ -117,8 +144,17 @@ export default function CustomersView() {
         // closure is still the pre-click value.
         if (expandedRowRef.current !== customerId) return;
         setPurchaseHistory(data.sales ?? []);
+      } else if (expandedRowRef.current === customerId) {
+        const body = await res.json().catch(() => ({}));
+        setPurchaseHistory([]);
+        setHistoryError(body.error ?? `Could not load purchase history (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      if (expandedRowRef.current === customerId) {
+        setPurchaseHistory([]);
+        setHistoryError('Could not reach the server to load purchase history.');
+      }
+    }
     if (expandedRowRef.current === customerId) setLoadingHistory(false);
   };
 
@@ -214,6 +250,8 @@ export default function CustomersView() {
         </Button>
       </div>
 
+      {error && <LoadError message={error} onRetry={() => setRetryNonce((n) => n + 1)} />}
+
       <Card>
         <CardContent className="p-0">
           <div className="max-h-[500px] overflow-y-auto">
@@ -255,6 +293,7 @@ export default function CustomersView() {
                         expandedRow={expandedRow}
                         purchaseHistory={purchaseHistory}
                         loadingHistory={loadingHistory}
+                        historyError={historyError}
                                                onExpand={handleExpandRow}
                         onEdit={handleEditCustomer}
                         onDelete={handleDeleteCustomer}
@@ -377,6 +416,7 @@ function CustomerRow({
   expandedRow,
   purchaseHistory,
   loadingHistory,
+  historyError,
   onExpand,
   onEdit,
   onDelete,
@@ -387,6 +427,7 @@ function CustomerRow({
   expandedRow: string | null;
   purchaseHistory: { invoiceNo: string; totalAmount: number; createdAt: number | string }[];
   loadingHistory: boolean;
+  historyError: string | null;
   onExpand: (id: string) => void;
   onEdit: (c: CustomerWithPurchases) => void;
   onDelete: (c: CustomerWithPurchases) => void;
@@ -436,6 +477,8 @@ function CustomerRow({
                   <Skeleton key={i} className="h-8 w-full" />
                 ))}
               </div>
+            ) : historyError ? (
+              <LoadError message={historyError} />
             ) : purchaseHistory.length > 0 ? (
               <div>
                 <p className="text-sm font-medium mb-2">Purchase History for {customer.name}</p>

@@ -40,6 +40,7 @@ import {
   X,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { LoadError } from '@/components/ui/load-error';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -335,6 +336,7 @@ export default function DailySalesRegister() {
   const [todayBranches, setTodayBranches] = useState<TodayBranchEntry[]>([]);
   const [todayScope, setTodayScope] = useState<'branch' | 'all'>('branch');
   const [loadingToday, setLoadingToday] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [todayGroupMode, setTodayGroupMode] = useState<GroupMode>('cashier');
 
   // View-only filters, shared by every branch section so the owner can compare
@@ -452,8 +454,12 @@ export default function DailySalesRegister() {
             refunds: { ...EMPTY_REFUNDS, ...(entry.refunds ?? {}) },
           }))
         );
+        setLoadError(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setLoadError(data.error ?? `Could not load today's sales (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch { setLoadError("Could not reach the server to load today's sales."); }
   }, [filters.cashierId]);
 
   // Branch list for the view-only filter. Read-only, and the header switcher is
@@ -465,10 +471,13 @@ export default function DailySalesRegister() {
     (async () => {
       try {
         const res = await fetch('/api/branches');
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (!cancelled) toast.error('Could not load branch options for the filter.');
+          return;
+        }
         const data = await res.json();
         if (!cancelled) setAllBranches(data.branches ?? []);
-      } catch { /* silent */ }
+      } catch { if (!cancelled) toast.error('Could not load branch options for the filter.'); }
     })();
     return () => { cancelled = true; };
   }, [isAdmin]);
@@ -484,8 +493,9 @@ export default function DailySalesRegister() {
         setPastRecords((data.records ?? []).filter((r: DailySalesRecord) => r.date !== todayRecord?.date));
         setPastTotal(data.total ?? 0);
         setPastTotalPages(Math.max(1, data.totalPages ?? 1));
+        setLoadError(null);
       }
-    } catch { /* silent */ }
+    } catch { setLoadError('Could not reach the server to load past records.'); }
   }, [pastPage, todayRecord?.date]);
 
   // Initial load
@@ -610,7 +620,7 @@ export default function DailySalesRegister() {
           const prev: DailySalesRecord | undefined = (data.records ?? [])[0];
           if (prev) setPreviousDayStats({ revenue: prev.totalRevenue, profit: prev.totalProfit });
         }
-      } catch { /* silent */ }
+      } catch { /* non-fatal: the day renders without its previous-day comparison */ }
     })();
   }, [todayRecord]);
 
@@ -655,8 +665,15 @@ export default function DailySalesRegister() {
       if (res.ok) {
         const data = await res.json();
         setExpandedRecordSales(data.sales ?? []);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setExpandedRecordSales([]);
+        toast.error(data.error ?? `Could not load this day's sales (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      setExpandedRecordSales([]);
+      toast.error("Could not reach the server to load this day's sales.");
+    }
     setLoadingRecordDetail(false);
   };
 
@@ -698,11 +715,14 @@ export default function DailySalesRegister() {
   // Print receipt for a sale
   const handlePrintReceipt = (sale: Sale) => {
     const items = sale.items ?? [];
+    const widthMap: Record<string, number> = { '58mm': 220, '80mm': 320, 'A4': 794 };
+    const receiptWidth = widthMap[settings.receipt.width] ?? 320;
+    const windowWidth = Math.max(receiptWidth + 80, 400);
     const receiptHtml = `
 <!DOCTYPE html>
 <html><head><title>Receipt - ${sale.invoiceNo}</title>
 <style>
-  body { font-family: 'Courier New', monospace; max-width: 320px; margin: 0 auto; padding: 20px; color: #333; }
+  body { font-family: 'Courier New', monospace; max-width: ${receiptWidth}px; margin: 0 auto; padding: 20px; color: #333; }
   .header { text-align: center; border-bottom: 2px dashed #ccc; padding-bottom: 12px; margin-bottom: 12px; }
   .pharmacy-name { font-size: 18px; font-weight: bold; color: #059669; }
   .info { font-size: 12px; margin-bottom: 4px; }
@@ -716,6 +736,7 @@ export default function DailySalesRegister() {
     <div class="pharmacy-name">${settings.pharmacy.name}</div>
     <div class="info">${settings.pharmacy.address}</div>
     <div class="info">Tel: ${settings.pharmacy.phone}</div>
+    ${settings.receipt.headerText ? `<div class="info" style="margin-top:8px">${settings.receipt.headerText}</div>` : ''}
   </div>
   <div class="info"><strong>Invoice:</strong> ${sale.invoiceNo}</div>
   <div class="info"><strong>Date:</strong> ${new Date(sale.createdAt).toLocaleString('en-GH')}</div>
@@ -732,7 +753,7 @@ export default function DailySalesRegister() {
     <button onclick="window.print()" style="padding:8px 24px;background:#059669;color:white;border:none;border-radius:6px;cursor:pointer;font-size:14px">Print</button>
   </div>
 </body></html>`;
-    const win = window.open('', '_blank', 'width=400,height=600');
+    const win = window.open('', '_blank', `width=${windowWidth},height=600`);
     if (win) { win.document.write(receiptHtml); win.document.close(); }
   };
 
@@ -768,6 +789,8 @@ export default function DailySalesRegister() {
           </Button>
         </div>
       </div>
+
+      {loadError && <LoadError message={loadError} onRetry={() => { void fetchToday(); void fetchPastRecords(); }} />}
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>

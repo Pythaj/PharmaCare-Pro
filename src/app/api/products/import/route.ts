@@ -6,6 +6,7 @@ import { logAudit, getClientIp } from '@/lib/audit'
 import { seedCatalogueForAllBranches } from '@/lib/catalogue-seeding'
 import { normalizeOptionalText } from '@/lib/product-input'
 import { requireBranchForWrite } from '@/lib/branches'
+import { getLowStockThreshold } from '@/lib/server-settings'
 import { parseErrorResponse } from '@/lib/api-error'
 
 /**
@@ -112,7 +113,8 @@ export async function POST(request: NextRequest) {
 
         try {
           const unit = (typeof row.unit === 'string' && row.unit.trim()) || 'units'
-          const reorderLevel = toInt(row.reorderLevel, 10)
+          const defaultReorder = await getLowStockThreshold()
+          const reorderLevel = toInt(row.reorderLevel, defaultReorder)
           const defaultCostPrice = toNumber(row.defaultCostPrice)
           const defaultSellingPrice = toNumber(row.defaultSellingPrice)
 

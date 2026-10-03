@@ -86,7 +86,24 @@ export interface RefundRange {
  */
 export interface RefundScope {
   branchId?: string | null;
-  userId?: string;
+  /**
+   * Seller to scope to. `undefined` filters nothing; `null` filters to sales
+   * with no user at all (the "Unknown salesperson" case, used when the User row
+   * was deleted). Those two must stay distinct, which is why the filter checks
+   * `!== undefined` rather than truthiness.
+   */
+  userId?: string | null;
+}
+
+/**
+ * Builds the `sale` relation filter shared by the two refund readers, so the
+ * aggregate path and the line path cannot drift apart.
+ */
+function saleScopeFilter(scope: RefundScope): Prisma.ReturnWhereInput['sale'] | undefined {
+  const sale: Prisma.SaleWhereInput = {};
+  if (scope.branchId) sale.branchId = scope.branchId;
+  if (scope.userId !== undefined) sale.userId = scope.userId;
+  return Object.keys(sale).length > 0 ? sale : undefined;
 }
 
 /**
@@ -180,14 +197,13 @@ export async function aggregateRefundMoney(
   tx?: Prisma.TransactionClient
 ): Promise<RefundMoney> {
   const client = tx ?? db;
+  const saleScope = saleScopeFilter(scope);
 
   const result = await client.return.aggregate({
     where: {
       status: 'approved',
       ...(range && Object.keys(range).length > 0 ? { createdAt: range } : {}),
-      ...(scope.branchId || scope.userId
-        ? { sale: { ...(scope.branchId ? { branchId: scope.branchId } : {}), ...(scope.userId ? { userId: scope.userId } : {}) } }
-        : {}),
+      ...(saleScope ? { sale: saleScope } : {}),
     },
     _sum: { totalRefund: true },
     _count: { _all: true },
@@ -213,14 +229,13 @@ export async function fetchRefundLines(
   tx?: Prisma.TransactionClient
 ): Promise<RefundLine[]> {
   const client = tx ?? db;
+  const saleScope = saleScopeFilter(scope);
 
   const rows = await client.return.findMany({
     where: {
       status: 'approved',
       ...(range && Object.keys(range).length > 0 ? { createdAt: range } : {}),
-      ...(scope.branchId || scope.userId
-        ? { sale: { ...(scope.branchId ? { branchId: scope.branchId } : {}), ...(scope.userId ? { userId: scope.userId } : {}) } }
-        : {}),
+      ...(saleScope ? { sale: saleScope } : {}),
     },
     select: {
       id: true,

@@ -107,6 +107,7 @@ export default function RemotePanel() {
   const [savingToken, setSavingToken] = useState(false);
   const [busy, setBusy] = useState(false);
   const [currentLink, setCurrentLink] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const applyState = useCallback((s: RemoteState) => {
     setState((prev) => ({ ...prev, ...s }));
@@ -130,7 +131,12 @@ export default function RemotePanel() {
         try {
           const data = await linkRes.json();
           if (typeof data.url === 'string' && data.url) setCurrentLink(data.url);
-        } catch { /* ignore */ }
+          setLinkError(null);
+        } catch {
+          setLinkError('Could not read the saved phone link.');
+        }
+      } else {
+        setLinkError('Could not load the saved phone link.');
       }
     })();
     const unsubscribe = subscribeRemoteStatus((s) => {
@@ -149,7 +155,12 @@ export default function RemotePanel() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: state.url }),
-    }).catch(() => undefined);
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setLinkError(null);
+      })
+      .catch(() => setLinkError('Could not save the phone link — it may be out of date.'));
   }, [desktop, state.running, state.url]);
 
   const handleSaveToken = async () => {
@@ -257,6 +268,7 @@ export default function RemotePanel() {
               <p className="text-amber-800/80 mt-0.5">
                 The tunnel is controlled from the pharmacy PC. If the link below is live you can use it now — it opens the
                 same login you see here. {currentLink && <span className="font-medium">Your saved link: {currentLink}</span>}
+                {linkError && <span className="block text-amber-700 mt-1">{linkError}</span>}
               </p>
             </div>
           </CardContent>

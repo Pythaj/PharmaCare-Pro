@@ -6,6 +6,7 @@ import { useAppStore } from '@/stores/app-store';
 import { cn } from '@/lib/utils';
 import { Plus, Search, ChevronDown, ChevronRight, Trash2, Tag, TrendingUp, DollarSign, Pencil, ArrowRightLeft, CircleAlert, Percent, Calculator, Zap, Check, PackagePlus, Boxes, RefreshCcw, Package, Loader2, Building2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { LoadError } from '@/components/ui/load-error';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -105,6 +106,27 @@ interface BatchEditRow {
    */
   branchId?: string | null;
   branchName?: string | null;
+}
+
+/**
+ * The fields of a batch row that are actually persisted by the editor.
+ *
+ * `key`, `branchId` and `branchName` are excluded deliberately: `key` is a
+ * React/edit-session identity, and the branch fields are read-only display data
+ * copied from the loaded row. Only the five compared below round-trip to the API.
+ */
+function batchRowChanged(row: BatchEditRow, original: BatchEditRow | undefined): boolean {
+  // A row with no id is new — it has to be created, never compared.
+  if (!row.id) return true;
+  if (!original) return true;
+
+  return (
+    row.batchNumber.trim() !== original.batchNumber.trim() ||
+    Number(row.quantity) !== Number(original.quantity) ||
+    Number(row.costPrice) !== Number(original.costPrice) ||
+    Number(row.sellingPrice) !== Number(original.sellingPrice) ||
+    row.expiryDate !== original.expiryDate
+  );
 }
 
 /** Converts a date (ISO string or Date) into a YYYY-MM-DD value for <input type="date">. */
@@ -662,6 +684,8 @@ export default function ProductsView() {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
   // `openingQuantity` is a string, not a number, so a half-typed "1" of "100"
@@ -771,8 +795,14 @@ export default function ProductsView() {
       if (res.ok) {
         const data = await res.json();
         setProducts(data.products ?? []);
+        setLoadError(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setLoadError(data.error ?? `Could not load products (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      setLoadError('Could not reach the server to load products.');
+    }
   }, []);
 
   useEffect(() => {
@@ -785,16 +815,20 @@ export default function ProductsView() {
         if (prodRes.ok) {
           const data = await prodRes.json();
           setProducts(data.products ?? []);
+          setLoadError(null);
+        } else {
+          const data = await prodRes.json().catch(() => ({}));
+          setLoadError(data.error ?? `Could not load products (HTTP ${prodRes.status})`);
         }
         if (catRes.ok) {
           const data = await catRes.json();
           setCategories(data.categories ?? []);
         }
-      } catch { /* silent */ }
+      } catch { setLoadError('Could not reach the server to load products.'); }
       setLoading(false);
     }
     init();
-  }, []);
+  }, [retryNonce]);
 
   // Stay in step with catalogue changes made elsewhere: another tab in this
   // browser (instant, via BroadcastChannel) or another branch's device (via the
@@ -965,6 +999,7 @@ export default function ProductsView() {
 
   const [batches, setBatches] = useState<(Batch & { currentQty: number })[]>([]);
   const [loadingBatches, setLoadingBatches] = useState(false);
+  const [batchesError, setBatchesError] = useState<string | null>(null);
 
   const handleExpandRow = async (productId: string) => {
     if (expandedRow === productId) {
@@ -973,13 +1008,21 @@ export default function ProductsView() {
     }
     setExpandedRow(productId);
     setLoadingBatches(true);
+    setBatchesError(null);
     try {
       const res = await fetch(`/api/products/${productId}`);
       if (res.ok) {
         const data = await res.json();
         setBatches(data.batches ?? []);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setBatches([]);
+        setBatchesError(data.error ?? `Could not load batches (HTTP ${res.status})`);
       }
-    } catch { /* silent */ }
+    } catch {
+      setBatches([]);
+      setBatchesError('Could not reach the server to load batches.');
+    }
     setLoadingBatches(false);
   };
 
@@ -1197,6 +1240,18 @@ export default function ProductsView() {
       }
     }
 
+    /* Work out what actually changes on the stock side before touching it.
+       On the consolidated view `editBatches` is every branch's batches, so its
+       length says nothing about whether the user edited stock. Only rows that
+       differ from the loaded snapshot need a write, and only those need a
+       branch to write against. */
+    const originalsByKey = new Map(editBatchesOriginal.map((r) => [r.key, r]));
+    const changedBatchRows = editBatches.filter((row) =>
+      batchRowChanged(row, originalsByKey.get(row.key))
+    );
+    const currentIds = new Set(editBatches.map((r) => r.id).filter(Boolean));
+    const removedIds = editBatchesOriginal.map((r) => r.id).filter((id) => id && !currentIds.has(id));
+
     /* Receiving stock means putting it on a specific shelf, so it needs a
        specific shop. The server refuses without one — this says why first,
        instead of letting the user fill in a whole batch and then read a 400.
@@ -1206,8 +1261,12 @@ export default function ProductsView() {
        unprotected: on the consolidated view the list holds every branch's
        batches, so dropping one row and saving fired DELETE at another shop's
        stock. The server rejected it, but only after the user had already filled
-       in the form and submitted. */
-    if (editBatches.length > 0 && !activeBranch) {
+       in the form and submitted.
+
+       It then checked `editBatches.length > 0`, which over-corrected: the list
+       is non-empty merely by having loaded, so renaming a drug with no branch
+       selected was refused even though it writes no stock at all. */
+    if ((changedBatchRows.length > 0 || removedIds.length > 0) && !activeBranch) {
       toast.error(
         'Select the branch whose stock you are changing first. Stock belongs to one branch — it is never shared.',
         { duration: 6000 }
@@ -1236,20 +1295,16 @@ export default function ProductsView() {
       }
 
       // 2) Delete batches that were removed from the list
-      const originalIds = new Set(editBatchesOriginal.map((r) => r.id).filter(Boolean));
-      const currentIds = new Set(editBatches.map((r) => r.id).filter(Boolean));
-      for (const id of originalIds) {
-        if (!currentIds.has(id)) {
-          const res = await fetch(`/api/batches/${id}`, { method: 'DELETE' });
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            errors.push(data.error || 'Failed to delete a batch');
-          }
+      for (const id of removedIds) {
+        const res = await fetch(`/api/batches/${id}`, { method: 'DELETE' });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          errors.push(data.error || 'Failed to delete a batch');
         }
       }
 
-      // 3) Update existing batches and create new ones
-      for (const row of editBatches) {
+      // 3) Create new batches and update only the rows the user actually changed
+      for (const row of changedBatchRows) {
         const payload = {
           batchNumber: row.batchNumber.trim(),
           quantity: Number(row.quantity) || 0,
@@ -1355,6 +1410,8 @@ export default function ProductsView() {
           )}
         </div>
       </div>
+
+      {loadError && <LoadError message={loadError} onRetry={() => setRetryNonce((n) => n + 1)} />}
 
       {/* ─── Price Summary Cards ─── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1643,6 +1700,8 @@ export default function ProductsView() {
                                     <Skeleton key={`batch-skel-${i}`} className="h-10 w-full" />
                                   ))}
                                 </div>
+                              ) : batchesError ? (
+                                <LoadError message={batchesError} />
                               ) : batches.length > 0 ? (
                                 <div className="text-sm">
                                   <p className="font-medium mb-2 text-xs uppercase tracking-wider text-muted-foreground">
